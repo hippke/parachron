@@ -80,15 +80,23 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
         particles[i].ay = 0; 
         particles[i].az = 0; 
     }
+    // Visit particles in the depth-first leaf order of the tree: consecutive particles are
+    // spatially close and walk mostly the same nodes, which keeps those nodes in cache.
+    // Each particle's own walk is unchanged, so the results are identical.
+    size_t* order = malloc(sizeof(size_t)*(N>0?N:1));
+    if (reb_tree_particle_order(r, order) != N){
+        for (size_t i=0; i<N; i++) order[i] = i; // e.g. particles missing from the tree (MPI): original order
+    }
     // Summing over all Ghost Boxes
     for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
         for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
             for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
                 // Summing over all particle pairs
 #pragma omp parallel for schedule(guided)
-                for (size_t i=0; i<N; i++){
+                for (size_t k=0; k<N; k++){
+                    const size_t i = order[k];
 #ifndef OPENMP
-                    if (reb_sigint > 1) return;
+                    if (reb_sigint > 1){ free(order); return; }
 #endif // OPENMP
                     struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                     // Precalculated shifted position
@@ -100,6 +108,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
             }
         }
     }
+    free(order);
     // Delete tree (if it exists)    
     reb_tree_delete(r);
     PROFILING_STOP(PROFILING_CAT_GRAVITY);

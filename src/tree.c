@@ -328,6 +328,34 @@ void reb_tree_calculate_acceleration_for_particle(const struct reb_simulation* c
 }
 
 
+// Depth-first collection of the particles stored in local leaves. Leaves of an octree visited
+// depth first come out in spatial (Morton-like) order.
+static void reb_tree_collect_leaves(const struct reb_treecell* node, size_t* order, size_t* n, const size_t N){
+    if (node->remote) return;
+    if (node->pt >= 0){
+        if (*n < N) order[*n] = (size_t)node->pt;
+        (*n)++;
+        return;
+    }
+    for (int o=0; o<8; o++){
+        if (node->oct[o] != NULL){
+            reb_tree_collect_leaves(node->oct[o], order, n, N);
+        }
+    }
+}
+
+size_t reb_tree_particle_order(const struct reb_simulation* const r, size_t* order){
+    if (!r->tree_root) return 0;
+    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    size_t n = 0;
+    for (size_t i=0; i<N_root; i++){
+        if (r->tree_root[i] != NULL){
+            reb_tree_collect_leaves(r->tree_root[i], order, &n, r->N);
+        }
+    }
+    return n;
+}
+
 // Print the tree structure. Used only for debugging
 void reb_tree_print(const struct reb_treecell *node, int indent){
     for (int o=0; o<8; o++) {

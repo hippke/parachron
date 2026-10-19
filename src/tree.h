@@ -56,6 +56,12 @@ struct reb_treecell {
 };
 
 // The function loops over all trees to call calculate_forces_for_particle_from_cell() tree to calculate forces for each particle.
+/**
+ * @brief Fills order[] with the indices of the particles in the local tree, in depth-first
+ * (spatially coherent) leaf order. Returns the number of particles found (order must hold r->N).
+ */
+size_t reb_tree_particle_order(const struct reb_simulation* const r, size_t* order);
+
 void reb_tree_calculate_acceleration_for_particle(const struct reb_simulation* const r, const int pt, const struct reb_vec6d gb);
 
 /**
