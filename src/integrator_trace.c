@@ -891,10 +891,10 @@ void reb_integrator_trace_pre_ts_check(struct reb_simulation* const r){
     // Reset encounter triggers.
     trace->current_C = 0;
 
-    for (size_t i = 0; i < N; i++){
-        for (size_t j = i + 1; j < N; j++){
-            trace->current_Ks[i*N+j] = 0;
-        }
+    // Only rows i < Nactive of the upper triangle are set below and read elsewhere;
+    // clearing all N^2/2 entries every step dominated the cost with many test particles.
+    for (size_t i = 0; i < Nactive; i++){
+        memset(&trace->current_Ks[i*N+i+1], 0, (N-i-1)*sizeof(int));
     }
 
     if (r->testparticle_type == 1){
