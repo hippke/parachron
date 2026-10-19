@@ -713,10 +713,6 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
     struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
     double batch_mu[WHFAST_KEPLER_BATCH];
     int nb = 0;
-    // Balanced batches (e.g. 5 particles as 3+2 rather than 4+1, so no particle is solved alone).
-    const size_t M = N>0 ? N-1 : 0;
-    const size_t N_batches = (M+WHFAST_KEPLER_BATCH-1)/WHFAST_KEPLER_BATCH;
-    const int batch_size = N_batches ? (int)((M+N_batches-1)/N_batches) : WHFAST_KEPLER_BATCH;
     if (coordinates==REB_INTEGRATOR_WHFAST_COORDINATES_BARYCENTRIC){
         eta = p_jh[0].m;
     }
@@ -740,7 +736,7 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
         batch_p[nb] = &p_jh[i];
         batch_mu[nb] = eta*G;
         nb++;
-        if (nb==batch_size){
+        if (nb==WHFAST_KEPLER_BATCH){
             reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r);
             nb = 0;
         }
