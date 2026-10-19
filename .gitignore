@@ -56,3 +56,6 @@ tags
 .nfs*
 *.asm_o
 utsc_nfs/
+
+# benchmarks/perf/run.py build-flag marker
+src/.bench_build_flags

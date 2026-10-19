@@ -79,18 +79,33 @@ sequence, chunk *k* does the same work in both. The speedup of a benchmark is
 the median over chunks of (new chunk rate / baseline chunk rate). The median
 ignores chunks hit by a slow episode (another process, VM steal), which on a
 shared machine were the main source of noise. With `--repeat N`, each chunk's
-fastest time over the repeats is used. The single summary number is the
-geometric mean of the 14 per-benchmark speedups.
+median time over the repeats is used (the median, not the minimum: a best-of-3
+baseline would make every single run look ~2% slower). The single summary
+number is the geometric mean of the 14 per-benchmark speedups.
 
-**Noise.** Six identical runs on the reference machine (cloud VM, Xeon with
-AVX-512, gcc 13.3) compared pairwise (15 pairs):
+**Aligned builds.** By default the runner builds librebound with
+`-falign-functions=64 -falign-loops=32 -falign-jumps=32` (appended to the
+Makefile's flags). Without them, unrelated code changes move hot loops across
+alignment boundaries: a one-line change in `gravity.c` (a function
+`rings_sei_tree` never calls) changed that benchmark by a reproducible 12%;
+with alignment the difference disappeared. Use `--plain-build` to measure the
+stock build, e.g. to confirm a final result. The runner does a `make clean`
+whenever the flag set changes, and warns when comparing runs built differently.
 
-- geomean speedup within ±0.7% of 1.000;
-- per benchmark, the worst deviation was 0.5–2.9% for 13 of the 14 benchmarks and 3.8% for `eos_pmlf6_tp`.
+**Noise.** Identical code compared run against run on the reference machine
+(shared cloud VM, Xeon with AVX-512, gcc 13.3):
+
+- the geomean speedup stays within ±1% of 1.000;
+- single benchmarks deviate by up to 3–4% (worst seen: 3.8% on `eos_pmlf6_tp`, 4.0% on `ss_whfast512`).
 
 The comparison flags a benchmark as changed (`+`/`-`) only beyond
-max(3%, 3 standard errors); adjust with `--threshold`. A dedicated workstation
-is usually quieter.
+max(3%, 3 standard errors); adjust with `--threshold`. Treat a lone flag near
+the threshold as noise until a `--repeat 3` run confirms it. A dedicated
+workstation is usually quieter.
+
+**Validation.** Bounding the EOS jerk loop at `N_active` (one line in
+`gravity.c`, bug 7 in the code review) gave `eos_pmlf6_tp` 5.3x with
+`identical` results, no other benchmark flagged, geomean 1.115x.
 
 **Result check.** Each run also records a signature of the final particle
 state (a weighted sum of positions, velocities and masses over the fixed

@@ -54,9 +54,31 @@ def git_info(src):
     return {"commit": commit, "dirty_src": dirty, "subject": subject, "branch": g("rev-parse", "--abbrev-ref", "HEAD")}
 
 
-def build(src, build_dir, jobs):
+# Extra flags for "aligned" builds. Without them, an unrelated code change can move a hot loop
+# across an alignment boundary and shift a benchmark by ~10% (seen on rings_sei_tree when a
+# one-line change in gravity.c altered the layout of collision.c's loops). Aligning functions
+# and loops removes most of that layout noise. Use --plain-build for the stock Makefile flags.
+ALIGN_FLAGS = "-falign-functions=64 -falign-loops=32 -falign-jumps=32"
+
+
+def build(src, build_dir, jobs, plain=False):
     """Build librebound.so in src/src (its own Makefile) and the bench binary in build_dir."""
-    sh(["make", "-j%d" % jobs, "OPENGL=0", "SERVER=0", "librebound.so"], cwd=os.path.join(src, "src"))
+    srcdir = os.path.join(src, "src")
+    flags = "" if plain else ALIGN_FLAGS
+    marker = os.path.join(srcdir, ".bench_build_flags")
+    old = open(marker).read() if os.path.exists(marker) else None
+    if old != flags:  # the Makefile does not track flags: rebuild everything when they change
+        sh(["make", "clean"], cwd=srcdir)
+    env = dict(os.environ)
+    if flags:
+        env["OPT"] = (env.get("OPT", "") + " " + flags).strip()  # Makefile.defs appends with OPT+=
+    res = subprocess.run(["make", "-j%d" % jobs, "OPENGL=0", "SERVER=0", "librebound.so"], cwd=srcdir, env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if res.returncode != 0:
+        sys.stderr.write(res.stdout)
+        raise SystemExit("building librebound failed")
+    with open(marker, "w") as f:
+        f.write(flags)
     os.makedirs(build_dir, exist_ok=True)
     lib_dir = os.path.join(src, "src")
     exe = os.path.join(build_dir, "bench")
@@ -118,7 +140,7 @@ def cmd_run(a):
     src = os.path.abspath(a.src)
     build_dir = os.path.join(a.results, ".build", os.path.basename(src))
     print("Building %s ..." % src, flush=True)
-    exe, cc_version = build(src, build_dir, a.jobs)
+    exe, cc_version = build(src, build_dir, a.jobs, a.plain_build)
     listing = json.loads(sh([exe, "--list"]))
     names = [b["name"] for b in listing]
     if a.only:
@@ -135,7 +157,8 @@ def cmd_run(a):
         "src": src,
         "git": git_info(src),
         "machine": {"node": platform.node(), "cpu": cpu_model(), "python": platform.python_version(), "cc": cc_version},
-        "settings": {"scale": a.scale, "repeat": a.repeat, "cpu": a.cpu},
+        "settings": {"scale": a.scale, "repeat": a.repeat, "cpu": a.cpu,
+                     "build_flags": "stock" if a.plain_build else ALIGN_FLAGS},
         "benchmarks": {},
     }
     total_t = 0.0
@@ -167,7 +190,7 @@ def cmd_run(a):
             "signature": reps[0]["signature"] if len(sigs) == 1 else None,
         }
         note = "" if len(sigs) == 1 else "  WARNING: non-deterministic result signature"
-        print("  %-16s %12.4g %-9s spread %4.1f%%  (%.2f s)%s" % (name, rate, info[name]["unit"], 100 * spread, reps[0]["measured_s"], note), flush=True)
+        print("  %-16s %12.4g %-9s %5.2f s%s" % (name, rate, info[name]["unit"], reps[0]["measured_s"], note), flush=True)
     print("  total benchmark time: %.1f s" % total_t)
 
     os.makedirs(a.results, exist_ok=True)
@@ -203,11 +226,15 @@ def load(path):
 
 
 def best_chunks(bench):
-    """Per-chunk [work, time] with the fastest time over repeats (robust to slow episodes)."""
+    """Per-chunk [work, time] with the median time over repeats.
+
+    The median (not the minimum) keeps runs with different --repeat counts comparable:
+    a best-of-3 baseline would look systematically faster than a single run.
+    """
     reps = [r["chunks"] for r in bench.get("repeats", []) if r.get("chunks")]
     if not reps or any(len(c) != len(reps[0]) for c in reps):
         return None
-    return [[reps[0][k][0], min(c[k][1] for c in reps)] for k in range(len(reps[0]))]
+    return [[reps[0][k][0], statistics.median(c[k][1] for c in reps)] for k in range(len(reps[0]))]
 
 
 def paired_speedup(bb, nb):
@@ -236,6 +263,8 @@ def compare(base, new, base_name="baseline", new_name="new", threshold=0.03):
     """Print per-benchmark speedups and the geometric-mean score."""
     print("Baseline: %s (%s %s)" % (os.path.basename(base_name), base["git"]["commit"], base.get("label") or ""))
     print("New:      %s (%s%s %s)" % (os.path.basename(new_name), new["git"]["commit"], "-dirty" if new["git"].get("dirty_src") else "", new.get("label") or ""))
+    if base.get("settings", {}).get("build_flags") != new.get("settings", {}).get("build_flags"):
+        print("WARNING: different build flags (%s vs %s)" % (base.get("settings", {}).get("build_flags"), new.get("settings", {}).get("build_flags")))
     if base["machine"].get("cpu") != new["machine"].get("cpu"):
         print("WARNING: different CPUs (%s vs %s)" % (base["machine"].get("cpu"), new["machine"].get("cpu")))
     print()
@@ -288,7 +317,7 @@ def cmd_set_baseline(a):
 def cmd_probe(a):
     """Run benchmarks for a long time and show how quickly the rate settles."""
     src = os.path.abspath(a.src)
-    exe, _ = build(src, os.path.join(a.results, ".build", os.path.basename(src)), a.jobs)
+    exe, _ = build(src, os.path.join(a.results, ".build", os.path.basename(src)), a.jobs, a.plain_build)
     listing = json.loads(sh([exe, "--list"]))
     names = a.names or [b["name"] for b in listing if b["available"]]
     print("%-16s %9s %10s  %s" % ("benchmark", "setup_s", "final", "rate relative to final median, per 0.5 s bin (first bin = 0-0.5 s)"))
@@ -320,6 +349,7 @@ def main():
     r.add_argument("--scale", type=float, default=1.0, help="multiply the measured work per benchmark (default ~0.5 s each)")
     r.add_argument("--cpu", type=int, default=None, help="pin to this CPU core with taskset")
     r.add_argument("--label", default="", help="free-form label stored with the results")
+    r.add_argument("--plain-build", action="store_true", help="stock Makefile flags (no alignment flags; layout-noise prone)")
     r.add_argument("--baseline", help="baseline JSON (default: <results>/baseline.json)")
     r.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
     r.set_defaults(func=cmd_run)
@@ -338,6 +368,7 @@ def main():
     pr.add_argument("--src", default=DEFAULT_SRC)
     pr.add_argument("--time", type=float, default=8.0)
     pr.add_argument("--cpu", type=int, default=None)
+    pr.add_argument("--plain-build", action="store_true")
     pr.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
     pr.set_defaults(func=cmd_probe)
 
