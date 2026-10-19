@@ -647,9 +647,7 @@ void reb_integrator_trace_com_step(struct reb_simulation* const r, double dt){
 void reb_integrator_trace_whfast_step(struct reb_simulation* const r, double dt){
     struct reb_particle* restrict const particles = r->particles;
     const size_t N = r->N;
-    for (size_t i=1;i<N;i++){
-        reb_integrator_whfast_kepler_solver(&particles[i],r->G*particles[0].m,dt,NULL);
-    }
+    reb_integrator_whfast_kepler_solver_range(particles, 1, N, r->G*particles[0].m, dt, NULL);
 }
 
 void reb_integrator_trace_update_particles(struct reb_simulation* r, const double* y){

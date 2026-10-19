@@ -362,9 +362,7 @@ void reb_integrator_mercurius_jump_step(struct reb_simulation* const r, double d
 static void reb_integrator_mercurius_kepler_step(struct reb_simulation* const r, double dt){
     struct reb_particle* restrict const particles = r->particles;
     const size_t N = r->N;
-    for (size_t i=1;i<N;i++){
-        reb_integrator_whfast_kepler_solver(&particles[i],r->G*particles[0].m,dt, r); // in dh
-    }
+    reb_integrator_whfast_kepler_solver_range(particles, 1, N, r->G*particles[0].m, dt, r); // in dh
 }
 
 static void reb_mercurius_encounter_step(struct reb_simulation* const r, struct reb_integrator_mercurius_state* mercurius, const double _dt){

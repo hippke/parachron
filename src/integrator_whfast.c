@@ -542,6 +542,32 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
 }
 #endif // OPENMP
 
+// Kepler drift of particles[first..N) about a common mu (heliocentric drifts in MERCURIUS and
+// TRACE). Uses the batched solver where available; identical results to the scalar loop.
+void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const particles, const size_t first, const size_t N, const double mu, const double dt, const struct reb_simulation* const r){
+#ifndef OPENMP
+    struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
+    double batch_mu[WHFAST_KEPLER_BATCH];
+    int nb = 0;
+    for (size_t i=first; i<N; i++){
+        batch_p[nb] = &particles[i];
+        batch_mu[nb] = mu;
+        nb++;
+        if (nb==WHFAST_KEPLER_BATCH){
+            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r);
+            nb = 0;
+        }
+    }
+    if (nb){
+        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r);
+    }
+#else // OPENMP
+    for (size_t i=first; i<N; i++){
+        reb_integrator_whfast_kepler_solver(&particles[i], mu, dt, r);
+    }
+#endif // OPENMP
+}
+
 /***************************** 
  * Interaction Hamiltonian  */
 void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, struct reb_particle* p_jh, int coordinates, const double _dt){

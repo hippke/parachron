@@ -67,5 +67,8 @@ void reb_integrator_whfast_calculate_jerk(struct reb_simulation* r, struct reb_p
 
 // Advances one particle forward in a Keplerian orbit for time dt. mu is the gravitational parameter, G*(m+M). r can be NULL unless variational particles are used or warnings are needed.
 REB_API void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, double mu, double dt, const struct reb_simulation* const r);
+// Kepler drift of particles[first..N) about a common mu, batched for speed (results identical to
+// calling reb_integrator_whfast_kepler_solver for each particle in turn).
+void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const particles, const size_t first, const size_t N, const double mu, const double dt, const struct reb_simulation* const r);
 
 #endif
