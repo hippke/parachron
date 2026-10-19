@@ -369,6 +369,58 @@ static int reb_check_exit(struct reb_simulation* const r, const double tmax, dou
 }
 
 
+// Wall-time bookkeeping for the integration loops. Reading the clock costs tens of
+// nanoseconds, comparable to a whole WHFast step for small systems, so the clock is read
+// only every `stride` steps; the stride adapts so that reads are >= ~50 us apart (slow
+// steps are still timed individually). The elapsed time is spread evenly over the steps
+// of a batch. r->walltime is exact at every read and lags by at most ~50 us in between.
+struct reb_walltime_tracker {
+    struct reb_timeval t_last;
+    uint64_t stride;
+    uint64_t countdown;
+};
+
+static void reb_walltime_tracker_start(struct reb_walltime_tracker* const w){
+    gettimeofday(&w->t_last, NULL);
+    w->stride = 1;
+    w->countdown = 1;
+}
+
+static void reb_walltime_tracker_record(struct reb_simulation* const r, struct reb_walltime_tracker* const w, const uint64_t N_steps){
+    struct reb_timeval now;
+    gettimeofday(&now, NULL);
+    const double dt = now.tv_sec-w->t_last.tv_sec+(now.tv_usec-w->t_last.tv_usec)/1e6;
+    w->t_last = now;
+    if (N_steps==0) return;
+    r->walltime_last_step = dt/(double)N_steps;
+    r->walltime_last_steps_sum += dt;
+    r->walltime_last_steps_N += (int)N_steps;
+    if (r->walltime_last_steps_sum > 0.1){
+        r->walltime_last_steps = r->walltime_last_steps_sum/r->walltime_last_steps_N;
+        r->walltime_last_steps_sum =0;
+        r->walltime_last_steps_N = 0;
+    }
+    r->walltime += dt;
+    // Adapt the stride
+    if (dt < 50e-6 && w->stride < 65536){
+        w->stride *= 2;
+    }else if (dt > 1e-3 && w->stride > 1){
+        w->stride /= 2;
+    }
+}
+
+// Call after every step.
+static inline void reb_walltime_tracker_step(struct reb_simulation* const r, struct reb_walltime_tracker* const w){
+    if (--w->countdown) return;
+    reb_walltime_tracker_record(r, w, w->stride);
+    w->countdown = w->stride;
+}
+
+// Call when the loop ends: accounts for the steps since the last clock read.
+static void reb_walltime_tracker_finish(struct reb_simulation* const r, struct reb_walltime_tracker* const w){
+    reb_walltime_tracker_record(r, w, w->stride - w->countdown);
+}
+
 static void* reb_simulation_integrate_raw(void* args){
     reb_sigint = 0;
     signal(SIGINT, reb_sigint_handler);
@@ -393,6 +445,8 @@ static void* reb_simulation_integrate_raw(void* args){
 #ifdef __EMSCRIPTEN__
     double t0 = emscripten_performance_now();
 #endif
+    struct reb_walltime_tracker walltime_tracker;
+    reb_walltime_tracker_start(&walltime_tracker);
     while(reb_check_exit(r,thread_info->tmax,&last_full_dt)<0){
 #ifdef __EMSCRIPTEN__
         double t1 = emscripten_performance_now();
@@ -429,6 +483,7 @@ static void* reb_simulation_integrate_raw(void* args){
 #endif //SERVER
         if (r->simulationarchive_filename){ reb_simulationarchive_heartbeat(r);}
         reb_simulation_step(r); 
+        reb_walltime_tracker_step(r, &walltime_tracker);
         run_heartbeat(r);
         if (reb_sigint){
             r->status = REB_STATUS_SIGINT;
@@ -452,6 +507,7 @@ static void* reb_simulation_integrate_raw(void* args){
             usleep(r->usleep);
         }
     }
+    reb_walltime_tracker_finish(r, &walltime_tracker);
     reb_simulation_synchronize(r);
     if(r->exact_finish_time==1){ // if finish_time = 1, r->dt could have been shrunk, so set to the last full timestep
         r->dt = last_full_dt; 
@@ -504,20 +560,21 @@ enum REB_STATUS reb_simulation_integrate(struct reb_simulation* const r, double 
 enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_steps){
     r->status = REB_STATUS_RUNNING; 
     run_heartbeat(r);
+    struct reb_walltime_tracker walltime_tracker;
+    reb_walltime_tracker_start(&walltime_tracker);
     for (size_t i=0;i<N_steps && r->status<0;i++){
         if (r->simulationarchive_filename){ reb_simulationarchive_heartbeat(r);}
         reb_simulation_step(r);
+        reb_walltime_tracker_step(r, &walltime_tracker);
         run_heartbeat(r);
     }
+    reb_walltime_tracker_finish(r, &walltime_tracker);
     reb_simulation_synchronize(r);
     if (r->simulationarchive_filename){ reb_simulationarchive_heartbeat(r);}
     if (r->status <= 0) r->status = REB_STATUS_SUCCESS; // No error occurred. Success.
     return r->status;
 }
 static void reb_simulation_step(struct reb_simulation* const r){
-    // Update walltime
-    struct reb_timeval time_beginning;
-    gettimeofday(&time_beginning,NULL);
 
     // A 'DKD'-like integrator will do the first 'D' part.
     if (r->pre_timestep_modifications){
@@ -588,18 +645,6 @@ static void reb_simulation_step(struct reb_simulation* const r){
         PROFILING_STOP(PROFILING_CAT_COLLISION);
     }
 
-    // Update walltime
-    struct reb_timeval time_end;
-    gettimeofday(&time_end,NULL);
-    r->walltime_last_step = time_end.tv_sec-time_beginning.tv_sec+(time_end.tv_usec-time_beginning.tv_usec)/1e6;
-    r->walltime_last_steps_sum += r->walltime_last_step;
-    r->walltime_last_steps_N +=1;
-    if (r->walltime_last_steps_sum > 0.1){
-        r->walltime_last_steps = r->walltime_last_steps_sum/r->walltime_last_steps_N;
-        r->walltime_last_steps_sum =0;
-        r->walltime_last_steps_N = 0;
-    }
-    r->walltime += r->walltime_last_step;
 
     // Update step counter
     r->steps_done++; // This also counts failed IAS15 steps
