@@ -46,9 +46,30 @@
 static void reb_tree_get_nearest_neighbour_in_cell(struct reb_simulation* const r, struct reb_vec6d gb, struct reb_vec6d gbunmod, int ri, double p1_r,  double second_largest_radius, struct reb_collision* collision_nearest, struct reb_treecell* c);
 static void reb_tree_check_for_overlapping_trajectories_in_cell(struct reb_simulation* const r, struct reb_vec6d gb, struct reb_vec6d gbunmod, int ri, double p1_r, double p1_r_plus_dtv, struct reb_collision* collision_nearest, struct reb_treecell* c, double maxdrift);
 
+/**
+ * @brief Range of root boxes (inclusive) along one axis whose centre lies within `reach` of `x`.
+ * @details Used to skip root boxes that cannot contain a collision partner. A superset is fine:
+ * the recursive cell checks do the exact pruning. Returns lo>hi if no root box qualifies.
+ */
+static void reb_collision_root_range(const double x, const double reach, const double root_size, const int N_root, int* lo, int* hi){
+    const double L = root_size*(double)N_root;
+    double a = floor((x - reach + 0.5*L)/root_size - 0.5);
+    double b = ceil((x + reach + 0.5*L)/root_size - 0.5);
+    if (!(a==a) || !(b==b)){ // NaN: fall back to all root boxes
+        *lo = 0; *hi = N_root-1;
+        return;
+    }
+    if (a < 0.) a = 0.;
+    if (b > (double)(N_root-1)) b = (double)(N_root-1);
+    if (a > b){ *lo = 1; *hi = 0; return; }
+    *lo = (int)a;
+    *hi = (int)b;
+}
+
 void reb_collision_search(struct reb_simulation* const r){
     r->N_collisions = 0;
     size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    (void)N_root; // only used in MPI builds
 
     size_t* map = r->map;                               // Only check a subset of particles?
     size_t N_projectiles = map ? r->N_map : r->N;       // Number of projectiles = all particles operated on
@@ -223,6 +244,7 @@ void reb_collision_search(struct reb_simulation* const r){
                 if (l2 != SIZE_MAX){
                     second_largest_radius = r->particles[l2].r;
                 }
+                const double largest_radius = (l1 != SIZE_MAX) ? r->particles[l1].r : 0.;
 
                 // Loop over all particles
 #pragma omp parallel for schedule(guided)
@@ -251,6 +273,7 @@ void reb_collision_search(struct reb_simulation* const r){
                                 gb.vx += p1.vx; 
                                 gb.vy += p1.vy; 
                                 gb.vz += p1.vz; 
+#ifdef MPI
                                 // Loop over all root boxes.
                                 for (size_t ri=0;ri<N_root;ri++){
                                     struct reb_treecell* rootcell = r->tree_root[ri];
@@ -258,6 +281,29 @@ void reb_collision_search(struct reb_simulation* const r){
                                         reb_tree_get_nearest_neighbour_in_cell(r, gb, gbunmod, ri, p1_r, second_largest_radius, &collision_nearest, rootcell);
                                     }
                                 }
+#else // MPI
+                                // Loop over root boxes that can contain a collision partner (in ascending index order,
+                                // like a loop over all root boxes). A root box is visited by the recursive search only if
+                                // its centre is within p1_r + largest radius + half cell diagonal.
+                                {
+                                    const double reach = p1_r + largest_radius + 0.86602540378443*r->root_size;
+                                    int ilo, ihi, jlo, jhi, klo, khi;
+                                    reb_collision_root_range(gb.x, reach, r->root_size, r->N_root_x, &ilo, &ihi);
+                                    reb_collision_root_range(gb.y, reach, r->root_size, r->N_root_y, &jlo, &jhi);
+                                    reb_collision_root_range(gb.z, reach, r->root_size, r->N_root_z, &klo, &khi);
+                                    for (int k=klo; k<=khi; k++){
+                                        for (int j=jlo; j<=jhi; j++){
+                                            for (int i=ilo; i<=ihi; i++){
+                                                const size_t ri = ((size_t)k*r->N_root_y+j)*r->N_root_x+i;
+                                                struct reb_treecell* rootcell = r->tree_root[ri];
+                                                if (rootcell!=NULL){
+                                                    reb_tree_get_nearest_neighbour_in_cell(r, gb, gbunmod, ri, p1_r, second_largest_radius, &collision_nearest, rootcell);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+#endif // MPI
                             }
                         }
                     }
@@ -276,6 +322,9 @@ void reb_collision_search(struct reb_simulation* const r){
                     vmax2 = MAX(vmax2, p1.vx*p1.vx + p1.vy*p1.vy + p1.vz*p1.vz);
                 }
                 double maxdrift = r->dt_last_done*sqrt(vmax2);
+                size_t l1 = SIZE_MAX, l2 = SIZE_MAX;
+                reb_simulation_two_largest_particles(r, &l1, &l2);
+                const double largest_radius = (l1 != SIZE_MAX) ? r->particles[l1].r : 0.;
                 // Construct tree
                 reb_tree_construct(r);          
 
@@ -313,6 +362,7 @@ void reb_collision_search(struct reb_simulation* const r){
                                 gb.vx += p1.vx; 
                                 gb.vy += p1.vy; 
                                 gb.vz += p1.vz; 
+#ifdef MPI
                                 // Loop over all root boxes.
                                 for (size_t ri=0;ri<N_root;ri++){
                                     struct reb_treecell* rootcell = r->tree_root[ri];
@@ -320,6 +370,27 @@ void reb_collision_search(struct reb_simulation* const r){
                                         reb_tree_check_for_overlapping_trajectories_in_cell(r, gb, gbunmod,ri,p1_r,p1_r_plus_dtv,&collision_nearest,rootcell,maxdrift);
                                     }
                                 }
+#else // MPI
+                                // Loop over root boxes that can contain a collision partner (see REB_COLLISION_TREE).
+                                {
+                                    const double reach = p1_r + fabs(p1_r_plus_dtv - p1_r) + fabs(maxdrift) + largest_radius + 0.86602540378443*r->root_size; // fabs: dt may be negative
+                                    int ilo, ihi, jlo, jhi, klo, khi;
+                                    reb_collision_root_range(gb.x, reach, r->root_size, r->N_root_x, &ilo, &ihi);
+                                    reb_collision_root_range(gb.y, reach, r->root_size, r->N_root_y, &jlo, &jhi);
+                                    reb_collision_root_range(gb.z, reach, r->root_size, r->N_root_z, &klo, &khi);
+                                    for (int k=klo; k<=khi; k++){
+                                        for (int j=jlo; j<=jhi; j++){
+                                            for (int i=ilo; i<=ihi; i++){
+                                                const size_t ri = ((size_t)k*r->N_root_y+j)*r->N_root_x+i;
+                                                struct reb_treecell* rootcell = r->tree_root[ri];
+                                                if (rootcell!=NULL){
+                                                    reb_tree_check_for_overlapping_trajectories_in_cell(r, gb, gbunmod,ri,p1_r,p1_r_plus_dtv,&collision_nearest,rootcell,maxdrift);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+#endif // MPI
                             }
                         }
                     }
