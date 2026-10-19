@@ -431,6 +431,117 @@ void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, 
     }
 }
 
+#ifndef OPENMP
+// Kepler solver for up to WHFAST_KEPLER_BATCH particles at once.
+// Each particle (lane) goes through exactly the same sequence of floating-point operations as in
+// reb_integrator_whfast_kepler_solver, so results are bit-for-bit identical. Interleaving the
+// lanes lets the CPU overlap their otherwise serial chains of square roots, divisions and series
+// evaluations. Lanes that need the quartic solver or the bisection fallback, and simulations
+// with variational particles, use the scalar solver.
+#define WHFAST_KEPLER_BATCH 4
+static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r){
+    if (r && r->N_var_config){
+        for (int l=0; l<n; l++){
+            reb_integrator_whfast_kepler_solver(ps[l], mus[l], dt, r);
+        }
+        return;
+    }
+    double x[WHFAST_KEPLER_BATCH], y[WHFAST_KEPLER_BATCH], z[WHFAST_KEPLER_BATCH];
+    double vx[WHFAST_KEPLER_BATCH], vy[WHFAST_KEPLER_BATCH], vz[WHFAST_KEPLER_BATCH];
+    double r0[WHFAST_KEPLER_BATCH], r0i[WHFAST_KEPLER_BATCH], beta[WHFAST_KEPLER_BATCH];
+    double eta0[WHFAST_KEPLER_BATCH], zeta0[WHFAST_KEPLER_BATCH];
+    double X[WHFAST_KEPLER_BATCH], oldX[WHFAST_KEPLER_BATCH], oldX2[WHFAST_KEPLER_BATCH];
+    double X_per_period[WHFAST_KEPLER_BATCH], ri[WHFAST_KEPLER_BATCH];
+    double Gs[WHFAST_KEPLER_BATCH][4];
+    int state[WHFAST_KEPLER_BATCH]; // 0: Newton iterating, 1: converged, 2: use scalar solver
+    for (int l=0; l<n; l++){
+        const struct reb_particle* const p = ps[l];
+        const double mu = mus[l];
+        x[l] = p->x; y[l] = p->y; z[l] = p->z;
+        vx[l] = p->vx; vy[l] = p->vy; vz[l] = p->vz;
+        r0[l] = sqrt(x[l]*x[l] + y[l]*y[l] + z[l]*z[l]);
+        r0i[l] = 1./r0[l];
+        const double v2 = vx[l]*vx[l] + vy[l]*vy[l] + vz[l]*vz[l];
+        beta[l] = 2.*mu*r0i[l] - v2;
+        eta0[l] = x[l]*vx[l] + y[l]*vy[l] + z[l]*vz[l];
+        zeta0[l] = mu - beta[l]*r0[l];
+        X_per_period[l] = nan("");
+        if (beta[l]>0.){
+            const double sqrt_beta = sqrt(beta[l]);
+            const double invperiod = sqrt_beta*beta[l]/(2.*M_PI*mu);
+            X_per_period[l] = 2.*M_PI/sqrt_beta;
+            if (fabs(dt)*invperiod>1.){
+                if (r && !(r->messages_timestep_warning & 1)){
+                    ((struct reb_simulation*)r)->messages_timestep_warning |= 1; // casting away const qualifier is ok here.
+                    reb_simulation_warning(((struct reb_simulation*)r), "Possible convergence issue. Timestep in Kepler solver is larger than one orbital period.");
+                }
+            }
+            const double dtr0i = dt*r0i[l];
+            X[l] = dtr0i * (1. - dtr0i*eta0[l]*0.5*r0i[l]); // second order guess
+        }else{
+            X[l] = 0.;
+        }
+        oldX[l] = X[l];
+    }
+    // One Newton step, then choose the solver
+    for (int l=0; l<n; l++){
+        stiefel_Gs3(Gs[l], beta[l], X[l]);
+        const double eta0Gs1zeta0Gs2 = eta0[l]*Gs[l][1] + zeta0[l]*Gs[l][2];
+        ri[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
+        X[l]  = ri[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*Gs[l][2]-zeta0[l]*Gs[l][3]+dt);
+        state[l] = (fastabs(X[l]-oldX[l]) > 0.01*X_per_period[l]) ? 2 : 0;
+        oldX2[l] = nan("");
+    }
+    // Newton's method
+    for (int n_hg=1; n_hg<WHFAST_NMAX_NEWT; n_hg++){
+        int active = 0;
+        for (int l=0; l<n; l++){
+            if (state[l]!=0) continue;
+            oldX2[l] = oldX[l];
+            oldX[l] = X[l];
+            stiefel_Gs3(Gs[l], beta[l], X[l]);
+            const double eta0Gs1zeta0Gs2 = eta0[l]*Gs[l][1] + zeta0[l]*Gs[l][2];
+            ri[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
+            X[l]  = ri[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*Gs[l][2]-zeta0[l]*Gs[l][3]+dt);
+            if (!isnormal(X[l])){
+                state[l] = 2; // scalar solver will use bisection
+            }else if (X[l]==oldX[l]||X[l]==oldX2[l]){
+                state[l] = 1;
+            }else{
+                active = 1;
+            }
+        }
+        if (!active) break;
+    }
+    for (int l=0; l<n; l++){
+        if (state[l]!=1){
+            // Quartic solver, bisection, or no convergence: the scalar solver repeats the
+            // identical computation from the unmodified particle and takes the same path.
+            reb_integrator_whfast_kepler_solver(ps[l], mus[l], dt, r);
+            continue;
+        }
+        const double mu = mus[l];
+        if (isnan(ri[l])){
+            ri[l] = 0.;
+            Gs[l][1] = 0.;
+            Gs[l][2] = 0.;
+            Gs[l][3] = 0.;
+        }
+        const double f = -mu*Gs[l][2]*r0i[l];
+        const double g = dt - mu*Gs[l][3];
+        const double fd = -mu*Gs[l][1]*r0i[l]*ri[l];
+        const double gd = -mu*Gs[l][2]*ri[l];
+        struct reb_particle* const p = ps[l];
+        p->x += f*x[l] + g*vx[l];
+        p->y += f*y[l] + g*vy[l];
+        p->z += f*z[l] + g*vz[l];
+        p->vx += fd*x[l] + gd*vx[l];
+        p->vy += fd*y[l] + gd*vy[l];
+        p->vz += fd*z[l] + gd*vz[l];
+    }
+}
+#endif // OPENMP
+
 /***************************** 
  * Interaction Hamiltonian  */
 void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, struct reb_particle* p_jh, int coordinates, const double _dt){
@@ -597,20 +708,51 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
     const size_t N = r->N;
     const size_t N_active = (r->N_active==SIZE_MAX || r->testparticle_type ==1)?N:r->N_active;
     double eta = m0;
+#ifndef OPENMP
+    // Collect particles in batches for the interleaved solver (same mu as the scalar loops below).
+    struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
+    double batch_mu[WHFAST_KEPLER_BATCH];
+    int nb = 0;
+    if (coordinates==REB_INTEGRATOR_WHFAST_COORDINATES_BARYCENTRIC){
+        eta = p_jh[0].m;
+    }
+    for (size_t i=1;i<N;i++){
+        switch (coordinates){
+            case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
+                if (i<N_active){
+                    eta += p_jh[i].m;
+                }
+                break;
+            case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
+                if (i<N_active){
+                    eta = m0+p_jh[i].m;
+                }else{
+                    eta = m0;
+                }
+                break;
+            default: // DEMOCRATICHELIOCENTRIC (eta = m0), BARYCENTRIC (eta = p_jh[0].m)
+                break;
+        }
+        batch_p[nb] = &p_jh[i];
+        batch_mu[nb] = eta*G;
+        nb++;
+        if (nb==WHFAST_KEPLER_BATCH){
+            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r);
+            nb = 0;
+        }
+    }
+    if (nb){
+        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r);
+    }
+#else // OPENMP
     switch (coordinates){
         case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
 #pragma omp parallel for private(eta)
             for (size_t i=1;i<N;i++){
-#ifdef OPENMP
                 eta = m0;
                 for (size_t j=1;j<MIN(i,N_active);j++){
                     eta += p_jh[j].m;
                 }
-#else // OPENMP
-                if (i<N_active){
-                    eta += p_jh[i].m;
-                }
-#endif // OPENMP
                 reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r);
             }
             break;
@@ -638,6 +780,7 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
             }
             break;
     };
+#endif // OPENMP
 }
 
 void reb_integrator_whfast_com_step(const struct reb_simulation* const r, struct reb_particle* p_jh, const double _dt){
