@@ -893,7 +893,7 @@ void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const 
 #ifndef OPENMP
         if (reb_sigint > 1) return;
 #endif // OPENMP
-        for (size_t j=startj; j<i; j++){
+        for (size_t j=startj; j<N_active; j++){ // Only active particles exert forces on test particles.
             const double dx = particles[i].x - particles[j].x; 
             const double dy = particles[i].y - particles[j].y; 
             const double dz = particles[i].z - particles[j].z; 
