@@ -119,6 +119,7 @@ void reb_integrator_trace_free(void* state){
     free(trace->particles_backup_additional_forces);
     free(trace->encounter_map);
     free(trace->encounter_map_backup);
+    free(trace->dcrit6);
     free(trace);
 }
 
@@ -874,6 +875,55 @@ void reb_integrator_trace_kepler_step(struct reb_simulation* const r, const doub
 }
 
 
+// Fast path for the default switching function, used when no custom trace->S is set.
+// The critical distance of a particle does not depend on its partner, so it is computed
+// once per check instead of once per pair. Same arithmetic as reb_integrator_trace_switch_default.
+static void reb_integrator_trace_prepare_dcrit6(struct reb_simulation* const r, struct reb_integrator_trace_state* const trace){
+    const size_t N = r->N;
+    if (trace->N_allocated_dcrit6 < N){
+        trace->dcrit6 = realloc(trace->dcrit6, sizeof(double)*N);
+        trace->N_allocated_dcrit6 = N;
+    }
+    const struct reb_particle* const ps = r->particles;
+    const double m0 = ps[0].m;
+    for (size_t k=0; k<N; k++){
+        double d6 = 0.0;
+        if (k == 0 && ps[0].r != 0){
+            const double rs = ps[0].r;
+            d6 = rs*rs*rs*rs*rs*rs;
+        }else if (ps[k].m != 0){
+            const double d2 = ps[k].x*ps[k].x + ps[k].y*ps[k].y + ps[k].z*ps[k].z;
+            const double mr = ps[k].m/(3.*m0);
+            d6 = d2*d2*d2*mr*mr;
+        }
+        trace->dcrit6[k] = d6;
+    }
+}
+
+static inline int reb_integrator_trace_switch_default_fast(const struct reb_particle* const ps, const double* const dcrit6, const size_t i, const size_t j, const double h2, const double rch6){
+    const double dx = ps[i].x - ps[j].x;
+    const double dy = ps[i].y - ps[j].y;
+    const double dz = ps[i].z - ps[j].z;
+    const double rp = dx*dx + dy*dy + dz*dz;
+    const double dcritmax6 = rch6 * MAX(dcrit6[i], dcrit6[j]);
+    if (rp*rp*rp < dcritmax6) return 1;
+    const double dvx = ps[i].vx - ps[j].vx;
+    const double dvy = ps[i].vy - ps[j].vy;
+    const double dvz = ps[i].vz - ps[j].vz;
+    const double v2 = dvx*dvx + dvy*dvy + dvz*dvz;
+    const double qv = dx*dvx + dy*dvy + dz*dvz;
+    if (qv == 0.0) return 0;
+    const int d = (qv < 0) ? 1 : -1;
+    double dmin2;
+    const double tmin = -d*qv/v2;
+    if (tmin < h2){
+        dmin2 = rp - qv*qv/v2;
+    }else{
+        dmin2 = rp + 2*d*qv*h2 + v2*h2*h2;
+    }
+    return dmin2*dmin2*dmin2 < dcritmax6;
+}
+
 void reb_integrator_trace_pre_ts_check(struct reb_simulation* const r){
     struct reb_integrator_trace_state* const trace = r->integrator.state;
     const size_t N = r->N;
@@ -929,9 +979,14 @@ void reb_integrator_trace_pre_ts_check(struct reb_simulation* const r){
 
     // Body-body
     // there cannot be TP-TP CEs
+    const int fast_switch = (trace->S == NULL);
+    const double h2 = r->dt/2.;
+    const double rch2 = trace->r_crit_hill*trace->r_crit_hill;
+    const double rch6 = rch2*rch2*rch2;
+    if (fast_switch) reb_integrator_trace_prepare_dcrit6(r, trace);
     for (size_t i = 0; i < Nactive; i++){ // Check central body, for collisions
         for (size_t j = i + 1; j < N; j++){
-            if (_switch(r, i, j)){
+            if (fast_switch ? reb_integrator_trace_switch_default_fast(r->particles, trace->dcrit6, i, j, h2, rch6) : _switch(r, i, j)){
                 trace->current_Ks[i*N+j] = 1;
                 if (trace->encounter_map[i] == 0){
                     trace->encounter_map[i] = 1; // trigger encounter
@@ -992,9 +1047,14 @@ double reb_integrator_trace_post_ts_check(struct reb_simulation* const r){
 
     // Body-body
     // there cannot be TP-TP CEs
+    const int fast_switch = (trace->S == NULL);
+    const double h2 = r->dt/2.;
+    const double rch2 = trace->r_crit_hill*trace->r_crit_hill;
+    const double rch6 = rch2*rch2*rch2;
+    if (fast_switch) reb_integrator_trace_prepare_dcrit6(r, trace);
     for (size_t i = 0; i < Nactive; i++){ // Do not check for central body anymore
         for (size_t j = i + 1; j < N; j++){
-            if (_switch(r, i, j)){
+            if (fast_switch ? reb_integrator_trace_switch_default_fast(r->particles, trace->dcrit6, i, j, h2, rch6) : _switch(r, i, j)){
                 if (trace->current_Ks[i*N+j] == 0){
                     new_close_encounter = 1;
                 }

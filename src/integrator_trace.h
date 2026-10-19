@@ -64,6 +64,8 @@ struct reb_integrator_trace_state {
     int* current_Ks; // Tracking K_ij for the entire timestep
     unsigned int current_C; // Tracking C for the entire timestep
     unsigned int force_accept; // Force accept for irreversible steps: collisions and adding particles
+    double* dcrit6;            // Scratch: per-particle critical distance^6 for the default switching function
+    size_t N_allocated_dcrit6;
 };
 
 // Built in trace switching functions
