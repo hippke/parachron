@@ -869,7 +869,19 @@ void reb_integrator_trace_bs_step(struct reb_simulation* const r, double dt){
 
 void reb_integrator_trace_kepler_step(struct reb_simulation* const r, const double _dt){
     struct reb_integrator_trace_state* const trace = r->integrator.state;
-    memcpy(trace->particles_backup_kepler,r->particles,r->N*sizeof(struct reb_particle));
+    // The pre-Kepler backup is only read for particles in an encounter, and only if there are
+    // at least two (see reb_integrator_trace_bs_step). encounter_map holds 0/1 flags here.
+    if (trace->encounter_N >= 2){
+        if (trace->encounter_N >= r->N){
+            memcpy(trace->particles_backup_kepler,r->particles,r->N*sizeof(struct reb_particle));
+        }else{
+            for (size_t i=0; i<r->N; i++){
+                if (trace->encounter_map[i]){
+                    trace->particles_backup_kepler[i] = r->particles[i];
+                }
+            }
+        }
+    }
     reb_integrator_trace_whfast_step(r, _dt);
     reb_integrator_trace_bs_step(r, _dt);
 }
