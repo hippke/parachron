@@ -195,22 +195,35 @@ void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
 #ifndef OPENMP // OPENMP off, do O(1/2*N^2)
                 for (size_t i=starti; i<N_active; i++){
                     if (reb_sigint > 1) return;
+                    // Particle i's position and acceleration live in registers during the inner loop
+                    // (the compiler cannot prove that the writes to particles[j] do not alias them).
+                    // The additions happen in the same order as before, so results are unchanged.
+                    const double xi = gb.x+particles[i].x;
+                    const double yi = gb.y+particles[i].y;
+                    const double zi = gb.z+particles[i].z;
+                    const double mi = particles[i].m;
+                    double axi = particles[i].ax;
+                    double ayi = particles[i].ay;
+                    double azi = particles[i].az;
                     for (size_t j=startj; j<i; j++){
-                        const double dx = (gb.x+particles[i].x) - particles[j].x;
-                        const double dy = (gb.y+particles[i].y) - particles[j].y;
-                        const double dz = (gb.z+particles[i].z) - particles[j].z;
+                        const double dx = xi - particles[j].x;
+                        const double dy = yi - particles[j].y;
+                        const double dz = zi - particles[j].z;
                         const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
                         const double prefact = G/(_r*_r*_r);
                         const double prefactj = -prefact*particles[j].m;
-                        const double prefacti = prefact*particles[i].m;
+                        const double prefacti = prefact*mi;
 
-                        particles[i].ax    += prefactj*dx;
-                        particles[i].ay    += prefactj*dy;
-                        particles[i].az    += prefactj*dz;
+                        axi    += prefactj*dx;
+                        ayi    += prefactj*dy;
+                        azi    += prefactj*dz;
                         particles[j].ax    += prefacti*dx;
                         particles[j].ay    += prefacti*dy;
                         particles[j].az    += prefacti*dz;
                     }
+                    particles[i].ax = axi;
+                    particles[i].ay = ayi;
+                    particles[i].az = azi;
                 }
 #else // OPENMP on, do O(N^2)
 #pragma omp parallel for
@@ -236,24 +249,34 @@ void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
                 const size_t startitestp = MAX(N_active, starti);
                 for (size_t i=startitestp; i<N; i++){
                     if (reb_sigint > 1) return;
+                    const double xi = gb.x+particles[i].x;
+                    const double yi = gb.y+particles[i].y;
+                    const double zi = gb.z+particles[i].z;
+                    const double mi = particles[i].m;
+                    double axi = particles[i].ax;
+                    double ayi = particles[i].ay;
+                    double azi = particles[i].az;
                     for (size_t j=startj; j<N_active; j++){
-                        const double dx = (gb.x+particles[i].x) - particles[j].x;
-                        const double dy = (gb.y+particles[i].y) - particles[j].y;
-                        const double dz = (gb.z+particles[i].z) - particles[j].z;
+                        const double dx = xi - particles[j].x;
+                        const double dy = yi - particles[j].y;
+                        const double dz = zi - particles[j].z;
                         const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
                         const double prefact = G/(_r*_r*_r);
                         const double prefactj = -prefact*particles[j].m;
 
-                        particles[i].ax    += prefactj*dx;
-                        particles[i].ay    += prefactj*dy;
-                        particles[i].az    += prefactj*dz;
+                        axi    += prefactj*dx;
+                        ayi    += prefactj*dy;
+                        azi    += prefactj*dz;
                         if (_testparticle_type){
-                            const double prefacti = prefact*particles[i].m;
+                            const double prefacti = prefact*mi;
                             particles[j].ax    += prefacti*dx;
                             particles[j].ay    += prefacti*dy;
                             particles[j].az    += prefacti*dz;
                         }
                     }
+                    particles[i].ax = axi;
+                    particles[i].ay = ayi;
+                    particles[i].az = azi;
                 }
 #else // OPENMP on
                 if (_testparticle_type){
