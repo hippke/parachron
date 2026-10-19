@@ -407,6 +407,12 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
         for(size_t n=1;n<8;n++) {                          // Loop over interval using Gauss-Radau spacings
             r->t = t_beginning + r->dt * h[n];
 
+            // Predictor coefficients at interval n, computed once instead of per particle and component.
+            // (Evaluating b*7.*h[n]/9. etc. inline costs a division per term and element.)
+            const double hn = h[n];
+            const double dt = r->dt;
+            const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
+            const double d6 = 7.*hn/8., d5 = 6.*hn/7., d4 = 5.*hn/6., d3 = 4.*hn/5., d2 = 3.*hn/4., d1 = 2.*hn/3., d0 = hn/2.;
             // Prepare particles arrays for force calculation
             for(size_t i=0;i<N+N_var;i++) {                      // Predict positions at interval n using b values
                 const size_t k0 = 3*i+0;
@@ -416,9 +422,9 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                 double xk0;
                 double xk1;
                 double xk2;
-                xk0 = -csx[k0] + ((((((((b.p6[k0]*7.*h[n]/9. + b.p5[k0])*3.*h[n]/4. + b.p4[k0])*5.*h[n]/7. + b.p3[k0])*2.*h[n]/3. + b.p2[k0])*3.*h[n]/5. + b.p1[k0])*h[n]/2. + b.p0[k0])*h[n]/3. + a0[k0])*r->dt*h[n]/2. + v0[k0])*r->dt*h[n];
-                xk1 = -csx[k1] + ((((((((b.p6[k1]*7.*h[n]/9. + b.p5[k1])*3.*h[n]/4. + b.p4[k1])*5.*h[n]/7. + b.p3[k1])*2.*h[n]/3. + b.p2[k1])*3.*h[n]/5. + b.p1[k1])*h[n]/2. + b.p0[k1])*h[n]/3. + a0[k1])*r->dt*h[n]/2. + v0[k1])*r->dt*h[n];
-                xk2 = -csx[k2] + ((((((((b.p6[k2]*7.*h[n]/9. + b.p5[k2])*3.*h[n]/4. + b.p4[k2])*5.*h[n]/7. + b.p3[k2])*2.*h[n]/3. + b.p2[k2])*3.*h[n]/5. + b.p1[k2])*h[n]/2. + b.p0[k2])*h[n]/3. + a0[k2])*r->dt*h[n]/2. + v0[k2])*r->dt*h[n];
+                xk0 = -csx[k0] + ((((((((b.p6[k0]*c6 + b.p5[k0])*c5 + b.p4[k0])*c4 + b.p3[k0])*c3 + b.p2[k0])*c2 + b.p1[k0])*c1 + b.p0[k0])*c0 + a0[k0])*ca + v0[k0])*cv;
+                xk1 = -csx[k1] + ((((((((b.p6[k1]*c6 + b.p5[k1])*c5 + b.p4[k1])*c4 + b.p3[k1])*c3 + b.p2[k1])*c2 + b.p1[k1])*c1 + b.p0[k1])*c0 + a0[k1])*ca + v0[k1])*cv;
+                xk2 = -csx[k2] + ((((((((b.p6[k2]*c6 + b.p5[k2])*c5 + b.p4[k2])*c4 + b.p3[k2])*c3 + b.p2[k2])*c2 + b.p1[k2])*c1 + b.p0[k2])*c0 + a0[k2])*ca + v0[k2])*cv;
                 if (i<N){
                     size_t mi = map ? map[i] : i;
                     particles[mi].x = xk0 + x0[k0];
@@ -440,9 +446,9 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                     double vk0;
                     double vk1;
                     double vk2;
-                    vk0 =  -csv[k0] + (((((((b.p6[k0]*7.*h[n]/8. + b.p5[k0])*6.*h[n]/7. + b.p4[k0])*5.*h[n]/6. + b.p3[k0])*4.*h[n]/5. + b.p2[k0])*3.*h[n]/4. + b.p1[k0])*2.*h[n]/3. + b.p0[k0])*h[n]/2. + a0[k0])*r->dt*h[n];
-                    vk1 =  -csv[k1] + (((((((b.p6[k1]*7.*h[n]/8. + b.p5[k1])*6.*h[n]/7. + b.p4[k1])*5.*h[n]/6. + b.p3[k1])*4.*h[n]/5. + b.p2[k1])*3.*h[n]/4. + b.p1[k1])*2.*h[n]/3. + b.p0[k1])*h[n]/2. + a0[k1])*r->dt*h[n];
-                    vk2 =  -csv[k2] + (((((((b.p6[k2]*7.*h[n]/8. + b.p5[k2])*6.*h[n]/7. + b.p4[k2])*5.*h[n]/6. + b.p3[k2])*4.*h[n]/5. + b.p2[k2])*3.*h[n]/4. + b.p1[k2])*2.*h[n]/3. + b.p0[k2])*h[n]/2. + a0[k2])*r->dt*h[n];
+                    vk0 =  -csv[k0] + (((((((b.p6[k0]*d6 + b.p5[k0])*d5 + b.p4[k0])*d4 + b.p3[k0])*d3 + b.p2[k0])*d2 + b.p1[k0])*d1 + b.p0[k0])*d0 + a0[k0])*cv;
+                    vk1 =  -csv[k1] + (((((((b.p6[k1]*d6 + b.p5[k1])*d5 + b.p4[k1])*d4 + b.p3[k1])*d3 + b.p2[k1])*d2 + b.p1[k1])*d1 + b.p0[k1])*d0 + a0[k1])*cv;
+                    vk2 =  -csv[k2] + (((((((b.p6[k2]*d6 + b.p5[k2])*d5 + b.p4[k2])*d4 + b.p3[k2])*d3 + b.p2[k2])*d2 + b.p1[k2])*d1 + b.p0[k2])*d0 + a0[k2])*cv;
                     if (i<N){
                         size_t mi = map ? map[i] : i;
                         particles[mi].vx = vk0 + v0[k0];
