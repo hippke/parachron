@@ -553,7 +553,7 @@ static const struct bench benches[] = {
     {"ias15_embryos",   "yr/s",     "IAS15, 60 embryos with merging collisions (giant-impact phase)",    create_embryos,      simctx_work, simctx_signature, simctx_destroy, always,    2,   11},
     {"megno_grid",      "points/s", "MEGNO stability map, 2 planets x 500 yr (Hadden & Lithwick 2018)",  create_megno,        work_megno,  sig_grid,         destroy_free,   always,  100, 1200},
     {"short_posterior", "sims/s",   "Many short WHFast runs of posterior draws (Wang et al. 2018)",      create_posterior,    work_posterior, sig_grid,      destroy_free,   always,  200, 2500},
-    {"rings_sei_tree",  "steps/s",  "Saturn's rings, SEI + tree collisions (Rein & Latter 2013)",        create_rings,        simctx_work, simctx_signature, simctx_destroy, always,    3,   13},
+    {"rings_sei_tree",  "steps/s",  "Saturn's rings, SEI + tree collisions (Rein & Latter 2013)",        create_rings,        simctx_work, simctx_signature, simctx_destroy, always,    3,  400},
     {"selfgrav_tree",   "steps/s",  "Self-gravitating disc, tree gravity, N=10k",                        create_selfgrav,     simctx_work, simctx_signature, simctx_destroy, always,    3,   18},
     {"mercurius_plts",  "steps/s",  "MERCURIUS, 2 planets + 2,500 planetesimals (planetesimal migration)", create_mercurius,  simctx_work, simctx_signature, simctx_destroy, always,   10,   50},
     {"trace_tp",        "steps/s",  "TRACE, 2 planets + 2,000 test particles",                           create_trace,        simctx_work, simctx_signature, simctx_destroy, always,   20,  135},
