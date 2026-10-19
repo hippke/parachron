@@ -91,6 +91,8 @@ void reb_collision_search(struct reb_simulation* const r){
                 for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
                     for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
                         for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
+                            // Ghost box offset (same for all projectiles)
+                            const struct reb_vec6d gborig = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                             // Loop over all projectiles
                             for (size_t i=0;i<N_projectiles;i++){
 #ifndef OPENMP
@@ -98,7 +100,6 @@ void reb_collision_search(struct reb_simulation* const r){
 #endif // OPENMP
                                 size_t ip = map ? map[i]: i;
                                 struct reb_particle p1 = particles[ip];
-                                struct reb_vec6d gborig = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                                 struct reb_vec6d gb = gborig;
                                 // Precalculate shifted position 
                                 gb.x += p1.x;
@@ -153,6 +154,8 @@ void reb_collision_search(struct reb_simulation* const r){
                 for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
                     for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
                         for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
+                            // Ghost box offset (same for all projectiles)
+                            const struct reb_vec6d gborig = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                             // Loop over all projectiles
                             for (size_t i=0;i<N_projectiles;i++){
 #ifndef OPENMP
@@ -160,7 +163,6 @@ void reb_collision_search(struct reb_simulation* const r){
 #endif // OPENMP
                                 size_t ip = map ? map[i]: i;
                                 struct reb_particle p1 = particles[ip];
-                                struct reb_vec6d gborig = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                                 struct reb_vec6d gb = gborig;
                                 // Precalculate shifted position 
                                 gb.x += p1.x;
@@ -235,6 +237,15 @@ void reb_collision_search(struct reb_simulation* const r){
                 int N_ghost_xcol = (r->N_ghost_x>1?1:r->N_ghost_x);
                 int N_ghost_ycol = (r->N_ghost_y>1?1:r->N_ghost_y);
                 int N_ghost_zcol = (r->N_ghost_z>1?1:r->N_ghost_z);
+                // Ghost box offsets (same for all particles; at most 3x3x3)
+                struct reb_vec6d gbtable[27];
+                for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
+                    for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
+                        for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
+                            gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)] = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+                        }
+                    }
+                }
                 const struct reb_particle* const particles = r->particles;
                 // Find second largest radius
                 size_t l1 = SIZE_MAX;
@@ -265,7 +276,7 @@ void reb_collision_search(struct reb_simulation* const r){
                         for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
                             for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
                                 // Calculated shifted position (for speedup). 
-                                struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+                                struct reb_vec6d gb = gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)];
                                 struct reb_vec6d gbunmod = gb;
                                 gb.x += p1.x; 
                                 gb.y += p1.y; 
@@ -332,6 +343,15 @@ void reb_collision_search(struct reb_simulation* const r){
                 int N_ghost_xcol = (r->N_ghost_x>1?1:r->N_ghost_x);
                 int N_ghost_ycol = (r->N_ghost_y>1?1:r->N_ghost_y);
                 int N_ghost_zcol = (r->N_ghost_z>1?1:r->N_ghost_z);
+                // Ghost box offsets (same for all particles; at most 3x3x3)
+                struct reb_vec6d gbtable[27];
+                for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
+                    for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
+                        for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
+                            gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)] = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+                        }
+                    }
+                }
                 const struct reb_particle* const particles = r->particles;
                 // Loop over all particles
 #pragma omp parallel for schedule(guided)
@@ -354,7 +374,7 @@ void reb_collision_search(struct reb_simulation* const r){
                         for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
                             for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
                                 // Calculated shifted position (for speedup). 
-                                struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+                                struct reb_vec6d gb = gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)];
                                 struct reb_vec6d gbunmod = gb;
                                 gb.x += p1.x; 
                                 gb.y += p1.y; 
