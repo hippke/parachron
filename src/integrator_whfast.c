@@ -154,6 +154,15 @@ static const double reb_whfast_corrector2_b = 0.03486083443891981449909050107438
 // Fast inverse factorial lookup table
 static const double invfactorial[35] = {1., 1., 1./2., 1./6., 1./24., 1./120., 1./720., 1./5040., 1./40320., 1./362880., 1./3628800., 1./39916800., 1./479001600., 1./6227020800., 1./87178291200., 1./1307674368000., 1./20922789888000., 1./355687428096000., 1./6402373705728000., 1./121645100408832000., 1./2432902008176640000., 1./51090942171709440000., 1./1124000727777607680000., 1./25852016738884976640000., 1./620448401733239439360000., 1./15511210043330985984000000., 1./403291461126605635584000000., 1./10888869450418352160768000000., 1./304888344611713860501504000000., 1./8841761993739701954543616000000., 1./265252859812191058636308480000000., 1./8222838654177922817725562880000000., 1./263130836933693530167218012160000000., 1./8683317618811886495518194401280000000., 1./295232799039604140847618609643520000000.};
 
+// Force inlining of the small series helpers into the (batched) Kepler solver.
+#if defined(_MSC_VER)
+#define REB_WHFAST_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define REB_WHFAST_INLINE inline __attribute__((always_inline))
+#else
+#define REB_WHFAST_INLINE inline
+#endif
+
 static inline double fastabs(double x){
     return (x > 0.) ? x : -x;
 }
@@ -186,7 +195,7 @@ static void stumpff_cs(double *restrict cs, double z) {
     }
     cs[0] = invfactorial[0]  - z *cs[2];
 }
-static void stumpff_cs3(double *restrict cs, double z) {
+static REB_WHFAST_INLINE void stumpff_cs3(double *restrict cs, double z) {
     unsigned int n = 0;
     while(fabs(z)>0.1){
         z = z/4.;
@@ -225,7 +234,7 @@ static void stiefel_Gs(double *restrict Gs, double beta, double X) {
     return;
 }
 
-static void stiefel_Gs3(double *restrict Gs, double beta, double X) {
+static REB_WHFAST_INLINE void stiefel_Gs3(double *restrict Gs, double beta, double X) {
     double X2 = X*X;
     stumpff_cs3(Gs, beta*X2);
     Gs[1] *= X; 
