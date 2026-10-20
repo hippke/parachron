@@ -20,9 +20,11 @@
  *          - Starting value of the Kepler solver: sixth-order series reversion of Kepler's equation in
  *            universal variables (whfaster it. 2; the assembly uses the first-order guess dt/r), so
  *            that a single Halley step is followed by a single Newton step for the Solar System at
- *            dt <= 6 days. The Newton steps and the final evaluation of the Stiefel functions are as
- *            in the assembly (compensated series, evaluation at the final X): see whfaster it. 2 for
- *            the round-off bias of the earlier shortcuts.
+ *            dt <= 6 days. The first Newton step uses an approximation of 1/f' from the Halley step
+ *            (no division on the critical path). The Stiefel functions are evaluated again at the
+ *            final X as in the assembly, with plain Horner plus a correction for the rounding of the
+ *            leading constants instead of compensated Horner (see whfaster it. 2 for the round-off
+ *            bias of the earlier shortcuts).
  *          - MXCSR (flush-to-zero / denormals-are-zero) is not changed.
  *          All three instantiations use explicit fused multiply-adds, so they give bitwise
  *          identical results on every machine (the generic one uses fma() from libm).
@@ -187,7 +189,13 @@ REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs03_)(const int numTerms, const
     *G0 = g0;
 }
 
-// High accuracy (Gs1..Gs3), plain Horner. numTerms odd.
+// High accuracy (Gs1..Gs3), plain Horner with a correction for the rounding of the leading
+// constants (whfaster it. 2). The constants 1/k! are rounded to double, and since the leading terms
+// dominate the sums, plain Horner has a systematic relative error: 1/3! is stored 0.5 ulp low, so G3
+// comes out 5.6e-17 too small in every step, which biases the Kepler step (Kepler grid test, see
+// whfaster/RESEARCH_LOG.md). The rounding errors of the leading constants (W512_IF_ERR, rounded -
+// true) are added before the final rounding (fused multiply-add), in parallel with the Horner chain.
+// numTerms odd.
 REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs13_)(const int numTerms, const V X, const V beta, V* G1, V* G2, V* G3){
     const V X2 = w_mul(X, X);
     V g3 = w_set1(W512_IF(numTerms));
@@ -199,10 +207,14 @@ REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs13_)(const int numTerms, const
         g3 = w_fnmadd(z, g3, w_set1(W512_IF(off))); off--;
         g2 = w_fnmadd(z, g2, w_set1(W512_IF(off))); off--;
     }
-    *G2 = w_mul(X2, g2);
-    g3 = w_mul(X, g3);
-    *G3 = w_mul(X2, g3);
-    *G1 = w_fnmadd(z, g3, X);
+    // Missing parts of the sums: -(E3 - z E5 + z^2 E7) for g3 and z E4 - z^2 E6 for g2 (E = W512_IF_ERR).
+    const V e3 = w_fmadd(w_fmadd(w_set1(-W512_IF_ERR(7)), z, w_set1(W512_IF_ERR(5))), z, w_set1(-W512_IF_ERR(3)));
+    const V e2 = w_mul(z, w_fmsub(w_set1(-W512_IF_ERR(6)), z, w_set1(-W512_IF_ERR(4))));
+    *G2 = w_fmadd(X2, g2, w_mul(X2, e2));
+    const V hc = w_mul(X, e3);
+    const V h = w_mul(X, g3);
+    *G3 = w_fmadd(X2, h, w_mul(X2, hc));
+    *G1 = w_fnmadd(z, w_fmadd(X, g3, hc), X);
 }
 
 // One step of compensated Horner evaluation (comp_horner_step): C <- IF[k] - z*C, CLO tracks the error.
@@ -384,6 +396,10 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     V XX = w_sel(good3, Xs, X1);
 
     V G0, G1, G2, G3;
+    // Approximation of 1/f' at the result of the last Halley step (used by the first Newton step),
+    // and the lanes in which it is accurate enough to be used.
+    V RI = c->ONE;
+    K ri_ok = w_kbits(0);
     // Two Halley steps with short series (the first only for lanes without the series start).
     const K need_first = w_knot(good3);
     for (int h=0; h<2; h++){
@@ -398,29 +414,44 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
         const V hffpp = w_mul(w_mul(f, fpp), c->HALF);
         const V den = w_fmsub(fp, fp, hffpp);
         const V Xn = w_sub(XX, w_div(w_mul(f, fp), den));
+        if (h==1){
+            // 1/f'(Xn) to first order in the Halley correction dXh: 1/fp - fpp dXh/fp^2, computed in
+            // parallel with the Halley division (off the critical path). Relative error ~(fpp dXh/fp)^2
+            // plus the truncation of the short series (~1e-10); used only where |fpp dXh/fp| < 1e-4.
+            const V ri0 = w_div(c->ONE, fp);
+            const V q = w_mul(w_mul(fpp, w_sub(Xn, XX)), ri0);
+            RI = w_fnmadd(ri0, q, ri0);
+            ri_ok = w_klt(w_abs(q), w_set1(1e-4));      // false for NaN
+        }
         XX = (h==0) ? w_sel(need_first, Xn, XX) : Xn;
     }
 
-    // Newton iterations with the accurate, compensated series; lanes stop individually
-    // (masked: a converged lane keeps its X, so its result does not depend on the other lanes).
-    // whfaster it. 2 (bias): the compensated series in the Newton step, the ratio form of the
-    // Newton update and the evaluation of G1..G3 at the final X (below) are as in the assembly.
-    // The shortcuts of items 40/42/46 (plain Horner, first-order update of G1..G3 instead of a
-    // new evaluation) biased the round-off of the Kepler step (Kepler grid test with 16 phases per
-    // (a, e): <t^2> up to ~20 instead of ~1 for e = 0.3-0.6; see whfaster/RESEARCH_LOG.md), and so
-    // did a division-free correction-form update X - f/f' (<t^2> ~ 1.9).
+    // Newton iterations with the accurate series; lanes stop individually (masked: a converged
+    // lane keeps its X, so its result does not depend on the other lanes).
+    // Correction form X <- X - f(X) RI (whfaster it. 2): in the first iteration RI is the
+    // approximation from the Halley step (lanes with ri_ok), so that no division is on the critical
+    // path; otherwise, and in later iterations, RI = 1/f'(X) exactly (quadratic convergence). A
+    // relative error delta of RI changes X by delta*dX < 1e-8 * EPS.
+    // Bias (whfaster it. 2): the Stiefel functions are evaluated again at the final X (below), as in
+    // the assembly, and w512_stiefel_Gs13_ corrects for the rounding of the constants 1/k!. The
+    // earlier shortcuts (items 40/42/46: plain Horner without the correction, first-order update of
+    // G1..G3 instead of a new evaluation) biased the round-off of the Kepler step: Mercury's
+    // semi-major axis drifted by +1.4e-18 per step at dt = 6 d (t = +59 over 64 phases x 1e6 steps),
+    // Kepler grid <t^2> up to ~20 instead of ~1.2 (see whfaster/RESEARCH_LOG.md).
     K k4 = c->k1;
     int it = 0;
+    const int all_ri_ok = !w_kany(w_kandnot(ri_ok, c->k1));
     while (1){
         const V old = XX;
-        REB_W512_NAME(w512_stiefel_Gs13_comp_)(19, XX, beta, &G1, &G2, &G3);
-        const V e = w_fmadd(zeta, G2, w_mul(eta, G1));
-        const V Xe = w_mul(XX, e);
-        V t = w_fnmadd(G2, eta, w_sel(k4, Xe, XX));
-        const V ri = w_div(c->ONE, w_add(e, R));
-        t = w_fnmadd(zeta, G3, t);
-        t = w_add(c->DT, t);
-        XX = w_sel(k4, w_mul(ri, t), XX);
+        REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+        if (it > 0 || !all_ri_ok){
+            // Exact derivative (rare: lanes with a large Halley correction, or a second iteration).
+            const V rie = w_div(c->ONE, w_fmadd(zeta, G2, w_fmadd(eta, G1, R)));
+            RI = (it > 0) ? rie : w_sel(ri_ok, RI, rie);
+        }
+        V fN = w_fmadd(eta, G2, w_fmsub(R, XX, c->DT));
+        fN = w_fmadd(zeta, G3, fN);
+        XX = w_sel(k4, w_fnmadd(fN, RI, XX), XX);
         const V dX = w_sub(XX, old);
         // Not converged: |dX| > EPS, or NaN in an occupied lane (such a lane goes to the bisection
         // fallback instead of being accepted). Empty lanes always count as converged.
@@ -433,7 +464,7 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
         }
     }
     // Stiefel functions at the final X (all lanes, including those from the bisection fallback).
-    REB_W512_NAME(w512_stiefel_Gs13_comp_)(19, XX, beta, &G1, &G2, &G3);
+    REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
 
     // f and g functions.
     R = w_fmadd(G1, eta, R);
