@@ -243,6 +243,47 @@ static REB_WHFAST_INLINE void stiefel_Gs3(double *restrict Gs, double beta, doub
     return;
 }
 
+// Kepler drift of the variational particles belonging to particle p (first order). p1 is p's
+// state before the drift; the other arguments are the converged quantities of p's Kepler solve.
+// Shared by the scalar and the batched solver.
+static REB_WHFAST_INLINE void reb_whfast_kepler_variations(const struct reb_simulation* const r, const struct reb_particle* const p, const struct reb_particle p1, const double mu, const double beta, const double X, const double eta0, const double zeta0, const double r0, const double r0i, const double ri, const double f, const double g, const double fd, const double gd){
+    double Gs[6];
+    for (size_t v=0;r && v<r->N_var_config;v++){
+        struct reb_variational_configuration const vc = r->var_config[v];
+        struct reb_integrator_whfast_state* whfast = r->integrator.state;
+        const size_t pindex = p - whfast->p_jh;
+        struct reb_particle* dp1p = whfast->p_jh_var + pindex + vc.index;
+        struct reb_particle dp1 = *dp1p;
+        stiefel_Gs(Gs, beta, X);    // Recalculate (to get Gs[4] and Gs[5])
+        double dr0 = (dp1.x*p1.x + dp1.y*p1.y + dp1.z*p1.z)*r0i;
+        double dbeta = -2.*mu*dr0*r0i*r0i - 2.* (dp1.vx*p1.vx + dp1.vy*p1.vy + dp1.vz*p1.vz);
+        double deta0 = dp1.x*p1.vx + dp1.y*p1.vy + dp1.z*p1.vz
+        + p1.x*dp1.vx + p1.y*dp1.vy + p1.z*dp1.vz;
+        double dzeta0 = -beta*dr0 - r0*dbeta;
+        double G3beta = 0.5*(3.*Gs[5]-X*Gs[4]);
+        double G2beta = 0.5*(2.*Gs[4]-X*Gs[3]);
+        double G1beta = 0.5*(Gs[3]-X*Gs[2]);
+        double tbeta = eta0*G2beta + zeta0*G3beta;
+        double dX = -1.*ri*(X*dr0 + Gs[2]*deta0+Gs[3]*dzeta0+tbeta*dbeta);
+        double dG1 = Gs[0]*dX + G1beta*dbeta; 
+        double dG2 = Gs[1]*dX + G2beta*dbeta;
+        double dG3 = Gs[2]*dX + G3beta*dbeta;
+        double dr = dr0 + Gs[1]*deta0 + Gs[2]*dzeta0 + eta0*dG1 + zeta0*dG2;
+        double df = mu*Gs[2]*dr0*r0i*r0i - mu*dG2*r0i;
+        double dg = -mu*dG3;
+        double dfd = -mu*dG1*r0i*ri + mu*Gs[1]*(dr0*r0i+dr*ri)*r0i*ri;
+        double dgd = -mu*dG2*ri + mu*Gs[2]*dr*ri*ri;
+
+        dp1p->x += f*dp1.x + g*dp1.vx + df*p1.x + dg*p1.vx;
+        dp1p->y += f*dp1.y + g*dp1.vy + df*p1.y + dg*p1.vy;
+        dp1p->z += f*dp1.z + g*dp1.vz + df*p1.z + dg*p1.vz;
+
+        dp1p->vx += fd*dp1.x + gd*dp1.vx + dfd*p1.x + dgd*p1.vx;
+        dp1p->vy += fd*dp1.y + gd*dp1.vy + dfd*p1.y + dgd*p1.vy;
+        dp1p->vz += fd*dp1.z + gd*dp1.vz + dfd*p1.z + dgd*p1.vz;
+    }
+}
+
 #define WHFAST_NMAX_QUART 64    ///< Maximum number of iterations for quartic solver
 #define WHFAST_NMAX_NEWT  32    ///< Maximum number of iterations for Newton's method
                                 // Keplerian motion for one planet                       
@@ -404,39 +445,8 @@ void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, 
     p->vz += fd*p1.z + gd*p1.vz;
 
     //Variations
-    for (size_t v=0;r && v<r->N_var_config;v++){
-        struct reb_variational_configuration const vc = r->var_config[v];
-        struct reb_integrator_whfast_state* whfast = r->integrator.state;
-        const size_t pindex = p - whfast->p_jh;
-        struct reb_particle* dp1p = whfast->p_jh_var + pindex + vc.index;
-        struct reb_particle dp1 = *dp1p;
-        stiefel_Gs(Gs, beta, X);    // Recalculate (to get Gs[4] and Gs[5])
-        double dr0 = (dp1.x*p1.x + dp1.y*p1.y + dp1.z*p1.z)*r0i;
-        double dbeta = -2.*mu*dr0*r0i*r0i - 2.* (dp1.vx*p1.vx + dp1.vy*p1.vy + dp1.vz*p1.vz);
-        double deta0 = dp1.x*p1.vx + dp1.y*p1.vy + dp1.z*p1.vz
-        + p1.x*dp1.vx + p1.y*dp1.vy + p1.z*dp1.vz;
-        double dzeta0 = -beta*dr0 - r0*dbeta;
-        double G3beta = 0.5*(3.*Gs[5]-X*Gs[4]);
-        double G2beta = 0.5*(2.*Gs[4]-X*Gs[3]);
-        double G1beta = 0.5*(Gs[3]-X*Gs[2]);
-        double tbeta = eta0*G2beta + zeta0*G3beta;
-        double dX = -1.*ri*(X*dr0 + Gs[2]*deta0+Gs[3]*dzeta0+tbeta*dbeta);
-        double dG1 = Gs[0]*dX + G1beta*dbeta; 
-        double dG2 = Gs[1]*dX + G2beta*dbeta;
-        double dG3 = Gs[2]*dX + G3beta*dbeta;
-        double dr = dr0 + Gs[1]*deta0 + Gs[2]*dzeta0 + eta0*dG1 + zeta0*dG2;
-        double df = mu*Gs[2]*dr0*r0i*r0i - mu*dG2*r0i;
-        double dg = -mu*dG3;
-        double dfd = -mu*dG1*r0i*ri + mu*Gs[1]*(dr0*r0i+dr*ri)*r0i*ri;
-        double dgd = -mu*dG2*ri + mu*Gs[2]*dr*ri*ri;
-
-        dp1p->x += f*dp1.x + g*dp1.vx + df*p1.x + dg*p1.vx;
-        dp1p->y += f*dp1.y + g*dp1.vy + df*p1.y + dg*p1.vy;
-        dp1p->z += f*dp1.z + g*dp1.vz + df*p1.z + dg*p1.vz;
-
-        dp1p->vx += fd*dp1.x + gd*dp1.vx + dfd*p1.x + dgd*p1.vx;
-        dp1p->vy += fd*dp1.y + gd*dp1.vy + dfd*p1.y + dgd*p1.vy;
-        dp1p->vz += fd*dp1.z + gd*dp1.vz + dfd*p1.z + dgd*p1.vz;
+    if (r && r->N_var_config){
+        reb_whfast_kepler_variations(r, p, p1, mu, beta, X, eta0, zeta0, r0, r0i, ri, f, g, fd, gd);
     }
 }
 
@@ -445,8 +455,8 @@ void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, 
 // Each particle (lane) goes through exactly the same sequence of floating-point operations as in
 // reb_integrator_whfast_kepler_solver, so results are bit-for-bit identical. Interleaving the
 // lanes lets the CPU overlap their otherwise serial chains of square roots, divisions and series
-// evaluations. Lanes that need the quartic solver or the bisection fallback, and simulations
-// with variational particles, use the scalar solver.
+// evaluations. Lanes that need the quartic solver or the bisection fallback use the scalar
+// solver. Variational particles are drifted with the same code as in the scalar solver.
 #define WHFAST_KEPLER_BATCH 4
 
 // stiefel_Gs3 for all lanes of a batch at once (structure-of-arrays). Every lane goes through
@@ -505,12 +515,6 @@ static REB_WHFAST_INLINE void stiefel_Gs3_lanes(double* restrict G0, double* res
     }
 }
 static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r, const int lanes){
-    if (r && r->N_var_config){
-        for (int l=0; l<n; l++){
-            reb_integrator_whfast_kepler_solver(ps[l], mus[l], dt, r);
-        }
-        return;
-    }
     double x[WHFAST_KEPLER_BATCH], y[WHFAST_KEPLER_BATCH], z[WHFAST_KEPLER_BATCH];
     double vx[WHFAST_KEPLER_BATCH], vy[WHFAST_KEPLER_BATCH], vz[WHFAST_KEPLER_BATCH];
     double r0[WHFAST_KEPLER_BATCH], r0i[WHFAST_KEPLER_BATCH], beta[WHFAST_KEPLER_BATCH];
@@ -659,6 +663,12 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
         p->vx += fd*x[l] + gd*vx[l];
         p->vy += fd*y[l] + gd*vy[l];
         p->vz += fd*z[l] + gd*vz[l];
+        if (r && r->N_var_config){
+            struct reb_particle p1 = {0};
+            p1.x = x[l]; p1.y = y[l]; p1.z = z[l];
+            p1.vx = vx[l]; p1.vy = vy[l]; p1.vz = vz[l];
+            reb_whfast_kepler_variations(r, p, p1, mu, beta[l], X[l], eta0[l], zeta0[l], r0[l], r0i[l], ri[l], f, g, fd, gd);
+        }
     }
 }
 #endif // OPENMP
