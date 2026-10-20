@@ -331,10 +331,13 @@ static int reb_integrator_ias15_stage_parallel_possible(const struct reb_simulat
 }
 // Task plan of the stage-parallel mode: a function of N, N_active and the gravity settings only
 // (never of the thread count), so that results do not depend on the number of threads. 7 stages
-// times K tasks of about equal cost keep cores of different speed busy. Scratch memory for the
-// basic-gravity blocks: 21*K*N doubles, at most 2^22 (32 MB).
+// times K tasks of about equal cost keep many cores, and cores of different speed, busy: about
+// N/64 row blocks per stage, at most 64 (448 tasks per iteration). Scratch memory for the
+// basic-gravity blocks: 21*K*N doubles, at most 2^23 (64 MB, as the pair table of the parallel
+// gravity kernel).
 #define REB_IAS15_STAGE_ROWS_PER_BLOCK 64
-#define REB_IAS15_STAGE_MAX_BLOCKS 16
+#define REB_IAS15_STAGE_MAX_BLOCKS 64
+#define REB_IAS15_STAGE_SCRATCH_MAX ((size_t)1<<23)
 #define REB_IAS15_STAGE_TP_PAIRS_PER_BLOCK 8192
 struct reb_ias15_stage_plan {
     int compensated;            // compensated gravity: one-sided particle chunks, no reduction
@@ -369,7 +372,7 @@ static void reb_integrator_ias15_stage_plan(const struct reb_simulation* const r
         if (Kt>Nt) Kt = Nt;
         if (Kt<1) Kt = 1;
     }
-    while (Ka+Kt>1 && 21*(Ka+Kt)*N > ((size_t)1<<22)){
+    while (Ka+Kt>1 && 21*(Ka+Kt)*N > REB_IAS15_STAGE_SCRATCH_MAX){
         if (Kt>1) Kt--; else if (Ka>1) Ka--; else break;
     }
     pl->Ka = Ka; pl->Kt = Kt;
