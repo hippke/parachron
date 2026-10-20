@@ -635,7 +635,9 @@ static struct reb_simulation* make_selfgrav(int variant){
 static void* create_selfgrav(void){ return simctx_create(make_selfgrav, 2, 0); }
 static struct reb_simulation* make_selfgrav_group(int variant){
     struct reb_simulation* r = make_selfgrav(variant);
+#ifdef REB_HAS_TREE_GROUP_SIZE
     r->tree_group_size = 32;  // opt-in group walk (different, more accurate results at the same opening angle)
+#endif
     return r;
 }
 static void* create_selfgrav_group(void){ return simctx_create(make_selfgrav_group, 1, 0); }
@@ -767,6 +769,11 @@ struct bench {
 };
 
 static int always(void){ return 1; }
+#ifdef REB_HAS_TREE_GROUP_SIZE
+static int has_tree_group(void){ return 1; }
+#else
+static int has_tree_group(void){ return 0; }
+#endif
 
 static const struct bench benches[] = {
     // name             unit        use case                                                          create/work/signature/destroy                     available    warm meas
@@ -789,7 +796,7 @@ static const struct bench benches[] = {
     {"rings_sei_tree",  "steps/s",  "Saturn's rings, SEI + tree collisions (Rein & Latter 2013)",        create_rings,        simctx_work, simctx_signature, simctx_destroy, always,    3,  400},
     {"rings_poly_tree", "steps/s",  "Shearing sheet with size distribution, tree gravity + collisions (examples/shearing_sheet)", create_rings_poly, simctx_work, simctx_signature, simctx_destroy, always,    2,   20},
     {"selfgrav_tree",   "steps/s",  "Self-gravitating disc, tree gravity, N=10k",                        create_selfgrav,     simctx_work, simctx_signature, simctx_destroy, always,    3,   18},
-    {"selfgrav_group", "steps/s",  "Self-gravitating disc, tree gravity with group walk (tree_group_size = 32, opt-in)", create_selfgrav_group, simctx_work, simctx_signature, simctx_destroy, always, 3, 18},
+    {"selfgrav_group", "steps/s",  "Self-gravitating disc, tree gravity with group walk (tree_group_size = 32, opt-in)", create_selfgrav_group, simctx_work, simctx_signature, simctx_destroy, has_tree_group, 3, 18},
     {"mercurius_plts",  "steps/s",  "MERCURIUS, 2 planets + 2,500 planetesimals (planetesimal migration)", create_mercurius,  simctx_work, simctx_signature, simctx_destroy, always,   10,   50},
     {"trace_tp",        "steps/s",  "TRACE, 2 planets + 2,000 test particles",                           create_trace,        simctx_work, simctx_signature, simctx_destroy, always,   20,  135},
     {"mercurius_disc",  "steps/s",  "MERCURIUS, 2 planets + 500 active planetesimals with merging (embryo/planetesimal growth)", create_mercurius_disc, simctx_work, simctx_signature, simctx_destroy, always, 3, 30},

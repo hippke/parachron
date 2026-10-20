@@ -282,6 +282,7 @@ struct reb_simulation {
     struct reb_treecell** tree_root;// Pointer to the temporary tree structure.
     struct reb_treecell* tree_free_cells; // Internal use only. Cells of deleted trees, reused by the next tree (linked through oct[0]).
     double opening_angle2;          // Opening angle for tree-based gravity calculation. Default 0.25.
+#define REB_HAS_TREE_GROUP_SIZE 1
     unsigned int tree_group_size;   // Tree gravity: 0 (default): one tree walk per particle. G > 0: one walk per group of
                                     // up to G nearby particles (opening criterion against the group's bounding sphere),
                                     // e.g. 32. Faster at equal accuracy, but different (not bitwise identical) results.
