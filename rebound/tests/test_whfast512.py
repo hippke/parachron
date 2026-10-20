@@ -287,7 +287,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
         e1 = sim.energy() + gr_potential(sim)
         self.assertLess(math.fabs((e0-e1)/e0),4e-14)
         com = sim.com()
-        self.assertAlmostEqual(com.vx, 0.1, 16)
+        self.assertAlmostEqual(com.vx, 0.1, delta=1e-16) # round-off level (a few ulp of 0.1)
         self.assertAlmostEqual(com.x, com.vx*sim.t, 12)
 
 

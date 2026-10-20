@@ -17,6 +17,9 @@
  *            escapes compare squared distances.
  *          - 0.5*f*f'' in the Halley step is a multiplication by 0.5 (the assembly subtracts one from
  *            the exponent, which gives the same result for normal numbers, but not for zero).
+ *          - After Newton's method has converged, G1..G3 at the final X are obtained by a first-order
+ *            update from the last iteration (error ~dX^2 < 1e-22) instead of a new evaluation of the
+ *            series (the bisection fallback still re-evaluates).
  *          - MXCSR (flush-to-zero / denormals-are-zero) is not changed.
  *          All three instantiations use explicit fused multiply-adds, so they give bitwise
  *          identical results on every machine (the generic one uses fma() from libm).
@@ -338,7 +341,11 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     }
 
     // Newton iterations with the accurate series; lanes stop individually.
+    // Each lane stops at its own convergence. G1..G3 and the last correction dX of a lane are
+    // kept from the iteration in which that lane converged, so its result does not depend on how
+    // many iterations the other lanes need (systems packed into one vector stay independent).
     K k4 = w_kall();
+    V S1 = w_zero(), S2 = w_zero(), S3 = w_zero(), SdX = w_zero();
     int it = 0;
     while (1){
         const V old = XX;
@@ -350,8 +357,14 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
         t = w_fnmadd(zeta, G3, t);
         t = w_add(c->DT, t);
         XX = w_sel(k4, w_mul(ri, t), XX);
-        const V delta = w_abs(w_sub(old, XX));
-        k4 = w_klt(c->EPS, delta);
+        const V dX = w_sub(XX, old);
+        const K active = k4;
+        k4 = w_kand(w_klt(c->EPS, w_abs(dX)), active);
+        const K done = w_kandnot(k4, active);          // lanes that converged in this iteration
+        S1 = w_sel(done, G1, S1);
+        S2 = w_sel(done, G2, S2);
+        S3 = w_sel(done, G3, S3);
+        SdX = w_sel(done, dX, SdX);
         if (!w_kany(k4)) break;
         it++;
         if (it == W512_NEWTON_MAX){
@@ -359,7 +372,24 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
             break;
         }
     }
-    REB_W512_NAME(w512_stiefel_Gs13_comp_)(19, XX, beta, &G1, &G2, &G3);
+    // Converged lanes: G1..G3 were evaluated at X - dX. Update them to the final X to first order
+    // (dG3/dX = G2, dG2/dX = G1, dG1/dX = G0 = 1 - beta*G2) instead of evaluating the series
+    // again; the neglected terms are of order dX^2 < 1e-22, far below round-off. (The assembly
+    // re-evaluates the series.)
+    {
+        const V G0n = w_fnmadd(beta, S2, c->ONE);
+        G3 = w_fmadd(SdX, S2, S3);
+        G2 = w_fmadd(SdX, S1, S2);
+        G1 = w_fmadd(SdX, G0n, S1);
+    }
+    if (w_kany(k4)){
+        // Lanes that went through the bisection fallback: evaluate the series at their final X.
+        V F1, F2, F3;
+        REB_W512_NAME(w512_stiefel_Gs13_comp_)(19, XX, beta, &F1, &F2, &F3);
+        G1 = w_sel(k4, F1, G1);
+        G2 = w_sel(k4, F2, G2);
+        G3 = w_sel(k4, F3, G3);
+    }
 
     // f and g functions.
     R = w_fmadd(G1, eta, R);
