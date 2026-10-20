@@ -50,6 +50,8 @@ i.e. the same flags users get from `make`.
 | `selfgrav_tree` | steps/s | Self-gravitating disc, N = 10,000, tree gravity (`examples/selfgravity_disc`) | Tree build and walk |
 | `mercurius_plts` | steps/s | MERCURIUS, 2 planets + 2,500 planetesimals (`examples/planetesimal_disk_migration`) | Hybrid encounters, IAS15 sub-steps, merging |
 | `trace_tp` | steps/s | TRACE, 2 planets + 2,000 test particles | TRACE encounter checks (N×N bookkeeping) |
+| `mercurius_disc` | steps/s | MERCURIUS, 2 planets + 500 fully active planetesimals with merging | Encounter-mode forces, encounter prediction (O(N²)) |
+| `trace_disc` | steps/s | TRACE, same disc | Encounter checks (O(N²)), interaction step |
 | `eos_pmlf6_tp` | steps/s | EOS PMLF6 (jerk kernel), 2 planets + 300 test particles | Jerk loop (O(N_tp²) at the time of writing) |
 
 Adaptive integrators report simulated time per second rather than steps per

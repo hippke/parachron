@@ -671,6 +671,42 @@ static struct reb_simulation* make_mercurius(int variant){
 }
 static void* create_mercurius(void){ return simctx_create(make_mercurius, 20, 0); }
 
+// 13b) Fully active planetesimal disc (all bodies interact, e.g. embryo/planetesimal growth):
+//      2 planets + 500 active planetesimals with merging, MERCURIUS (variant 0) or TRACE (variant 1).
+static struct reb_simulation* make_disc_active(int variant, int trace){
+    struct reb_simulation* r = new_sim();
+    r->rand_seed = 12 + variant;
+    reb_simulation_set_integrator(r, trace ? "trace" : "mercurius");
+    r->collision = REB_COLLISION_DIRECT;
+    r->collision_resolve = reb_collision_resolve_merge;
+    const double m_earth = 3.003e-6;
+    r->dt = 6.283/50;
+    struct reb_particle star = {0};
+    star.m = 1; star.r = 0.005;
+    reb_simulation_add(r, star);
+    struct reb_particle p = reb_particle_from_orbit(r->G, star, 5.1e-4, 1.0, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.000467;
+    reb_simulation_add(r, p);
+    p = reb_particle_from_orbit(r->G, star, 2.3*m_earth, 1.67, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.0000788215;
+    reb_simulation_add(r, p);
+    const int Np = 500;
+    const double mp = 2.3*10*m_earth/Np;
+    for (int i=0; i<Np; i++){
+        double a = reb_random_powerlaw(r, 1.65, 2.67, 1);
+        double e = reb_random_rayleigh(r, 0.01), inc = reb_random_rayleigh(r, 0.005);
+        struct reb_particle pt = reb_particle_from_orbit(r->G, star, mp, a, e, inc, reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI));
+        pt.r = 0.00000934532*pow(1000./Np, 1./3.);
+        reb_simulation_add(r, pt);
+    }
+    reb_simulation_move_to_com(r);
+    return r;
+}
+static struct reb_simulation* make_mercurius_disc(int variant){ return make_disc_active(variant, 0); }
+static struct reb_simulation* make_trace_disc(int variant){ return make_disc_active(variant, 1); }
+static void* create_mercurius_disc(void){ return simctx_create(make_mercurius_disc, 1, 0); }
+static void* create_trace_disc(void){ return simctx_create(make_trace_disc, 1, 0); }
+
 // 13) TRACE with two planets and 2,000 test particles (debris/Kuiper-belt style)
 static struct reb_simulation* make_trace(int variant){
     struct reb_simulation* r = new_sim();
@@ -749,6 +785,8 @@ static const struct bench benches[] = {
     {"selfgrav_tree",   "steps/s",  "Self-gravitating disc, tree gravity, N=10k",                        create_selfgrav,     simctx_work, simctx_signature, simctx_destroy, always,    3,   18},
     {"mercurius_plts",  "steps/s",  "MERCURIUS, 2 planets + 2,500 planetesimals (planetesimal migration)", create_mercurius,  simctx_work, simctx_signature, simctx_destroy, always,   10,   50},
     {"trace_tp",        "steps/s",  "TRACE, 2 planets + 2,000 test particles",                           create_trace,        simctx_work, simctx_signature, simctx_destroy, always,   20,  135},
+    {"mercurius_disc",  "steps/s",  "MERCURIUS, 2 planets + 500 active planetesimals with merging (embryo/planetesimal growth)", create_mercurius_disc, simctx_work, simctx_signature, simctx_destroy, always, 3, 30},
+    {"trace_disc",      "steps/s",  "TRACE, 2 planets + 500 active planetesimals with merging", create_trace_disc, simctx_work, simctx_signature, simctx_destroy, always, 3, 30},
     {"eos_pmlf6_tp",    "steps/s",  "EOS PMLF6, 2 planets + 300 test particles",                         create_eos,          simctx_work, simctx_signature, simctx_destroy, always,    2,   12},
 };
 static const int N_benches = sizeof(benches)/sizeof(benches[0]);
