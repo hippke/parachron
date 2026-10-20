@@ -170,3 +170,104 @@ is not converged; the Kepler step then violates energy conservation (e.g. a = 0.
 off by > 1e-12; a = 0.1, e = 0.8: 62 %), identically for the assembly, the old and the new C kernels. This regime is
 irrelevant for the Solar System (Mercury dt/P = 0.068, z ≈ 0.2) but matters for compact systems.
 
+### Iteration 2 (KEPT) — final C kernel
+
+`src/integrator_whfast512_kernel.h` (all C instantiations: AVX-512, AVX2, AVX2×4, generic, NEON; still bitwise
+identical to each other — cross-kernel tests pass):
+1. sixth-order bivariate series start (it. 1);
+2. first Newton step in correction form X − f·RI with RI ≈ 1/f′ from the Halley step (exact division for lanes with
+   |f″ΔX_h/f′| ≥ 1e-4 and for later iterations); NaN-safe convergence test (NaN in an occupied lane → bisection);
+3. `w512_stiefel_Gs13_`: plain Horner + correction for the rounding of the constants 1/k! (−E3 + zE5 − z²E7,
+   zE4 − z²E6, added by FMA before the final rounding);
+4. Stiefel functions evaluated again at the final X (as in the assembly; replaces the first-order update of item 40,
+   and with it the per-lane S-bookkeeping).
+
+Kepler-step bias at the planets' own (a, e), dt = 6 d (64 random phases × 10^6 Kepler steps, t of the relative a-error;
+`lab/kgrid_lab … ss`, figure `figures/kepler_bias_planets.png`):
+
+| kernel | Mer | Ven | Ear | Mar | Jup | Sat | Ura | Nep |
+|---|---|---|---|---|---|---|---|---|
+| assembly | +1.0 | +0.5 | −0.3 | +0.4 | −1.0 | −0.1 | +0.2 | +0.2 |
+| **C as forked** | **+59.1** | +0.9 | +1.1 | +0.4 | −0.6 | −1.9 | +0.2 | +0.2 |
+| C final | −0.2 | +0.7 | +0.7 | +0.5 | −1.3 | −2.0 | +0.4 | −1.0 |
+| C final, 3 more seeds | Σt² over 8 planets × 3 seeds = 28.6 (expected ≈ 25) | | | | | | | |
+
+The forked C kernel drifts Mercury's semi-major axis by **+1.4e-18 per step**, i.e. Δa/a ≈ +4e-7 (+23 km) over 5 Gyr —
+a change of g1 of order 1e-6 ″/yr, comparable to the WH truncation error at 6 d. The final kernel and the assembly
+show no detectable bias. Kepler grid (16 phases, ⟨t²⟩ for e < 0.3 / 0.3–0.6): final 0.75–1.54 / 1.47–1.76 over 4 seeds; assembly 1.73 / 1.42;
+forked C 3.4 / 18.9 (`figures/kepler_bias_tmap.png`). The final kernel is as unbiased as the assembly in this test. Standard and high-e grid maps:
+`figures/kepler_grid_std.png`, `figures/kepler_grid_highe.png` (high-e: identical large-z failure region for all).
+
+Other checks: full suite 966 passed (two round-off-sensitive WHFast512 tests adjusted with documented evidence:
+one-step GR energy threshold 6e-15 → 7e-15 — over 300 perturbed ICs the new kernel exceeds 6e-15 in 0.3 % of cases,
+the assembly in 1.0 %; independence test integrates 10^4 instead of 10^6 steps — an e = 0.8, dt ≈ P/2 test particle
+can run off to infinity in the solver's invalid regime, identically fragile for old and new solvers, see above).
+Development ensemble (16 × 10^7 steps, dt = 6 d, GR, corr17): median |ΔE/E| 1.19e-12 (assembly 1.41e-12, forked C
+1.25e-12; the common offset ≈ −1.3e-12 is the deterministic truncation term, identical in all runs).
+Secular phases at 6 d over 100 kyr unchanged (dg1 −8.82e-7 ″/yr, λ1 −2.90e-3 rad, as WHC).
+
+Speed (paired ratios, this host; library path, paper setup dt = 6 d, GR, corr17, `tools/bench_w512.c`):
+
+| kernel | time vs assembly | speedup | 5 Gyr projection on this host | projected on the paper's EPYC 9655 |
+|---|---|---|---|---|
+| 1 assembly | 1.000 | 1.00× | 13.6 h | 9.0 h (paper) |
+| 2 C AVX-512 as forked | 0.926 | 1.08× | — | — |
+| **2 C AVX-512 final** | **0.876** | **1.14×** | 12.3 h | ≈ 7.9 h (if the ratio transfers) |
+| 3 C AVX2 final | 0.935 | 1.07× | 13.0 h | — |
+
+Against the honest unbiased C baseline (the assembly's algorithm in C, `koub`): 1.24× (0.941 / 1.166, lab harness).
+AVX2 instantiation: final = forked speed (1.025 vs 1.025 of forked AVX-512), now unbiased.
+**Not measured on Zen 4/5**: the ratio vs the assembly may differ there (Zen 5 has 512-bit dividers with lower
+latency, which shrinks the benefit of removing a division from the chain).
+
+Solar System bias ensembles (paper Appendix C style, scaled to this machine; `tools/ens.c`, `tools/bias_summary.py`):
+16 runs × 10^9 steps (dt = 6 d, GR, corr17, ICs perturbed at 1e-15), ΔE/E incl. the GR potential:
+
+| kernel | N = 1e7 mean ± sem | N = 1e8 | **N = 1e9** | rms at 1e9 |
+|---|---|---|---|---|
+| assembly | −1.32e-12 ± 0.12e-12 | −1.01e-12 ± 0.41e-12 | **−1.18e-12 ± 1.2e-12** | 4.6e-12 |
+| C final | −1.24e-12 ± 0.16e-12 | −1.17e-12 ± 0.40e-12 | **−0.09e-12 ± 1.3e-12** | 4.9e-12 |
+| C as forked (3 runs only) | −1.33e-12 | −1.44e-12 | +1.3e-12 ± 3.9e-12 | 5.7e-12 |
+
+(The common −1.3e-12 at 1e7 is the deterministic truncation term.) Both are consistent with zero drift at 10^9 steps
+(|bias| ≲ 3e-21 per step at 2σ); the rms follows Brouwer's law (1e-16·√N = 3.2e-12). The forked kernel's Mercury bias
+corresponds to ≈ +2.5e-12 in ΔE/E at 10^9 steps (Mercury holds ~1.8e-3 of the orbital energy) — at the edge of this
+ensemble's sensitivity, which is why the per-planet Kepler test above is the decisive one. The paper's 32 × 3·10^10
+test (≈ 5× more sensitive) was not affordable on 2 vCPUs and remains to be run on a cluster.
+
+---
+
+# Summary (Oct 20, 2026)
+
+**Goal:** ≥ 2× faster Gyr Solar System integrations than WHFast512 v2 (paper: 106 ns/step on Zen 5) at research-grade
+accuracy, single- or multi-core.
+
+**Result:** 1.14× single-core (C AVX-512 kernel vs the paper's assembly, same machine, paper setup), with accuracy
+equal to the assembly in every test of the contract that could be run here. **2× was not reached, and the measurements
+indicate it is not reachable with the leads in the plan:**
+
+* **S1 (larger dt):** above ≈ 6 d the error budget is dominated by step-size resonances with Mercury's eccentric orbit
+  (λ1 error non-monotonic in dt, envelope ∝ dt^~10), which no splitting order removes; per unit cost nothing beats
+  WH + correctors at 6 d (best alternative: equal cost, worse λ1/energy).
+* **P1/P2 (parareal):** corrections must be applied in orbital elements to converge at all; then the coarse solver
+  must still resolve Mercury (cost ≥ 0.4 × fine) and contraction degrades with slice length → speedup < 1.
+* **S2 (Kepler solver):** the sixth-order series start and the division-free first Newton step give the measured
+  1.14× (1.24× before the bias fix, which costs one more Stiefel evaluation per step).
+* **S4/S5/S6:** the interaction step is throughput-bound; tree reductions and in-register broadcasts give nothing.
+
+**Most important finding:** the fork's C kernels (default on AVX2/ARM machines) had a systematic round-off bias in the
+Kepler step — Mercury's semi-major axis drifts by +1.4e-18 per step (+4e-7 over 5 Gyr), from plain Horner ignoring
+the rounding of 1/3! and from the first-order update of the Stiefel functions. Fixed (constant correction + evaluation
+at the final X), at no speed cost relative to the forked kernel.
+
+**Open items / next steps for a human or the next round:**
+1. Measure on Zen 4/Zen 5 (headline numbers; division latencies differ) and on the i5-13500 (AVX2 kernel 3).
+2. Full bias test (32 × 3e10 steps) and instability statistics (§1.2 items 1, 4) on a cluster with `ens.c`.
+3. Large-z Kepler regime (dt/P ≳ 0.2): all kernels violate energy conservation there (19-term series not converged);
+   needs argument reduction (half-angle formulas for the Stiefel functions) if compact systems matter.
+4. Robustness: a lane at infinity makes NaN in all lanes through 0·inf in the interaction step (and in the
+   block-diagonal matrices for packed systems) — pre-existing.
+5. P3 (secular coarse propagator for parareal) is the only untested parallel-in-time route; expect a research project.
+
+Push: this session could not push to github.com/hippke/rebound (repository not authorized for the session). The
+branch is delivered as `whfaster.bundle` and `patches/` in this directory: `git fetch whfaster.bundle whfaster:whfaster`.
