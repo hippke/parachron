@@ -634,8 +634,7 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
 #endif // OPENMP
 }
 
-// AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h); results identical.
-REB_TARGET_CLONES static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
     const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
