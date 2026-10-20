@@ -349,7 +349,7 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     int it = 0;
     while (1){
         const V old = XX;
-        REB_W512_NAME(w512_stiefel_Gs13_comp_)(19, XX, beta, &G1, &G2, &G3);
+        REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);   // plain Horner (item 46)
         const V e = w_fmadd(zeta, G2, w_mul(eta, G1));
         const V Xe = w_mul(XX, e);
         V t = w_fnmadd(G2, eta, w_sel(k4, Xe, XX));
