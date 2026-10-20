@@ -122,12 +122,29 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 // identical: floating-point contraction stays off (-std=c99 / ISO mode; the clone is built
 // without "fma"), and +, *, /, sqrt are correctly rounded at any vector width; only the number
 // of lanes per instruction and the VEX encoding change. Define REB_NO_TARGET_CLONES to disable.
+// Also used in OpenMP builds: the serial code paths there are the same functions, and the
+// bodies of parallel regions (outlined by the compiler) simply use the default target.
 #if defined(__has_attribute)
 #if __has_attribute(target_clones)
 #define REB_HAS_TARGET_CLONES_ATTR 1
 #endif
 #endif
-#if defined(REB_HAS_TARGET_CLONES_ATTR) && defined(__x86_64__) && defined(__linux__) && defined(__GLIBC__) && !defined(OPENMP) && !defined(REB_NO_TARGET_CLONES)
+// Shared-memory parallelisation (OPENMP builds). A parallel region costs roughly a microsecond
+// (fork, barrier, join), as much as a whole step of a small system. Loops therefore run in
+// parallel only when more than one thread is available and the loop has at least
+// REB_OMP_MIN_WORK units of work (pair interactions or particles, as documented at each call);
+// otherwise the serial code path runs, which is the same code as in non-OpenMP builds.
+#ifdef OPENMP
+#include <omp.h>
+#ifndef REB_OMP_MIN_WORK
+#define REB_OMP_MIN_WORK 2048
+#endif
+static inline int reb_omp_parallel(const double work){
+    return work >= REB_OMP_MIN_WORK && omp_get_max_threads() > 1 && !omp_in_parallel();
+}
+#endif // OPENMP
+
+#if defined(REB_HAS_TARGET_CLONES_ATTR) && defined(__x86_64__) && defined(__linux__) && defined(__GLIBC__) && !defined(REB_NO_TARGET_CLONES)
 #define REB_TARGET_CLONES __attribute__((target_clones("avx2","default")))
 #else
 #define REB_TARGET_CLONES

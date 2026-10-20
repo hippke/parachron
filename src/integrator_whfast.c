@@ -458,7 +458,6 @@ void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, 
     }
 }
 
-#ifndef OPENMP
 // Kepler solver for up to WHFAST_KEPLER_BATCH particles at once.
 // Each particle (lane) goes through exactly the same sequence of floating-point operations as in
 // reb_integrator_whfast_kepler_solver, so results are bit-for-bit identical. Interleaving the
@@ -701,12 +700,19 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
         reb_integrator_whfast_kepler_solver_batch_scalar(ps, mus, n, dt, r);
     }
 }
-#endif // OPENMP
 
 // Kepler drift of particles[first..N) about a common mu (heliocentric drifts in MERCURIUS and
 // TRACE). Uses the batched solver where available; identical results to the scalar loop.
 void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const particles, const size_t first, const size_t N, const double mu, const double dt, const struct reb_simulation* const r){
-#ifndef OPENMP
+#ifdef OPENMP
+    if (reb_omp_parallel(32.*(double)(N>first?N-first:0))){
+#pragma omp parallel for schedule(static)
+        for (size_t i=first; i<N; i++){
+            reb_integrator_whfast_kepler_solver(&particles[i], mu, dt, r);
+        }
+        return;
+    }
+#endif // OPENMP
     struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
     double batch_mu[WHFAST_KEPLER_BATCH];
     int nb = 0;
@@ -722,11 +728,6 @@ void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const partic
     if (nb){
         reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r, 0);
     }
-#else // OPENMP
-    for (size_t i=first; i<N; i++){
-        reb_integrator_whfast_kepler_solver(&particles[i], mu, dt, r);
-    }
-#endif // OPENMP
 }
 
 /***************************** 
@@ -795,7 +796,7 @@ void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, stru
             }
             break;
         case REB_INTEGRATOR_WHFAST_COORDINATES_DEMOCRATICHELIOCENTRIC:
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
             for (size_t i=1;i<N;i++){
                 p_jh[i].vx += _dt*particles[i].ax;
                 p_jh[i].vy += _dt*particles[i].ay;
@@ -803,14 +804,14 @@ void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, stru
             }
             break;
         case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
             for (size_t i=1;i<N_active;i++){
                 const double mi = particles[i].m;
                 p_jh[i].vx += _dt*(m0+mi)*particles[i].ax/m0;
                 p_jh[i].vy += _dt*(m0+mi)*particles[i].ay/m0;
                 p_jh[i].vz += _dt*(m0+mi)*particles[i].az/m0;
             }
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
             for (size_t i=N_active;i<N;i++){
                 p_jh[i].vx += _dt*particles[i].ax;
                 p_jh[i].vy += _dt*particles[i].ay;
@@ -840,14 +841,13 @@ void reb_integrator_whfast_jump_step(const struct reb_simulation* const r, struc
         case REB_INTEGRATOR_WHFAST_COORDINATES_DEMOCRATICHELIOCENTRIC:
             {
                 double px=0, py=0, pz=0;
-#pragma omp parallel for reduction (+:px), reduction (+:py), reduction (+:pz)
                 for(size_t i=1;i<N_active;i++){
                     const double m = r->particles[i].m;
                     px += m * p_h[i].vx;
                     py += m * p_h[i].vy;
                     pz += m * p_h[i].vz;
                 }
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
                 for(size_t i=1;i<N;i++){
                     p_h[i].x += _dt * (px/m0);
                     p_h[i].y += _dt * (py/m0);
@@ -858,21 +858,20 @@ void reb_integrator_whfast_jump_step(const struct reb_simulation* const r, struc
         case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
             {
                 double px=0, py=0, pz=0;
-#pragma omp parallel for reduction (+:px), reduction (+:py), reduction (+:pz)
                 for(size_t i=1;i<N_active;i++){
                     const double m = r->particles[i].m;
                     px += m * p_h[i].vx / (m0+m);
                     py += m * p_h[i].vy / (m0+m);
                     pz += m * p_h[i].vz / (m0+m);
                 }
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
                 for(size_t i=1;i<N_active;i++){
                     const double m = r->particles[i].m;
                     p_h[i].x += _dt * (px - (m * p_h[i].vx / (m0+m)) );
                     p_h[i].y += _dt * (py - (m * p_h[i].vy / (m0+m)) );
                     p_h[i].z += _dt * (pz - (m * p_h[i].vz / (m0+m)) );
                 }
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
                 for(size_t i=N_active;i<N;i++){
                     p_h[i].x += _dt * px;
                     p_h[i].y += _dt * py;
@@ -895,7 +894,11 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
     const size_t N = r->N;
     const size_t N_active = (r->N_active==SIZE_MAX || r->testparticle_type ==1)?N:r->N_active;
     double eta = m0;
-#ifndef OPENMP
+#ifdef OPENMP
+    // Work in units of pair interactions: one Kepler solve costs about as much as 32 of them.
+    if (!reb_omp_parallel(32.*(double)N))
+#endif // OPENMP
+    {
     // Collect particles in batches for the interleaved solver (same mu as the scalar loops below).
     struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
     double batch_mu[WHFAST_KEPLER_BATCH];
@@ -931,8 +934,9 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
     if (nb){
         reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r, 0);
     }
-#else // OPENMP
-    switch (coordinates){
+    }
+#ifdef OPENMP
+    else switch (coordinates){
         case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
 #pragma omp parallel for private(eta)
             for (size_t i=1;i<N;i++){
@@ -946,7 +950,7 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
             }
             break;
         case REB_INTEGRATOR_WHFAST_COORDINATES_DEMOCRATICHELIOCENTRIC:
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
             for (size_t i=1;i<N;i++){
                 reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r); // eta = m0
             }

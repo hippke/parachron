@@ -769,67 +769,8 @@ void reb_simulation_two_largest_particles(struct reb_simulation* r, size_t* p1, 
     *p2 = SIZE_MAX;
     double largest1 = -1.0;
     double largest2 = -1.0;
-#ifdef OPENMP
-    int num_threads;
-    // A struct to hold the two largest values found by each thread
-    struct two_max {
-        double largest1;
-        double largest2;
-        size_t p1;
-        size_t p2;
-    };
-
-    // Array to store the two largest values from each thread
-    struct two_max *thread_max;
-#pragma omp parallel
-    {
-        num_threads = omp_get_num_threads();
-#pragma omp master
-        {
-            thread_max = (struct two_max *)malloc(num_threads * sizeof(struct two_max));
-        }
-
-#pragma omp barrier
-        int thread_id = omp_get_thread_num();
-        thread_max[thread_id].largest1 = -1.0;
-        thread_max[thread_id].largest2 = -1.0;
-        thread_max[thread_id].p1 = SIZE_MAX;
-        thread_max[thread_id].p2 = SIZE_MAX;
-
-#pragma omp for
-        for (size_t i=0; i<r->N; i++) {
-            if (particles[i].r > thread_max[thread_id].largest1) {
-                thread_max[thread_id].largest2 = thread_max[thread_id].largest1;
-                thread_max[thread_id].p2 = thread_max[thread_id].p1;
-                thread_max[thread_id].largest1 = particles[i].r;
-                thread_max[thread_id].p1 = i;
-            } else if (particles[i].r > thread_max[thread_id].largest2) {
-                thread_max[thread_id].largest2 = particles[i].r;
-                thread_max[thread_id].p2 = i;
-            }
-        }
-    }
-
-    // Reduce the results from all threads
-    for (int i=0; i<num_threads; i++) {
-        if (thread_max[i].largest1 > largest1) {
-            largest2 = largest1;
-            *p2 = *p1;
-            largest1 = thread_max[i].largest1;
-            *p1 = thread_max[i].p1;
-        } else if (thread_max[i].largest1 > largest2) {
-            largest2 = thread_max[i].largest1;
-            *p2 = thread_max[i].p1;
-        }
-
-        if (thread_max[i].largest2 > largest2) {
-            largest2 = thread_max[i].largest2;
-            *p2 = thread_max[i].p2;
-        }
-    }
-
-    free(thread_max);
-#else // OPENMP
+    // Serial in all builds: a linear scan is cheap next to the collision search that calls it,
+    // and it keeps the tie-breaking (lowest index first) independent of the thread count.
     for (size_t i=0; i<r->N; i++) {
         if (particles[i].r > largest1) {
             largest2 = largest1;
@@ -843,7 +784,6 @@ void reb_simulation_two_largest_particles(struct reb_simulation* r, size_t* p1, 
             }
         }
     }
-#endif // OPENMP
 }
 
 void reb_simulation_get_serialized_particle_data(struct reb_simulation* r, double* m, double* radius, double (*xyz)[3], double (*vxvyvz)[3], double (*xyzvxvyvz)[6]){

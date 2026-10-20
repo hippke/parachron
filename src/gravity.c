@@ -74,7 +74,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
 
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 
@@ -92,7 +92,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
         for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
             for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
                 // Summing over all particle pairs
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(64.*(double)N))
                 for (size_t k=0; k<N; k++){
                     const size_t i = order[k];
 #ifndef OPENMP
@@ -188,11 +188,12 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
     const int N_ghost_x = r->N_ghost_x;
     const int N_ghost_y = r->N_ghost_y;
     const int N_ghost_z = r->N_ghost_z;
-#ifndef OPENMP // OPENMP off
     const size_t starti = (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_NONE)?1:2;
     const size_t startj = (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0)?1:0;
+#ifdef OPENMP
+    // Work = number of pair interactions computed by the one-sided parallel loops below.
+    const int parallel = reb_omp_parallel((double)N*(double)N_active);
 #endif // OPENMP
-#pragma omp parallel for 
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 
@@ -204,7 +205,10 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
             for (int gbz=-N_ghost_z; gbz<=N_ghost_z; gbz++){
                 struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                 // All active particle pairs
-#ifndef OPENMP // OPENMP off, do O(1/2*N^2)
+#ifdef OPENMP
+                if (!parallel)
+#endif // OPENMP
+                // Serial: O(1/2*N^2), each pair once (Newton's third law)
                 for (size_t i=starti; i<N_active; i++){
                     if (reb_sigint > 1) return;
                     // Particle i's position and acceleration live in registers during the inner loop
@@ -271,8 +275,12 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
                     particles[i].ay = ayi;
                     particles[i].az = azi;
                 }
-#else // OPENMP on, do O(N^2)
-#pragma omp parallel for
+#ifdef OPENMP
+                // Parallel: O(N^2), each particle sums all its partners in index order. Bitwise
+                // identical to the serial loop, which adds the partners of particle k in the same
+                // order (j<k from k's own row, then j>k from later rows; negation is exact).
+                else{
+#pragma omp parallel for schedule(static)
                 for (size_t i=0; i<N; i++){
                     for (size_t j=0; j<N_active; j++){
                         if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) || (i==1 && j==0) )) continue;
@@ -289,9 +297,15 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
                         particles[i].az    += prefact*dz;
                     }
                 }
+                }
 #endif // OPENMP
        // Interactions of test particles with active particles
-#ifndef OPENMP // OPENMP off
+#ifdef OPENMP
+                // In the parallel branch above, test particles (i >= N_active) already summed
+                // the forces of all active particles; only their back-reaction is left (below).
+                if (!parallel)
+#endif // OPENMP
+                {
                 const size_t startitestp = MAX(N_active, starti);
                 for (size_t i=startitestp; i<N; i++){
                     if (reb_sigint > 1) return;
@@ -324,9 +338,10 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
                     particles[i].ay = ayi;
                     particles[i].az = azi;
                 }
-#else // OPENMP on
-                if (_testparticle_type){
-#pragma omp parallel for
+                }
+#ifdef OPENMP
+                else if (_testparticle_type){
+#pragma omp parallel for schedule(static)
                     for (size_t i=0; i<N_active; i++){
                         for (size_t j=N_active; j<N; j++){
                             if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) )) continue;
@@ -364,7 +379,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
         r->N_allocated_gravity_cs = N;
     }
     struct reb_vec3d* restrict const cs = r->gravity_cs;
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0.; 
         particles[i].ay = 0.; 
@@ -375,6 +390,9 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
     }
     // Summing over all massive particle pairs
 #ifdef OPENMP
+    // Work = pair interactions in the one-sided loops (each particle sums all partners in index
+    // order, the same order as the serial loop below, so results are identical).
+    if (reb_omp_parallel((double)N*(double)N_active)){
 #pragma omp parallel for schedule(guided)
     for (size_t i=0; i<N_active; i++){
         for (size_t j=0; j<N_active; j++){
@@ -481,7 +499,9 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
             }
         }
     }
-#else // OPENMP
+    }else
+#endif // OPENMP
+    {
     for (size_t i=0; i<N_active; i++){
         if (reb_sigint > 1) return;
         for (size_t j=i+1; j<N_active; j++){
@@ -595,7 +615,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
             }
         }
     }
-#endif // OPENMP
+    }
     PROFILING_STOP(PROFILING_CAT_GRAVITY);
 }
 
@@ -926,7 +946,7 @@ void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const 
     const size_t starti = (r->gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_NONE)?1:2;
     const size_t startj = (r->gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0)?1:0;
     // All interactions between active particles
-#pragma omp parallel for
+    // Not parallel: each pair also updates particle j, which another thread may own (data race).
     for (size_t i=starti; i<N_active; i++){
 #ifndef OPENMP
         if (reb_sigint > 1) return;
@@ -957,7 +977,7 @@ void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const 
         }
     }
     // Interactions between active particles and test particles
-#pragma omp parallel for
+#pragma omp parallel for schedule(static) if(!_testparticle_type && reb_omp_parallel((double)(N-N_active)*(double)N_active))
     for (size_t i=N_active; i<N; i++){
 #ifndef OPENMP
         if (reb_sigint > 1) return;

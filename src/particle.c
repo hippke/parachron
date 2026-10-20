@@ -102,7 +102,6 @@ int reb_particle_check_testparticles(struct reb_simulation* const r){
     if (r->testparticle_type == 0){
         int found_issue = 0;
         const int N = r->N;
-#pragma omp parallel for
         for (int i=r->N_active; i<N; i++){
             if (r->particles[i].m!=0.){
                 found_issue = 1;

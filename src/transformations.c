@@ -27,6 +27,7 @@
 
 #include "rebound.h"
 #include "transformations.h"
+#include "rebound_internal.h"
 
 /******************************
  * Jacobi */
@@ -300,7 +301,6 @@ void reb_transformations_inertial_to_whds_posvel(const struct reb_particle* cons
     double vy0 = 0.;
     double vz0 = 0.;
     double m0  = 0.;
-#pragma omp parallel for reduction(+:x0) reduction(+:y0) reduction(+:z0) reduction(+:vx0) reduction(+:vy0) reduction(+:vz0) reduction(+:m0)
     for (size_t i=0;i<N_active;i++){
         double m = particles[i].m;
         x0  += particles[i].x *m;
@@ -320,7 +320,7 @@ void reb_transformations_inertial_to_whds_posvel(const struct reb_particle* cons
     p_h[0].m = m0;
 
     m0 = particles[0].m;
-#pragma omp parallel for
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=1;i<N_active;i++){
         p_h[i].x  = particles[i].x  - particles[0].x ;
         p_h[i].y  = particles[i].y  - particles[0].y ;
@@ -332,7 +332,7 @@ void reb_transformations_inertial_to_whds_posvel(const struct reb_particle* cons
         p_h[i].vz = mf*(particles[i].vz - p_h[0].vz);
         p_h[i].m  = mi;
     }
-#pragma omp parallel for
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=N_active;i<N;i++){
         p_h[i].x  = particles[i].x  - particles[0].x ;
         p_h[i].y  = particles[i].y  - particles[0].y ;
@@ -352,7 +352,7 @@ void reb_transformations_whds_to_inertial_pos(struct reb_particle* const particl
 void reb_transformations_whds_to_inertial_posvel(struct reb_particle* const particles, const struct reb_particle* const p_h, const size_t N, const size_t N_active){
     reb_transformations_whds_to_inertial_pos(particles,p_h,N, N_active);
     const double m0 = particles[0].m;
-#pragma omp parallel for
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=1;i<N_active;i++){
         const double mi = particles[i].m;
         double mf = (m0+mi) / m0;
@@ -360,7 +360,7 @@ void reb_transformations_whds_to_inertial_posvel(struct reb_particle* const part
         particles[i].vy = p_h[i].vy/mf+p_h[0].vy;
         particles[i].vz = p_h[i].vz/mf+p_h[0].vz;
     }
-#pragma omp parallel for
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=N_active;i<N;i++){
         particles[i].vx = p_h[i].vx+p_h[0].vx;
         particles[i].vy = p_h[i].vy+p_h[0].vy;
@@ -369,7 +369,6 @@ void reb_transformations_whds_to_inertial_posvel(struct reb_particle* const part
     double vx0  = 0.;
     double vy0  = 0.;
     double vz0  = 0.;
-#pragma omp parallel for reduction(+:vx0) reduction(+:vy0) reduction(+:vz0) 
     for (size_t i=1;i<N_active;i++){
         double m = particles[i].m;
         vx0 += p_h[i].vx*m/(m0+m);
@@ -393,7 +392,6 @@ void reb_transformations_inertial_to_democraticheliocentric_posvel(const struct 
     double vy0 = 0.;
     double vz0 = 0.;
     double m0  = 0.;
-#pragma omp parallel for reduction(+:x0) reduction(+:y0) reduction(+:z0) reduction(+:vx0) reduction(+:vy0) reduction(+:vz0) reduction(+:m0)
     for (size_t i=0;i<N_active;i++){
         double m = particles[i].m;
         x0  += particles[i].x *m;
@@ -412,7 +410,7 @@ void reb_transformations_inertial_to_democraticheliocentric_posvel(const struct 
     p_h[0].vz = vz0/m0;
     p_h[0].m = m0;
 
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=1;i<N;i++){
         p_h[i].x  = particles[i].x  - particles[0].x ;
         p_h[i].y  = particles[i].y  - particles[0].y ;
@@ -429,7 +427,6 @@ void reb_transformations_democraticheliocentric_to_inertial_pos(struct reb_parti
     double x0  = 0.;
     double y0  = 0.;
     double z0  = 0.;
-#pragma omp parallel for reduction(+:x0) reduction(+:y0) reduction(+:z0) 
     for (size_t i=1;i<N_active;i++){
         double m = p_h[i].m;
         x0 += p_h[i].x*m/mtot;
@@ -440,7 +437,7 @@ void reb_transformations_democraticheliocentric_to_inertial_pos(struct reb_parti
     particles[0].x  = p_h[0].x - x0;
     particles[0].y  = p_h[0].y - y0;
     particles[0].z  = p_h[0].z - z0;
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=1;i<N;i++){
         particles[i].x = p_h[i].x+particles[0].x;
         particles[i].y = p_h[i].y+particles[0].y;
@@ -451,7 +448,7 @@ void reb_transformations_democraticheliocentric_to_inertial_pos(struct reb_parti
 void reb_transformations_democraticheliocentric_to_inertial_posvel(struct reb_particle* const particles, const struct reb_particle* const p_h, const size_t N, const size_t N_active){
     reb_transformations_democraticheliocentric_to_inertial_pos(particles,p_h,N,N_active);
     const double m0 = particles[0].m;
-#pragma omp parallel for 
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=1;i<N;i++){
         particles[i].vx = p_h[i].vx+p_h[0].vx;
         particles[i].vy = p_h[i].vy+p_h[0].vy;
@@ -460,7 +457,6 @@ void reb_transformations_democraticheliocentric_to_inertial_posvel(struct reb_pa
     double vx0  = 0.;
     double vy0  = 0.;
     double vz0  = 0.;
-#pragma omp parallel for reduction(+:vx0) reduction(+:vy0) reduction(+:vz0) 
     for (size_t i=1;i<N_active;i++){
         double m = particles[i].m;
         vx0 += p_h[i].vx*m/m0;

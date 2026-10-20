@@ -21,6 +21,7 @@
  */
 
 #include "rebound.h"
+#include "rebound_internal.h"
 #include "integrator_leapfrog.h"
 #include "binarydata.h"
 
@@ -72,7 +73,7 @@ const double reb_integrator_leapfrog_lf8_a[9] = {0.128865979381443, 0.5815140871
 static void drift(struct reb_simulation* r, double dt){
     const size_t N = r->N;
     struct reb_particle* restrict const particles = r->particles;
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=0;i<N;i++){
         particles[i].x  += dt * particles[i].vx;
         particles[i].y  += dt * particles[i].vy;
@@ -84,7 +85,7 @@ static void drift(struct reb_simulation* r, double dt){
 static void kick(struct reb_simulation* r, double dt){
     const size_t N = r->N;
     struct reb_particle* restrict const particles = r->particles;
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
     for (size_t i=0;i<N;i++){
         particles[i].vx += dt * particles[i].ax;
         particles[i].vy += dt * particles[i].ay;
