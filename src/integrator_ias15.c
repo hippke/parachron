@@ -770,6 +770,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
     }
 
     // Find new position and velocity values at end of the sequence
+    REB_IAS15_IVDEP
     for(size_t k=0;k<N3;++k) {
         // Note: dt_done*dt_done is not precalculated to avoid 
         //       biased round-off errors when a fixed timestep is used.
