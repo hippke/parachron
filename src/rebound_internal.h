@@ -153,6 +153,23 @@ static inline int reb_omp_threads(void){
     const int p = reb_omp_performance_cores();
     return (p>0 && p<T) ? p : T;
 }
+// Work sharing on part of a team: every parallel region runs with the same team (reb_omp_threads()),
+// because changing the team size between consecutive regions is expensive (idle pool threads are
+// put to sleep and woken again; measured: 1.93x -> 1.27x at 4 vs 6 threads, and 0.04x when threads
+// outnumber cores). A region that should use fewer threads lets threads 0..nw-1 do the work and
+// the others wait at the barriers. Static share of [0, n) for worker tid of nw:
+static inline void reb_omp_static_range(const size_t n, const int nw, const int tid, size_t* const lo, size_t* const hi){
+    const size_t q = n/(size_t)nw, rem = n%(size_t)nw, t = (size_t)tid;
+    *lo = t*q + (t<rem ? t : rem);
+    *hi = *lo + q + (t<rem ? 1 : 0);
+}
+// Dynamic share: returns the next index from a counter shared by the workers.
+static inline size_t reb_omp_next(size_t* const counter){
+    size_t v;
+#pragma omp atomic capture
+    v = (*counter)++;
+    return v;
+}
 static inline int reb_omp_parallel(const double work){
     return work >= REB_OMP_MIN_WORK && reb_omp_threads() > 1 && !omp_in_parallel();
 }

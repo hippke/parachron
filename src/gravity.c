@@ -678,45 +678,61 @@ static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size
         for (size_t c=chunk_first[b]; c<chunk_first[b+1]; c++) chunk_block[c] = (unsigned short)b;
     }
     struct reb_particle* const particles = r->particles;
-#pragma omp parallel num_threads(nthreads)
+    // Full team (same size as every other region); threads 0..nthreads-1 do the work.
+    size_t next_block = 0, next_chunk = 0;
+    const size_t ntp = N>N_active ? N-N_active : 0;
+#pragma omp parallel num_threads(reb_omp_threads())
     {
-#pragma omp for schedule(static)
-        for (size_t i=0; i<N; i++){
-            soa[i] = particles[i].x; soa[N+i] = particles[i].y; soa[2*N+i] = particles[i].z; soa[3*N+i] = particles[i].m;
-            soa[4*N+i] = particles[i].ax; soa[5*N+i] = particles[i].ay; soa[6*N+i] = particles[i].az;
-        }
-        // Pass 1, active blocks (largest work last in index, so hand them out first).
-#pragma omp for schedule(dynamic, 1) nowait
-        for (size_t bb=0; bb<nb; bb++){
-            const size_t b = nb-1-bb;
-            const size_t i0 = s[b], i1 = s[b+1];
-            if (s[b]>startj){
-                for (size_t i=(i0>starti?i0:starti); i<i1; i++){
-                    reb_gravity_tile_row(p, i, startj, s[b], gb, G, softening, table + rowoff[i]);
-                }
+        const int tid = omp_get_thread_num();
+        const int nw = nthreads<omp_get_num_threads() ? nthreads : omp_get_num_threads();
+        const int worker = tid<nw;
+        size_t lo = 0, hi = 0;
+        if (worker){
+            reb_omp_static_range(N, nw, tid, &lo, &hi);
+            for (size_t i=lo; i<hi; i++){
+                soa[i] = particles[i].x; soa[N+i] = particles[i].y; soa[2*N+i] = particles[i].z; soa[3*N+i] = particles[i].m;
+                soa[4*N+i] = particles[i].ax; soa[5*N+i] = particles[i].ay; soa[6*N+i] = particles[i].az;
             }
-            reb_gravity_tile_diagonal(p, i0, i1, starti, startj, gb, G, softening);
         }
-        // Pass 1, test-particle rows (own row only; stored for type 1).
-#pragma omp for schedule(static)
-        for (size_t i=N_active; i<N; i++){
-            if (i<starti || N_active<=startj) continue;
-            reb_gravity_tile_row(p, i, startj, N_active, gb, G, softening, testparticle_type ? table + rowoff[i] : NULL);
+#pragma omp barrier
+        if (worker){
+            // Pass 1, active blocks (largest work last in index, so hand them out first).
+            for (size_t bb; (bb = reb_omp_next(&next_block)) < nb; ){
+                const size_t b = nb-1-bb;
+                const size_t i0 = s[b], i1 = s[b+1];
+                if (s[b]>startj){
+                    for (size_t i=(i0>starti?i0:starti); i<i1; i++){
+                        reb_gravity_tile_row(p, i, startj, s[b], gb, G, softening, table + rowoff[i]);
+                    }
+                }
+                reb_gravity_tile_diagonal(p, i0, i1, starti, startj, gb, G, softening);
+            }
+            // Pass 1, test-particle rows (own row only; stored for type 1).
+            reb_omp_static_range(ntp, nw, tid, &lo, &hi);
+            for (size_t i=N_active+lo; i<N_active+hi; i++){
+                if (i<starti || N_active<=startj) continue;
+                reb_gravity_tile_row(p, i, startj, N_active, gb, G, softening, testparticle_type ? table + rowoff[i] : NULL);
+            }
         }
-        // (barrier) Pass 2: later rows for each active block, in chunks of REB_GRAVITY_PASS2_CHUNK
-        // particles (independent: each particle only receives its own terms). Early blocks have
-        // the most later rows, so chunks are handed out dynamically, largest first.
-#pragma omp for schedule(dynamic, 1)
-        for (size_t c=0; c<nchunks; c++){
-            const size_t b = chunk_block[c];
-            const size_t k0 = s[b] + (c-chunk_first[b])*REB_GRAVITY_PASS2_CHUNK;
-            const size_t k1 = (k0+REB_GRAVITY_PASS2_CHUNK<s[b+1]) ? k0+REB_GRAVITY_PASS2_CHUNK : s[b+1];
-            const size_t ifirst = s[b+1]>starti ? s[b+1] : starti;
-            reb_gravity_tile_later(p, k0, k1, ifirst, Nrows, table, rowoff, startj, gb);
+#pragma omp barrier
+        if (worker){
+            // Pass 2: later rows for each active block, in chunks of REB_GRAVITY_PASS2_CHUNK
+            // particles (independent: each particle only receives its own terms). Early blocks
+            // have the most later rows, so chunks are handed out dynamically, largest first.
+            for (size_t c; (c = reb_omp_next(&next_chunk)) < nchunks; ){
+                const size_t b = chunk_block[c];
+                const size_t k0 = s[b] + (c-chunk_first[b])*REB_GRAVITY_PASS2_CHUNK;
+                const size_t k1 = (k0+REB_GRAVITY_PASS2_CHUNK<s[b+1]) ? k0+REB_GRAVITY_PASS2_CHUNK : s[b+1];
+                const size_t ifirst = s[b+1]>starti ? s[b+1] : starti;
+                reb_gravity_tile_later(p, k0, k1, ifirst, Nrows, table, rowoff, startj, gb);
+            }
         }
-#pragma omp for schedule(static)
-        for (size_t i=0; i<N; i++){
-            particles[i].ax = soa[4*N+i]; particles[i].ay = soa[5*N+i]; particles[i].az = soa[6*N+i];
+#pragma omp barrier
+        if (worker){
+            reb_omp_static_range(N, nw, tid, &lo, &hi);
+            for (size_t i=lo; i<hi; i++){
+                particles[i].ax = soa[4*N+i]; particles[i].ay = soa[5*N+i]; particles[i].az = soa[6*N+i];
+            }
         }
     }
     if (chunk_block!=chunk_block_buf) free(chunk_block);
@@ -833,11 +849,20 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
                 else if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening)){
                     const size_t nchunk = (N+REB_GRAVITY_ONESIDED_CHUNK-1)/REB_GRAVITY_ONESIDED_CHUNK;
                     const int nthreads = reb_gravity_omp_threads(N, N_active);
-#pragma omp parallel for schedule(static) num_threads(nthreads)
-                    for (size_t c=0; c<nchunk; c++){
-                        const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
-                        const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;
-                        reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening);
+                    // Full team, threads 0..nthreads-1 work (see reb_omp_static_range).
+#pragma omp parallel num_threads(reb_omp_threads())
+                    {
+                        const int tid = omp_get_thread_num();
+                        const int nw = nthreads<omp_get_num_threads() ? nthreads : omp_get_num_threads();
+                        if (tid<nw){
+                            size_t c0, c1;
+                            reb_omp_static_range(nchunk, nw, tid, &c0, &c1);
+                            for (size_t c=c0; c<c1; c++){
+                                const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
+                                const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;
+                                reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening);
+                            }
+                        }
                     }
                 }
 #endif // OPENMP
