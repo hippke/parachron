@@ -589,19 +589,6 @@ static void reb_tree_get_nearest_neighbour_in_cell(struct reb_simulation* const 
         double rp  = p1_r + second_largest_radius + 0.86602540378443*c->w;
         // Check if we need to descend into daughter cells
         if (r2 < rp*rp ){
-            // Second, exact test: a particle in this cell can only pass the leaf test above if the
-            // distance from gb to the cell's box is at most p1_r + (largest radius in the cell).
-            // Cells failing it contain no partner, so the same collisions are found in the same order.
-            // The box is enlarged by a small slack to cover rounding of the cell boundaries.
-            const double h = 0.5*c->w*(1.+1e-12) + 1e-13*(fabs(c->x)+fabs(c->y)+fabs(c->z));
-            const double ex = fabs(dx) - h;
-            const double ey = fabs(dy) - h;
-            const double ez = fabs(dz) - h;
-            const double bx = ex > 0. ? ex : 0.;
-            const double by = ey > 0. ? ey : 0.;
-            const double bz = ez > 0. ? ez : 0.;
-            const double rb = (p1_r + c->rmax)*(1.+1e-12);
-            if (bx*bx + by*by + bz*bz > rb*rb) return;
             for (int o=0;o<8;o++){
                 struct reb_treecell* d = c->oct[o];
                 if (d!=NULL){
