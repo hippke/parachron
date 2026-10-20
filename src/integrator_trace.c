@@ -909,6 +909,12 @@ static inline int reb_integrator_trace_switch_default_fast(const struct reb_part
     const double dvy = ps[i].vy - ps[j].vy;
     const double dvz = ps[i].vz - ps[j].vz;
     const double v2 = dvx*dvx + dvy*dvy + dvz*dvz;
+    // Conservative early exit without a division: all candidate separations below are taken at
+    // times |t| <= h2, where the separation differs from sqrt(rp) by at most |dv| h2. With
+    // A = rp/3 - v2 h2^2 > 0 and A^3 > dcritmax6 (i.e. rp > 3 (dcritmax^2 + v2 h2^2)), the
+    // minimum separation squared is at least 2 dcritmax^2, so the final test cannot succeed.
+    const double A = rp*(1./3.) - v2*h2*h2;
+    if (A > 0. && A*A*A > dcritmax6) return 0;
     const double qv = dx*dvx + dy*dvy + dz*dvz;
     if (qv == 0.0) return 0;
     const int d = (qv < 0) ? 1 : -1;
