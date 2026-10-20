@@ -15,6 +15,7 @@
 #include <time.h>
 #include "rebound.h"
 #include "integrator_whfast.h"
+#include "integrator_ias15.h"
 
 static double now(void){
     struct timespec ts;
@@ -160,12 +161,21 @@ static struct work make_case(const char* name, double scale){
 
 int main(int argc, char** argv){
     if (argc<2){
-        fprintf(stderr, "usage: %s CASE [scale]\ncases: ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
+        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
         return 1;
     }
     const double scale = argc>2 ? atof(argv[2]) : 1.;
-    struct work w = make_case(argv[1], scale);
+    // A case name ending in "+stages" runs the IAS15 case with ias15.parallel_stages = 1.
+    char name[64];
+    snprintf(name, sizeof(name), "%s", argv[1]);
+    char* plus = strstr(name, "+stages");
+    if (plus) *plus = 0;
+    struct work w = make_case(name, scale);
     struct reb_simulation* r = w.r;
+    if (plus){
+        if (strncmp(name, "ias15", 5)){ fprintf(stderr, "+stages needs an ias15 case\n"); return 1; }
+        ((struct reb_integrator_ias15_state*)r->integrator.state)->parallel_stages = 1;
+    }
     if (r->integrator.state && !strncmp(argv[1], "whfast", 6)){
         ((struct reb_integrator_whfast_state*)r->integrator.state)->safe_mode = 0; // as in long research runs
     }

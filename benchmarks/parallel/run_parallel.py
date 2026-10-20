@@ -15,6 +15,7 @@ and checks the final-state signatures:
   python3 run_parallel.py --only ias15_n512 --threads 1,2,4,8 --repeat 5
   python3 run_parallel.py --src ../../ --json out.json
   python3 run_parallel.py --compare-src ../rebound-base   # also interleaved A/B of the OpenMP builds of two trees
+  python3 run_parallel.py --cflags="-DREB_OMP_MIN_WORK_GRAVITY=65536."   # try another gravity threshold
 
 Run it on a quiet machine with as many physical cores as possible.
 """
@@ -29,6 +30,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
 CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n2048",
+         "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages",
          "whfast_ss", "whfast_tp10k", "whfast_n256"]
 
 
@@ -40,7 +42,7 @@ def sh(cmd, cwd=None, env=None):
     return res.stdout
 
 
-def build(src, build_root, jobs):
+def build(src, build_root, jobs, cflags=""):
     """Returns paths of the serial and OpenMP pbench binaries."""
     os.makedirs(build_root, exist_ok=True)
     pbench_c = os.path.join(HERE, "pbench.c")
@@ -54,9 +56,13 @@ def build(src, build_root, jobs):
                         ignore=shutil.ignore_patterns("*.o", "*.so", "*.gcda", "*.gcno"))
         srcdir = os.path.join(tree, "src")
         args = ["make", "-j%d" % jobs, "OPENGL=0", "SERVER=0", "librebound.so"]
+        env = None
         if kind == "openmp":
             args.append("OPENMP=1")
-        sh(args, cwd=srcdir)
+            if cflags:
+                env = dict(os.environ)
+                env["OPT"] = (env.get("OPT", "") + " " + cflags).strip()
+        sh(args, cwd=srcdir, env=env)
         exe = os.path.join(build_root, "pbench_" + kind)
         cmd = ["cc", "-O3", "-I" + srcdir, pbench_c, "-L" + srcdir, "-lrebound",
                "-Wl,-rpath," + srcdir, "-lm", "-o", exe]
@@ -119,6 +125,27 @@ def report_ab(results, threads):
         print(line + ("  identical" if same else "  CHANGED"))
 
 
+def report_stages(results, threads):
+    """For CASE+stages also compare to the default IAS15 mode of the serial build."""
+    lines = []
+    for case, rows in results.items():
+        base = case.replace("+stages", "")
+        if case == base or base not in results:
+            continue
+        ser = results[base]["serial:1"]
+        line = "%-20s" % case
+        for t in threads:
+            line += " %7.2fx" % (ser["median_s"] / rows["openmp:%d" % t]["median_s"])
+        sigs = [rows["serial:1"]["signature"]] + [rows["openmp:%d" % t]["signature"] for t in threads]
+        line += "  %-9s %.1e" % ("identical" if all(s == sigs[0] for s in sigs) else "DIFFER",
+                                 relerr(sigs[0], ser["signature"]))
+        lines.append(line)
+    if lines:
+        print("\nparallel_stages=1 vs the default IAS15 mode of the serial build (speedup at T threads;")
+        print("'identical': serial build and all thread counts agree bitwise; last column: difference to default mode):")
+        print("\n".join(lines))
+
+
 def report(results, threads):
     hdr = "%-15s %9s" % ("case", "serial[s]")
     for t in threads:
@@ -148,6 +175,8 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--cflags", default="", help="extra flags for the OpenMP build, e.g. "
+                    "'-DREB_OMP_MIN_WORK_GRAVITY=65536.' (gravity threshold) or '-DREB_OMP_MIN_WORK=1024'")
     ap.add_argument("--compare-src", default=None, help="second source tree: interleaved A/B of the OpenMP builds")
     args = ap.parse_args()
 
@@ -164,13 +193,14 @@ def main():
         threads.append(n)
     cases = args.only.split(",") if args.only else CASES
 
-    exes = build(src, build_root, args.jobs)
+    exes = build(src, build_root, args.jobs, args.cflags)
     if args.compare_src:
         other = os.path.abspath(args.compare_src)
         exes_b = build(other, build_root + "_B", args.jobs)
         exes["openmp_b"] = exes_b["openmp"]
     results = measure(exes, cases, threads, args.repeat, args.scale)
     report(results, threads)
+    report_stages(results, threads)
     if args.compare_src:
         report_ab(results, threads)
     if args.json:

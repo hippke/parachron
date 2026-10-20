@@ -39,6 +39,25 @@ Two caveats about this machine, both measured:
 **Scaling beyond 2 cores could not be measured.** Run `python3 benchmarks/parallel/run_parallel.py` on a
 workstation: it reports 1, 2, 4, ... nproc threads.
 
+## Literature consulted (ideas tested in code are marked)
+
+- Saha, Stadel & Tremaine (1997), parallel-in-time Picard iteration for planetary orbits: large speedups
+  only with very many processors, at a much higher total cost. Here the cost has to stay near 1x, so only
+  the cheap end of the idea is used: parallelism across the stages of one step (below), not across steps.
+- **van der Houwen & Sommeijer, parallel iterated Runge-Kutta (PIRK) methods** (CWI,
+  https://ir.cwi.nl/pub/1663/1663D.pdf): iterate an implicit Runge-Kutta method by Jacobi instead of
+  Gauss-Seidel sweeps over the stages, so all s stage derivatives of one iteration are independent; the
+  speedup approaches s when the right-hand side dominates. IAS15 is a Gauss-Radau collocation method with
+  7 substeps iterated to convergence, i.e. a natural candidate. **Tested: iteration 6.**
+- Stage-parallel implicit Runge-Kutta, arXiv:2505.17719: recent analysis of the same idea for IRK methods.
+- Parallel direct N-body for planetary systems, arXiv:2208.13562: for small n, serial beats parallel
+  because of synchronisation costs (agrees with iteration 0 and the thresholds of iteration 2).
+- parallel-in-time.org (Parareal, PFASST): across-step parallelism; not tried here (needs many cores,
+  and the coarse propagator of a chaotic system loses accuracy quickly).
+- GENGA, GLISSE, Swiftest (GPU/OpenMP N-body), WHFast512 (Javaheri, Rein & Tamayo 2023: SIMD inside one
+  step instead of threads), Jiménez-Pérez & Laskar (parallel symplectic integration): parallelism over
+  particles or ensembles; the particle-level ideas are items P3-P6.
+
 ## Iteration 0 — baseline (commit `b25fbbd`)
 
 New harness `benchmarks/parallel/` (`pbench.c`, `run_parallel.py`). Stock OpenMP build vs stock serial build:
@@ -142,7 +161,69 @@ likewise. Result: **whfast_tp10k 1.61x with 2 threads** (1.38–1.61x across run
 Gravity of the test particles: chunks of 64 per call (one AVX2-clone dispatch per chunk instead of per
 particle).
 
-## Current state (commit `93d4a96` + threshold reorder)
+## Iteration 6 — IAS15 stage-parallel mode, `ias15.parallel_stages = 1` — kept (opt-in)
+
+Idea from the PIRK literature (above). In each predictor-corrector iteration, IAS15 normally evaluates the
+force at substep n with positions predicted from the b coefficients already updated at substeps 1..n-1
+(Gauss-Seidel). In stage mode, all seven substep positions are predicted from the b values at the start of
+the iteration, and the seven force evaluations are independent (Jacobi). They run as one `omp parallel for`
+over the stages (up to 7 threads), each calling the serial half-pair gravity loop on a structure-of-arrays
+copy (`reb_gravity_basic_arrays`, the same per-pair expressions as the serial kernel). The b/g/e updates,
+convergence test and step-size control are unchanged and serial.
+
+- Exactness: the converged collocation solution is the same; only round-off differs from the default mode
+  (1e-13 to 1e-16 relative in the final state, the same number of steps in all cases). With the flag on,
+  results are **bitwise identical between the serial build and the OpenMP build at any thread count**
+  (checked with pbench signatures at T = 1, 2, 3).
+- Jacobi needs about the same number of iterations here: stage mode on one core costs 0.87–1.14x of
+  the default (noise on this VM is of the same size).
+- Saved in the simulation archive as an IAS15 setting, so restarts reproduce bit for bit. Used only with
+  basic gravity, all particles active, no additional forces, no variational particles, no ghost boxes;
+  otherwise the flag is silently ignored (test: identical to the default mode).
+- New test `rebound/tests/test_ias15_parallel_stages.py`. `check.py`: 956 passed (serial build; one
+  flaky `test_server` download failure that passes on rerun) and 956 passed (OpenMP build, 2 threads).
+  `gravity_check`: 189/189 identical, serial = base = OpenMP at T = 1, 2, 3, 5.
+- `pbench` cases `CASE+stages`; `run_parallel.py` reports them against the default mode of the serial build.
+
+2-vCPU VM, `--repeat 5`, speedup vs the **default** IAS15 of the serial build:
+
+| case | stages, 1 thread | stages, 2 threads |
+|---|---|---|
+| ias15_embryos (N = 61, collisions) | 0.87x | 1.02x |
+| ias15_n128 | 1.09x | **1.71x** |
+| ias15_n512 | 0.88x | **1.58x** |
+| ias15_n2048 | 1.14x | **2.14x** |
+
+This is the only change that helps IAS15 at N ~ 100: the work per parallel task is a whole force
+evaluation instead of a slice of one, so one fork/join per iteration suffices and no data moves between
+cores except the 7 small stage buffers. Limits: at most 7-way parallel (combine with the particle-parallel
+kernel for more cores: nested parallelism, open); not useful for N ≲ 50, where a force evaluation costs
+about as much as the fork/join.
+
+### First workstation measurement (user, Intel Core i5-13500: 6 P-cores + 8 E-cores, 20 threads)
+
+Commit before iteration 6 (no `+stages` cases), speedup vs the serial build:
+
+| case | omp1 | omp2 | omp4 | omp8 | omp16 | omp20 |
+|---|---|---|---|---|---|---|
+| ias15_hltau | 0.99x | 0.98x | 0.99x | 0.99x | 1.00x | 1.00x |
+| ias15_embryos | 1.00x | 1.00x | 1.00x | 1.00x | 1.00x | 1.00x |
+| ias15_n128 | 1.01x | 1.01x | 1.01x | 1.01x | 1.01x | 1.01x |
+| ias15_n512 | 1.01x | 1.02x | 2.70x | 2.87x | 2.40x | 2.62x |
+| ias15_n2048 | 1.02x | 1.71x | 2.99x | 4.34x | **4.69x** | 3.29x |
+| whfast_ss | 0.99x | 1.00x | 0.99x | 1.00x | 0.99x | 0.99x |
+| whfast_tp10k | 0.99x | 1.49x | 2.06x | 1.99x | 2.25x | 2.29x |
+| whfast_n256 | 1.01x | 1.01x | 1.02x | 0.98x | 1.66x | 1.86x |
+
+All bitwise identical to the serial build at every thread count. Readings:
+- The goal holds: nothing is slower than serial, and the large cases scale (n2048 4.7x, n512 2.9x).
+- Threshold too conservative for a real CPU: n512 at T = 2 and whfast_n256 below T = 16 stay serial
+  (N_active² × T < 2^20). The break-even of 2^19 was measured on the VM, whose cross-core transfer is slow.
+  To be tuned with `run_parallel.py --cflags="-DREB_OMP_MIN_WORK_GRAVITY=65536."` (new option).
+- T = 20 is slower than 16 for gravity: P- and E-cores mixed, and the static row-block split makes the
+  P-cores wait at the barrier for the E-cores. More, smaller blocks with dynamic scheduling (item P11).
+
+## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
 
@@ -176,7 +257,10 @@ Priority = expected speedup at T > 1 vs the serial build × breadth ÷ effort/ri
 | P8 | Direct collision search (serial O(N²)) | ias15_embryos | ? | low | open |
 | P9 | TRACE/MERCURIUS OpenMP correctness | trace_*, mercurius_* | tests pass | low | **done (it. 3)** |
 | P10 | Use the structure-of-arrays tile kernel in the serial build too (it is bitwise identical and faster on one core for 256 ≤ N ≤ 1024) | ias15_embryos(?), ias15_n*, whfast_n256 | 1.1–1.4x single-core | low | new idea (single-core, outside this round's goal) |
-| L* | Literature ideas (below) | | | | |
+| L1 | IAS15 stage-parallel (Jacobi over the 7 substeps, PIRK) | ias15_* N ≳ 100 | up to 7x on the force part | medium | **done (it. 6): 1.6–2.1x on 2 cores, opt-in `parallel_stages`** |
+| P11 | Gravity on hybrid CPUs: more blocks than threads, dynamic schedule | ias15_n*, whfast_n256 at T = 20 | recover T = 20 > T = 16 | low | open |
+| P12 | Lower the gravity threshold after measurements on real CPUs | ias15_n512 at T = 2, whfast_n256 | 1.5x+ where now 1.0x | trivial | open: needs `--cflags` runs on workstations |
+| P13 | Stage mode × particle-parallel gravity (nested) for > 7 cores | ias15_n* | > 7x | medium | open |
 
 Cases expected to stay at ~1.0x (too little work per step for thread-level parallelism: a fork/join costs
 about as much as a whole step): ias15_hltau (N = 6, ~7 µs/step), whfast_ss (8 planets, ~1 µs/step),

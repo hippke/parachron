@@ -107,6 +107,16 @@ const struct reb_binarydata_field_descriptor reb_integrator_ias15_field_descript
         "[Rein & Spiegel (2015)] is used. This was the default until January 2024. "
         "If set to AARSETH85, then the criterion of [Aarseth (1985)]) is used.",
         REB_UINT,         "adaptive_mode",       offsetof(struct reb_integrator_ias15_state, adaptive_mode), 0, 0, REB_GENERATE_ENUM_DESCRIPTORS(REB_IAS15_ADAPTIVEMODE)},
+    { "If set to 1, IAS15 evaluates the forces of all seven substeps of a predictor-corrector "
+        "iteration together, from the predictor at the start of the iteration (a Jacobi iteration over "
+        "the substeps, as in the parallel iterated Runge-Kutta methods of van der Houwen & Sommeijer), "
+        "instead of one substep after another. In OpenMP builds the seven force evaluations run on "
+        "different threads: with N of about 100 or more particles this makes IAS15 faster on several "
+        "cores (up to 7 threads are used). The converged solution is the same, but the round-off "
+        "differs from the default mode. Results do not depend on the number of threads or on whether "
+        "the library was built with OpenMP. Used only with gravity='basic', all particles active, no "
+        "additional forces, no variational particles and no ghost boxes; otherwise ignored. Default: 0.",
+        REB_UINT,         "parallel_stages",     offsetof(struct reb_integrator_ias15_state, parallel_stages), 0, 0, 0},
     { "", REB_UINT64,       "iterations_max_exceeded", offsetof(struct reb_integrator_ias15_state, iterations_max_exceeded), 0, 0, 0},
     { "", REB_POINTER,      "at",                  offsetof(struct reb_integrator_ias15_state, at), offsetof(struct reb_integrator_ias15_state, N_allocated), sizeof(double), 0},
     { "", REB_POINTER,      "x0",                  offsetof(struct reb_integrator_ias15_state, x0), offsetof(struct reb_integrator_ias15_state, N_allocated), sizeof(double), 0},
@@ -148,6 +158,7 @@ void reb_integrator_ias15_free(void* p){
     free(ias15->csv);
     free(ias15->csa0);
     free(ias15->dg6);
+    free(ias15->stage_buf);
     free(ias15);
 }
 
@@ -300,6 +311,48 @@ static void reb_integrator_ias15_alloc(struct reb_simulation* r, struct reb_inte
 //   Returns 0 if step is rejected.
 // AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h): the vectorised
 // predictor/corrector loops run 4 wide; results identical.
+// Stage-parallel mode (ias15.parallel_stages = 1): in each predictor-corrector iteration, the
+// forces of all seven substeps are evaluated at once, from the predictor at the start of the
+// iteration (a Jacobi iteration over the substeps, as in the parallel iterated Runge-Kutta methods
+// of van der Houwen & Sommeijer), instead of one after another with the predictor updated after
+// every substep (Gauss-Seidel). The seven force evaluations are independent and run on different
+// threads, each with the serial gravity loop. The converged result is the same collocation
+// solution, but the iterates and round-off differ from the serial IAS15. Supported: basic gravity,
+// all particles active, no ghost boxes, no additional forces, no variational particles, no map.
+// Without OpenMP the seven evaluations simply run one after another, with identical results.
+static int reb_integrator_ias15_stage_parallel_possible(const struct reb_simulation* const r, const struct reb_integrator_ias15_state* const ias15, const size_t N){
+    if (!ias15->parallel_stages) return 0;
+    return r->gravity==REB_GRAVITY_BASIC && !r->additional_forces && !r->map && r->N_var==0
+        && !r->calculate_megno && (r->N_active==SIZE_MAX || r->N_active>=N)
+        && r->N_ghost_x==0 && r->N_ghost_y==0 && r->N_ghost_z==0
+        && r->gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_NONE && N>=2;
+}
+// Forces of substeps n = 1..7 into buf: stage n uses buf + (n-1)*6N (x, y, z, ax, ay, az).
+static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const r, const size_t N, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf, const double* const m){
+    const double dt = r->dt;
+#pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+    for (size_t n=1; n<8; n++){
+        double* const x = buf + (n-1)*6*N;
+        double* const y = x + N;
+        double* const z = y + N;
+        double* const ax = z + N;
+        double* const ay = ax + N;
+        double* const az = ay + N;
+        const double hn = h[n];
+        const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
+        double* const xyz[3] = {x, y, z};
+        for (size_t i=0; i<N; i++){
+            for (int c=0; c<3; c++){
+                const size_t k = 3*i+c;
+                const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
+                xyz[c][i] = xk + x0[k];
+            }
+            ax[i] = 0.; ay[i] = 0.; az[i] = 0.;
+        }
+        reb_gravity_basic_arrays(N, x, y, z, m, ax, ay, az, r->G, r->softening);
+    }
+}
+
 REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15) {
     reb_integrator_ias15_alloc(r, ias15);
 
@@ -318,6 +371,20 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
     const size_t N3 = 3*(N+N_var);
 
     reb_simulation_update_acceleration(r);
+    const int stage_parallel = reb_integrator_ias15_stage_parallel_possible(r, ias15, N);
+    double* stage_buf = NULL;
+    double* stage_m = NULL;
+    if (stage_parallel){
+        const size_t need = 43*N;
+        if (ias15->N_allocated_stage_buf<need){
+            free(ias15->stage_buf);
+            ias15->stage_buf = malloc(sizeof(double)*need);
+            ias15->N_allocated_stage_buf = need;
+        }
+        stage_buf = ias15->stage_buf;
+        stage_m = stage_buf + 42*N;
+        for (size_t i=0; i<N; i++) stage_m[i] = particles[i].m;
+    }
 
     double* REB_RESTRICT const csx = ias15->csx; 
     double* REB_RESTRICT const csv = ias15->csv; 
@@ -427,8 +494,19 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
 
         integrator_megno_thisdt = integrator_megno_thisdt_init;
 
+        if (stage_parallel){
+            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m);
+        }
         for(size_t n=1;n<8;n++) {                          // Loop over interval using Gauss-Radau spacings
             r->t = t_beginning + r->dt * h[n];
+            if (stage_parallel){
+                const double* const sax = stage_buf + (n-1)*6*N + 3*N;
+                for (size_t k=0; k<N; k++){
+                    at[3*k]   = sax[k];
+                    at[3*k+1] = sax[N+k];
+                    at[3*k+2] = sax[2*N+k];
+                }
+            }else{
 
             // Predictor coefficients at interval n, computed once instead of per particle and component.
             // (Evaluating b*7.*h[n]/9. etc. inline costs a division per term and element.)
@@ -495,6 +573,7 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
                 at[3*k+1] = particles_var[mk].ay;  
                 at[3*k+2] = particles_var[mk].az;
             }
+            } // end of serial substep force evaluation
             switch (n) {                            // Improve b and g values
                 case 1: 
                     REB_IAS15_IVDEP

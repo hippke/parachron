@@ -53,6 +53,9 @@ struct reb_integrator_ias15_state {
     double* REB_RESTRICT er;              // Same for e coefficients
     double* REB_RESTRICT dg6;             // Scratch: change of g.p6 in the last substep (convergence check)
     size_t N_allocated_dg6;               // Not saved; dg6 is allocated on first use
+    double* stage_buf;                    // Not saved; scratch for the stage-parallel mode
+    size_t N_allocated_stage_buf;
+    unsigned int parallel_stages;         // 1: evaluate the seven substep forces of an iteration together (see integrator_ias15.c)
 };
 
 // Returns the gravitational timescale as calculated in Pham, Rein, Spiegel (2023). Useful for setting the initial IAS15 timestep.

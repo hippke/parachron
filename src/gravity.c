@@ -176,6 +176,66 @@ void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){
 #define REB_GRAVITY_BLOCK 32      // partners per block in the two-pass inner loop
 #define REB_GRAVITY_BLOCK_MIN 16  // rows with fewer partners use the plain loop
 
+// Structure-of-arrays kernels shared by the serial-arrays entry point (all builds) and the
+// OpenMP kernels below.
+struct reb_gravity_soa {
+    const double* x; const double* y; const double* z; const double* m;
+    double* ax; double* ay; double* az;
+};
+// f[l] = G/r^3 with r = sqrt(dx^2+dy^2+dz^2+softening^2), the serial loop's expression; a helper
+// with non-aliasing arrays so that the loop is vectorised (square roots, divisions).
+static inline __attribute__((always_inline)) void reb_gravity_rinv3(const size_t n, const double* const REB_RESTRICT dx, const double* const REB_RESTRICT dy, const double* const REB_RESTRICT dz, const double G, const double softening, double* const REB_RESTRICT f){
+    const double softening2 = softening*softening; // squared here: provably >= 0, so sqrt vectorises
+    for (size_t l=0; l<n; l++){
+        const double _r = sqrt(dx[l]*dx[l] + dy[l]*dy[l] + dz[l]*dz[l] + softening2);
+        f[l] = G/(_r*_r*_r);
+    }
+}
+// Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
+REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
+    const size_t jlo = i0>startj ? i0 : startj;
+    double* const REB_RESTRICT pax = p.ax;
+    double* const REB_RESTRICT pay = p.ay;
+    double* const REB_RESTRICT paz = p.az;
+    double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bf[REB_GRAVITY_BLOCK];
+    for (size_t i=(i0>starti?i0:starti); i<i1; i++){
+        const double xi = gb.x+p.x[i];
+        const double yi = gb.y+p.y[i];
+        const double zi = gb.z+p.z[i];
+        const double mi = p.m[i];
+        double axi = pax[i], ayi = pay[i], azi = paz[i];
+        for (size_t b0=jlo; b0<i; b0+=REB_GRAVITY_BLOCK){
+            const size_t nb = (i-b0) < REB_GRAVITY_BLOCK ? (i-b0) : REB_GRAVITY_BLOCK;
+            for (size_t l=0; l<nb; l++){
+                bdx[l] = xi - p.x[b0+l];
+                bdy[l] = yi - p.y[b0+l];
+                bdz[l] = zi - p.z[b0+l];
+            }
+            reb_gravity_rinv3(nb, bdx, bdy, bdz, G, softening, bf);
+            for (size_t l=0; l<nb; l++){
+                const double prefact = bf[l];
+                const double prefactj = -prefact*p.m[b0+l];
+                const double prefacti = prefact*mi;
+                axi += prefactj*bdx[l];
+                ayi += prefactj*bdy[l];
+                azi += prefactj*bdz[l];
+                pax[b0+l] += prefacti*bdx[l];
+                pay[b0+l] += prefacti*bdy[l];
+                paz[b0+l] += prefacti*bdz[l];
+            }
+        }
+        pax[i] = axi; pay[i] = ayi; paz[i] = azi;
+    }
+}
+// Serial half-pair gravity on plain arrays (all particles active, no ghost boxes, no ignored
+// terms): the same additions in the same order as the serial loop in
+// reb_gravity_basic_calculate_acceleration. Accelerations must be zero on entry. Used by
+// IAS15's stage-parallel mode, which evaluates the forces of several substeps at once.
+void reb_gravity_basic_arrays(const size_t N, const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const double G, const double softening){
+    const struct reb_gravity_soa p = {x, y, z, m, ax, ay, az};
+    const struct reb_vec6d gb = {0};
+    reb_gravity_tile_diagonal(p, 0, N, 1, 0, gb, G, softening);
+}
 #ifdef OPENMP
 // One-sided basic gravity for particle k (OpenMP builds): adds to particle k's acceleration the
 // contributions of all its partners, in exactly the order and with exactly the floating-point
@@ -282,19 +342,6 @@ REB_TARGET_CLONES static void reb_gravity_basic_onesided_range(struct reb_partic
 #endif
 #define REB_GRAVITY_MAX_BLOCKS 256
 #define REB_GRAVITY_PASS2_CHUNK 64
-struct reb_gravity_soa {
-    const double* x; const double* y; const double* z; const double* m;
-    double* ax; double* ay; double* az;
-};
-// f[l] = G/r^3 with r = sqrt(dx^2+dy^2+dz^2+softening^2), the serial loop's expression; a helper
-// with non-aliasing arrays so that the loop is vectorised (square roots, divisions).
-static inline __attribute__((always_inline)) void reb_gravity_rinv3(const size_t n, const double* const REB_RESTRICT dx, const double* const REB_RESTRICT dy, const double* const REB_RESTRICT dz, const double G, const double softening, double* const REB_RESTRICT f){
-    const double softening2 = softening*softening; // squared here: provably >= 0, so sqrt vectorises
-    for (size_t l=0; l<n; l++){
-        const double _r = sqrt(dx[l]*dx[l] + dy[l]*dy[l] + dz[l]*dz[l] + softening2);
-        f[l] = G/(_r*_r*_r);
-    }
-}
 // Off-diagonal part of row i: partners j in [j0, j1); stores f into frow[j-j0] if frow != NULL.
 REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa p, const size_t i, const size_t j0, const size_t j1, const struct reb_vec6d gb, const double G, const double softening, double* const REB_RESTRICT frow){
     const double xi = gb.x+p.x[i];
@@ -326,42 +373,6 @@ REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa 
         }
     }
     p.ax[i] = axi; p.ay[i] = ayi; p.az[i] = azi;
-}
-// Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
-REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
-    const size_t jlo = i0>startj ? i0 : startj;
-    double* const REB_RESTRICT pax = p.ax;
-    double* const REB_RESTRICT pay = p.ay;
-    double* const REB_RESTRICT paz = p.az;
-    double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bf[REB_GRAVITY_BLOCK];
-    for (size_t i=(i0>starti?i0:starti); i<i1; i++){
-        const double xi = gb.x+p.x[i];
-        const double yi = gb.y+p.y[i];
-        const double zi = gb.z+p.z[i];
-        const double mi = p.m[i];
-        double axi = pax[i], ayi = pay[i], azi = paz[i];
-        for (size_t b0=jlo; b0<i; b0+=REB_GRAVITY_BLOCK){
-            const size_t nb = (i-b0) < REB_GRAVITY_BLOCK ? (i-b0) : REB_GRAVITY_BLOCK;
-            for (size_t l=0; l<nb; l++){
-                bdx[l] = xi - p.x[b0+l];
-                bdy[l] = yi - p.y[b0+l];
-                bdz[l] = zi - p.z[b0+l];
-            }
-            reb_gravity_rinv3(nb, bdx, bdy, bdz, G, softening, bf);
-            for (size_t l=0; l<nb; l++){
-                const double prefact = bf[l];
-                const double prefactj = -prefact*p.m[b0+l];
-                const double prefacti = prefact*mi;
-                axi += prefactj*bdx[l];
-                ayi += prefactj*bdy[l];
-                azi += prefactj*bdz[l];
-                pax[b0+l] += prefacti*bdx[l];
-                pay[b0+l] += prefacti*bdy[l];
-                paz[b0+l] += prefacti*bdz[l];
-            }
-        }
-        pax[i] = axi; pay[i] = ayi; paz[i] = azi;
-    }
 }
 // One later row for n partners: a_k += (f_k*m_i)*(gx_i - x_k) (separate function so that the
 // compiler sees independent, non-aliasing arrays and vectorises the loop).

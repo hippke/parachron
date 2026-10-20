@@ -44,4 +44,7 @@ void reb_gravity_basic_calculate_acceleration_var(struct reb_simulation* r);
 // Calculates the jerk (derivative of the acceleration) and applies it to the particles' velocity.
 void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const double v);
 
+// Serial half-pair gravity on plain arrays (see gravity.c; used by IAS15's stage-parallel mode).
+void reb_gravity_basic_arrays(const size_t N, const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const double G, const double softening);
+
 #endif
