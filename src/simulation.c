@@ -164,6 +164,8 @@ void reb_simulation_free(struct reb_simulation* const r){
 #endif // SERVER
     free(r->gravity_cs);
     free(r->collisions);
+    reb_tree_delete(r);
+    reb_tree_free_cells(r);
     free(r->tree_root);
     if(r->free_particle_ap){
         for(size_t i=0; i<r->N; i++){

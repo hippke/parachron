@@ -273,6 +273,7 @@ struct reb_simulation {
     struct reb_vec3d* gravity_cs; 
     size_t N_allocated_gravity_cs;
     struct reb_treecell** tree_root;// Pointer to the temporary tree structure.
+    struct reb_treecell* tree_free_cells; // Internal use only. Cells of deleted trees, reused by the next tree (linked through oct[0]).
     double opening_angle2;          // Opening angle for tree-based gravity calculation. Default 0.25.
     enum REB_STATUS status;         // Current simulation status
     int     exact_finish_time;      // 1 (default): integrate exactly to the time requested and adjust timestep if needed, 0: may overshoot by one timestep

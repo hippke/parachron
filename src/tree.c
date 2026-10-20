@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include "particle.h"
 #include "boundary.h"
+#include <string.h>
 #include "tree.h"
 #ifdef MPI
 #include "communication_mpi.h"
@@ -81,7 +82,14 @@ static struct reb_treecell *reb_tree_add_particle_to_cell(struct reb_simulation*
     struct reb_particle* const particles = r->particles;
     // Initialize a new node
     if (node == NULL) {  
-        node = calloc(1, sizeof(struct reb_treecell));
+        // Reuse a cell of a previously deleted tree if available (same contents as calloc).
+        if (r->tree_free_cells){
+            node = r->tree_free_cells;
+            r->tree_free_cells = node->oct[0];
+            memset(node, 0, sizeof(struct reb_treecell));
+        }else{
+            node = calloc(1, sizeof(struct reb_treecell));
+        }
         struct reb_particle p = particles[pt];
         if (parent == NULL){ // The new node is a root
             node->w = r->root_size;
@@ -106,7 +114,8 @@ static struct reb_treecell *reb_tree_add_particle_to_cell(struct reb_simulation*
         }
         if (node->w<=0.0){
             reb_simulation_error(r, "Tree cell has size zero.");
-            free(node);
+            node->oct[0] = r->tree_free_cells;
+            r->tree_free_cells = node;
             return NULL;
         }
         node->pt = pt; 
@@ -228,7 +237,8 @@ void reb_tree_calculate_gravity_data(struct reb_simulation* const r){
 #endif // MPI
 }
 
-static void reb_tree_delete_cell(struct reb_treecell* node){
+// Deleted cells go onto a free list and are reused by the next tree (trees are rebuilt every step).
+static void reb_tree_delete_cell(struct reb_simulation* const r, struct reb_treecell* node){
     if (node==NULL){
         return;
     }
@@ -236,16 +246,27 @@ static void reb_tree_delete_cell(struct reb_treecell* node){
         return;
     }
     for (int o=0; o<8; o++) {
-        reb_tree_delete_cell(node->oct[o]);
+        reb_tree_delete_cell(r, node->oct[o]);
     }
-    free(node);
+    node->oct[0] = r->tree_free_cells;
+    r->tree_free_cells = node;
+}
+
+void reb_tree_free_cells(struct reb_simulation* const r){
+    struct reb_treecell* c = r->tree_free_cells;
+    while (c){
+        struct reb_treecell* next = c->oct[0];
+        free(c);
+        c = next;
+    }
+    r->tree_free_cells = NULL;
 }
 
 void reb_tree_delete(struct reb_simulation* const r){
     if (r->tree_root!=NULL){
         size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
         for(size_t i=0;i<N_root;i++){
-            reb_tree_delete_cell(r->tree_root[i]);
+            reb_tree_delete_cell(r, r->tree_root[i]);
             r->tree_root[i] = NULL;
         }
     }
