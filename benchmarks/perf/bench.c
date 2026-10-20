@@ -226,6 +226,83 @@ static void* create_ss_whfast512(void){
     return c;
 }
 
+// 3b) WHFast512 portable C kernels (integrator.kernel, added Oct 2026). The kernel is set through
+// the integrator's field descriptors (by name), so bench.c still builds against older trees; there
+// the benchmarks count as unavailable.
+static int set_integrator_uint(struct reb_simulation* r, const char* name, unsigned int value){
+    const struct reb_binarydata_field_descriptor* fd = r->integrator.callbacks.field_descriptor_list;
+    if (!fd) return 0;
+    for (; fd->name[0]; fd++){
+        if (strcmp(fd->name, name)==0){
+            *(unsigned int*)((char*)r->integrator.state + fd->offset) = value;
+            return 1;
+        }
+    }
+    return 0;
+}
+static unsigned int w512c_kernel = 3; // set by the create functions below
+// type 0: Solar System (8 planets); 1: three compact planets (one system: four-lane path); 2: 4 systems x 2 planets
+static struct reb_simulation* make_w512c_type(int type, int variant){
+    struct reb_simulation* r = new_sim();
+    reb_simulation_set_integrator(r, "whfast512");
+    struct reb_integrator_whfast512_state* w = r->integrator.state;
+    w->concatenate_steps = 1000;
+    set_integrator_uint(r, "kernel", w512c_kernel);
+    r->exact_finish_time = 0;
+    if (type==0){
+        w->gr_potential = 1;
+        r->dt = 5.0/365.25*2.*M_PI;
+        add_solar_system(r);
+    }else{
+        const int nsys = type==1 ? 1 : 4, np = type==1 ? 3 : 2;
+        w->N_systems = nsys;
+        r->dt = 0.035*2.*M_PI;
+        for (int s=0; s<nsys; s++){
+            reb_simulation_add_fmt(r, "m", 1.0);
+            struct reb_particle star = r->particles[r->N-1];
+            for (int k=0; k<np; k++){
+                reb_simulation_add_fmt(r, "m a e inc l omega primary", 3e-6, pow(1.12, k)*(1.+0.01*s), 0.01, 0.01*k, 1.3*k+0.2*s, 0.5*k, star);
+            }
+        }
+        if (nsys==1) reb_simulation_move_to_com(r);
+    }
+    r->particles[1].x += 1e-12*variant;
+    return r;
+}
+static struct reb_simulation* make_w512c_ss(int variant){ return make_w512c_type(0, variant); }
+static struct reb_simulation* make_w512c_small(int variant){ return make_w512c_type(1, variant); }
+static struct reb_simulation* make_w512c_4x2(int variant){ return make_w512c_type(2, variant); }
+static void* w512c_create(struct reb_simulation* (*make)(int), unsigned int kernel){
+    w512c_kernel = kernel;
+    struct simctx* c = simctx_create(make, 100, 0);
+    c->step_mult = 1000.;
+    return c;
+}
+static void* create_w512c_ss_avx2(void){ return w512c_create(make_w512c_ss, 3); }
+static void* create_w512c_ss_avx512(void){ return w512c_create(make_w512c_ss, 2); }
+static void* create_w512c_small_avx2(void){ return w512c_create(make_w512c_small, 3); }
+static void* create_w512c_4x2_avx2(void){ return w512c_create(make_w512c_4x2, 3); }
+// Available if the tree has the kernel setting and the CPU runs the kernel (one test step).
+static int w512c_kernel_ok(unsigned int kernel){
+    struct reb_simulation* r = reb_simulation_create();
+    reb_simulation_set_integrator(r, "whfast512");
+    int ok = set_integrator_uint(r, "kernel", kernel);
+    if (ok){
+        struct reb_integrator_whfast512_state* w = r->integrator.state;
+        w->concatenate_steps = 1;
+        r->exact_finish_time = 0;
+        r->dt = 0.01;
+        reb_simulation_add_fmt(r, "m", 1.0);
+        reb_simulation_add_fmt(r, "m a", 1e-3, 1.0);
+        reb_simulation_steps(r, 1);
+        ok = (r->status <= 0);
+    }
+    reb_simulation_free(r);
+    return ok;
+}
+static int have_w512c_avx2(void){ static int ok = -1; if (ok<0) ok = w512c_kernel_ok(3); return ok; }
+static int have_w512c_avx512(void){ static int ok = -1; if (ok<0) ok = w512c_kernel_ok(2); return ok; }
+
 // 4) Five Earth-mass planets, WHFast dt=0.05 yr (Obertas et al. 2017)
 static struct reb_simulation* make_obertas(int variant){
     const int k = variant % OBERTAS_N_SYSTEMS;
@@ -547,6 +624,10 @@ static const struct bench benches[] = {
     {"ss_wh_gr",        "steps/s",  "Solar System 5 Gyr ensembles, plain WH + GR (Abbot 2021/2023)",   create_ss_wh_gr,     simctx_work, simctx_signature, simctx_destroy, always,    5,   30},
     {"ss_whckl_gr",     "steps/s",  "Solar System ensembles, WHCKL + GR (Brown & Rein 2020/2022)",      create_ss_whckl_gr,  simctx_work, simctx_signature, simctx_destroy, always,    4,   22},
     {"ss_whfast512",    "steps/s",  "Solar System with WHFast512 + GR (Javaheri et al. 2023)",           create_ss_whfast512, simctx_work, simctx_signature, simctx_destroy, have_avx512,    5,   32},
+    {"w512c_ss_avx2",   "steps/s",  "Solar System, WHFast512 C kernel AVX2 + GR (runs without AVX-512)",  create_w512c_ss_avx2,   simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,   5, 30},
+    {"w512c_ss_avx512", "steps/s",  "Solar System, WHFast512 C kernel AVX-512 + GR",                      create_w512c_ss_avx512, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx512, 5, 30},
+    {"w512c_3p_avx2",   "steps/s",  "3 compact planets, WHFast512 C AVX2 (four-lane path; SPOCK-like)",   create_w512c_small_avx2, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,  5, 40},
+    {"w512c_4x2_avx2",  "steps/s",  "4 systems x 2 planets per vector, WHFast512 C AVX2 (ensembles)",     create_w512c_4x2_avx2,  simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,   5, 40},
     {"obertas_5p",      "steps/s",  "5 Earth-mass planets, WHFast (Obertas et al. 2017)",                create_obertas,      simctx_work, simctx_signature, simctx_destroy, always,    5,   28},
     {"spock_3p_line",   "steps/s",  "Compact 3-planet systems + line collisions (SPOCK, Tamayo 2016/20)", create_spock,       simctx_work, simctx_signature, simctx_destroy, always,   10,   55},
     {"ias15_hltau",     "orbits/s", "IAS15, 5 Saturn-mass planets (Rein & Tamayo 2017)",                create_hltau,        simctx_work, simctx_signature, simctx_destroy, always,    5,   30},
