@@ -61,6 +61,12 @@
 #else
 #define REB_W512_INLINE static inline __attribute__((always_inline))
 #endif
+// The Kepler and interaction steps. The vector instantiations inline them into each of the 24
+// main loops (options become compile-time constants). The generic instantiation can define
+// REB_W512_STEP_FUNC as a plain static function to keep code size and compile time small.
+#ifndef REB_W512_STEP_FUNC
+#define REB_W512_STEP_FUNC REB_W512_INLINE
+#endif
 
 // 1/k! rounded to double, and the rounding error (true - rounded). Same bits as .IF0 / .IF0_err
 // in integrator_whfast512.s.
@@ -294,7 +300,7 @@ REB_W512_NOINLINE_FALLBACK void REB_W512_NAME(w512_kepler_fallback_)(const W512_
     *XXp = XX;
 }
 
-REB_W512_INLINE void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
     const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
     const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
     V R = w_sqrt(r2);
@@ -412,7 +418,7 @@ REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, c
     }
 }
 
-REB_W512_INLINE void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status){
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status){
     const struct simd_data* const data = c->data;
     // Jacobi term in Jacobi coordinates (undoes the Kepler-step force of the interior mass).
     {

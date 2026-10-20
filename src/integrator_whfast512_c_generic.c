@@ -44,6 +44,13 @@ typedef struct { unsigned char b; } K;   // bit i set: lane i true
 #define W_INL static inline __attribute__((always_inline))
 #define REB_W512_NOINLINE_FALLBACK static __attribute__((noinline))
 #endif
+// One out-of-line copy of the Kepler and interaction steps (instead of one per option
+// combination): keeps the code small and compilation fast.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define REB_W512_STEP_FUNC static __declspec(noinline)
+#else
+#define REB_W512_STEP_FUNC static __attribute__((noinline))
+#endif
 
 #define W_LOOP for (int i=0; i<8; i++)
 W_INL V w_set1(double a){ V r; W_LOOP r.v[i] = a; return r; }
