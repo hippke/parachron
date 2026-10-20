@@ -48,6 +48,8 @@ class CollisionS(Structure):
 
 # Set up once (used by Simulation.process_messages after every integration call).
 _reb_pop_message = clibrebound.reb_pop_message
+_reb_simulation_steps = clibrebound.reb_simulation_steps
+_reb_simulation_integrate = clibrebound.reb_simulation_integrate
 _reb_pop_message.restype = c_int
 _reb_pop_message.argtypes = [c_void_p, c_char*string_size_max]
 
@@ -1281,7 +1283,10 @@ class Simulation(Structure):
         """
         Perform exactly N_steps integration steps with REBOUND.
         """
-        ret_value = clibrebound.reb_simulation_steps(byref(self),c_size_t(N_steps))
+        ret_value = _reb_simulation_steps(byref(self),c_size_t(N_steps))
+        if ret_value <= 0: # success (0) or still running (-1): nothing to raise
+            self.process_messages()
+            return
         if ret_value == 1:
             self.process_messages()
             raise GenericError("An error occurred during the integration.")
@@ -1352,7 +1357,10 @@ class Simulation(Structure):
         
         """
         self.exact_finish_time = exact_finish_time
-        ret_value = clibrebound.reb_simulation_integrate(byref(self), c_double(tmax))
+        ret_value = _reb_simulation_integrate(byref(self), c_double(tmax))
+        if ret_value <= 0: # success (0) or still running (-1): nothing to raise
+            self.process_messages()
+            return
         if ret_value == 1:
             self.process_messages()
             raise GenericError("An error occurred during the integration.")
