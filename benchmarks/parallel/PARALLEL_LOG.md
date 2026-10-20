@@ -507,6 +507,29 @@ of each step (it only affects speed). Overhead 4.4 % → 1.5 % of instructions; 
 VM wall clock cannot resolve the difference (minimum 0.1120 s serial, 0.1127 s before, 0.1125 s
 after). Tests 970 passed (serial and OpenMP).
 
+## Iteration 20 — workstation measurement of iterations 17–19 (user, i5-13500, commit `0482a09`) — measurement only
+
+Raw output: `i5-13500_run5_commit0482a09.txt`. Auto core policy, compared with iteration 16 (auto):
+
+| case | it. 16 | it. 20 | reading |
+|---|---|---|---|
+| ias15_hltau (N = 6) | 0.92–0.97x | **0.98–1.00x** | it. 19 confirmed |
+| ias15_n512+stages vs default serial, T = 20 | 4.60x (P-cores) | **6.02x** (all cores from N = 512) | it. 17 confirmed (+31 %) |
+| ias15_tp2000+stages, one thread vs default serial | 0.79x | 0.81x (0.492 → 0.472 s) | it. 18: only ~4 % on the i5; the gap is not mainly the partial buffers |
+| ias15_tp2000+stages, best | 2.45x | 2.51x | |
+| ias15_n2048+stages vs default serial, T = 20 | 8.87x | 8.62x | within run-to-run noise |
+| ias15_n2048 default | 5.10x | 5.21x | |
+| whfast_n256 | 1.94–1.99x | 1.93–2.01x | stable from 4 to 20 threads |
+
+All results bitwise identical at every thread count and to the serial build.
+
+Open question from this run: on one thread, stage mode costs 1.06–1.23x of the default mode on the i5
+(embryos 0.86x, n128 0.94x, tp2000 0.81x), but not on the VM. Instruction counts are within ~10 %, so
+the likely difference is the number of predictor-corrector iterations per step: a Jacobi sweep
+converges more slowly than IAS15's Gauss-Seidel sweep. Next diagnostic (cheap): count iterations per
+step in both modes for these cases. If confirmed, options are a Gauss-Seidel first iteration or
+stopping on the stage-mode convergence history.
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
