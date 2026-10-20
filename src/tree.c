@@ -317,14 +317,80 @@ static void reb_tree_calculate_acceleration_for_particle_from_cell(const struct 
     }
 }
 
+// Iterative version of reb_tree_calculate_acceleration_for_particle_from_cell: explicit stack
+// (children pushed in reverse, so cells are visited in exactly the recursive order) and the
+// particle's acceleration accumulated in locals (same sequence of additions). Avoids a function
+// call per visited cell. Very deep trees fall back to the recursive function.
+#define REB_TREE_WALK_STACK 1024
 void reb_tree_calculate_acceleration_for_particle(const struct reb_simulation* const r, const int pt, const struct reb_vec6d gb) {
-    size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const double opening_angle2 = r->opening_angle2;
+    struct reb_particle* const particles = r->particles;
+    const struct reb_treecell* stack[REB_TREE_WALK_STACK];
+    double ax = particles[pt].ax;
+    double ay = particles[pt].ay;
+    double az = particles[pt].az;
     for(size_t i=0;i<N_root;i++){
-        struct reb_treecell* node = r->tree_root[i];
-        if (node!=NULL){
-            reb_tree_calculate_acceleration_for_particle_from_cell(r, pt, node, gb);
+        if (r->tree_root[i]==NULL) continue;
+        int sp = 0;
+        stack[sp++] = r->tree_root[i];
+        while (sp > 0){
+            const struct reb_treecell* const node = stack[--sp];
+            const double dx = gb.x - node->mx;
+            const double dy = gb.y - node->my;
+            const double dz = gb.z - node->mz;
+            const double r2 = dx*dx + dy*dy + dz*dz;
+            if ( node->pt < 0 ) { // Not a leaf
+                if ( node->w*node->w > opening_angle2*r2 ){
+                    if (sp + 8 > REB_TREE_WALK_STACK){
+                        // Extremely deep tree: walk this subtree recursively (same order).
+                        particles[pt].ax = ax; particles[pt].ay = ay; particles[pt].az = az;
+                        for (int o=0; o<8; o++) {
+                            if (node->oct[o] != NULL) {
+                                reb_tree_calculate_acceleration_for_particle_from_cell(r, pt, node->oct[o], gb);
+                            }
+                        }
+                        ax = particles[pt].ax; ay = particles[pt].ay; az = particles[pt].az;
+                        continue;
+                    }
+                    for (int o=7; o>=0; o--) {
+                        if (node->oct[o] != NULL) stack[sp++] = node->oct[o];
+                    }
+                } else {
+                    double _r = sqrt(r2 + softening2);
+                    double prefact = -G/(_r*_r*_r)*node->m;
+#ifdef QUADRUPOLE
+                    double qprefact = G/(_r*_r*_r*_r*_r);
+                    ax += qprefact*(dx*node->mxx + dy*node->mxy + dz*node->mxz); 
+                    ay += qprefact*(dx*node->mxy + dy*node->myy + dz*node->myz); 
+                    az += qprefact*(dx*node->mxz + dy*node->myz + dz*node->mzz); 
+                    double mrr     = dx*dx*node->mxx     + dy*dy*node->myy     + dz*dz*node->mzz
+                    + 2.*dx*dy*node->mxy     + 2.*dx*dz*node->mxz     + 2.*dy*dz*node->myz; 
+                    qprefact *= -5.0/(2.0*_r*_r)*mrr;
+                    ax += (qprefact + prefact) * dx; 
+                    ay += (qprefact + prefact) * dy; 
+                    az += (qprefact + prefact) * dz; 
+#else
+                    ax += prefact*dx; 
+                    ay += prefact*dy; 
+                    az += prefact*dz; 
+#endif
+                }
+            } else { // It's a leaf node
+                if (node->remote == 0 && node->pt == pt) continue;
+                double _r = sqrt(r2 + softening2);
+                double prefact = -G/(_r*_r*_r)*node->m;
+                ax += prefact*dx; 
+                ay += prefact*dy; 
+                az += prefact*dz; 
+            }
         }
     }
+    particles[pt].ax = ax;
+    particles[pt].ay = ay;
+    particles[pt].az = az;
 }
 
 
