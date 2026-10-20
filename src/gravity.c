@@ -91,6 +91,8 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
         for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
             for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
+                // The ghost box offset is the same for all particles.
+                const struct reb_vec6d gb0 = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                 // Summing over all particle pairs
 #pragma omp parallel for schedule(guided)
                 for (size_t k=0; k<N; k++){
@@ -98,7 +100,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
 #ifndef OPENMP
                     if (reb_sigint > 1){ free(order); return; }
 #endif // OPENMP
-                    struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+                    struct reb_vec6d gb = gb0;
                     // Precalculated shifted position
                     gb.x += particles[i].x;
                     gb.y += particles[i].y;
