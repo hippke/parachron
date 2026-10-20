@@ -814,7 +814,8 @@ void reb_simulation_synchronize(struct reb_simulation* r){
 
 
 void reb_simulation_update_acceleration(struct reb_simulation* r){
-    reb_omp_select_cores(r);
+    // The OpenMP core policy is chosen once per step (reb_simulation_step), not here: IAS15 calls
+    // this function ~20 times per step, and the policy only affects speed, never results.
     if (r->gravity==REB_GRAVITY_CUSTOM){
         if (!r->gravity_custom){
             reb_simulation_error(r, "REB_GRAVITY_CUSTOM selected, but r->gravity_custom function pointer not provided.");

@@ -145,8 +145,8 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 // Linux, Apple silicon); 0 on other CPUs, if unknown, or if the environment variable
 // REBOUND_OMP_ALL_CORES=1 is set. Determined once (rebound.c).
 REB_API int reb_omp_performance_cores(void);
-// Core policy of the current step (set by reb_omp_select_cores at the start of each step and force
-// evaluation, per calling thread): 1 = use all cores, 0 = performance cores only.
+// Core policy of the current step (set by reb_omp_select_cores at the start of each step, per
+// calling thread): 1 = use all cores, 0 = performance cores only.
 #if defined(_MSC_VER)
 extern __declspec(thread) int reb_omp_all_cores_now;
 #else
