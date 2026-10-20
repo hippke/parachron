@@ -95,6 +95,7 @@ W_INL V w_perm_b34(V a){ return a; }
 
 #define W_LANES 4
 #define W_ONLY_NSYS2 1
+#define W_PAIR_INLINE 1
 #define REB_W512_SUFFIX avx2x4
 #include "integrator_whfast512_kernel.h"
 

@@ -756,7 +756,9 @@ void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct
             && enc1 == enc2 && esc1 == esc2){
         switch (w1->kernel_used){
             case REB_WHFAST512_KERNEL_C_AVX512: kernel = reb_whfast512c_full_steps_pair_avx512; break;
-            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : reb_whfast512c_full_steps_pair_avx2; break;
+            // Eight-lane AVX2: one simulation already fills the 16 registers, pairing gains nothing
+            // (0.97-1.00x measured), so the two are stepped separately.
+            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : NULL; break;
             case REB_WHFAST512_KERNEL_C_GENERIC: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic; break;
             default: break; // the assembly kernel has no paired version
         }
