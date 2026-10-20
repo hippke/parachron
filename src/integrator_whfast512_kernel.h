@@ -323,11 +323,21 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
     const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
     const V zeta = w_fnmadd(beta, R, c->M);
-    V XX = w_mul(c->DT, IR);                       // first order guess
+    // Starting value (item 54): third-order series in dt/r where it is a small correction to the
+    // first-order guess dt/r (|X3 - X1| < 0.1 |X1|, finite), otherwise the first-order guess.
+    // Lanes with the third-order start skip the first Halley step (two Halley steps would be
+    // wasted there). The decision is per lane, so packed systems stay independent.
+    const V X1 = w_mul(c->DT, IR);
+    const V inner3 = w_fnmadd(X1, w_fnmadd(w_set1(1.0/3.0), zeta, w_mul(w_mul(eta, eta), IR)), eta);
+    const V X3 = w_mul(X1, w_fnmadd(w_mul(w_mul(c->HALF, X1), IR), inner3, c->ONE));
+    const K good3 = w_klt(w_abs(w_sub(X3, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
+    V XX = w_sel(good3, X3, X1);
 
     V G0, G1, G2, G3;
     // Two Halley steps with short series.
+    const K need_first = w_knot(good3);
     for (int h=0; h<2; h++){
+        if (h==0 && !w_kany(w_kand(need_first, c->k1))) continue;   // every occupied lane has the third-order start (empty lanes are masked out)
         REB_W512_NAME(w512_stiefel_Gs03_)(h==0 ? 9 : 11, XX, beta, &G0, &G1, &G2, &G3);
         V f = w_fmsub(zeta, G3, c->DT);
         f = w_fmadd(eta, G2, f);
@@ -337,7 +347,8 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
         const V fpp = w_fmadd(G1, zeta, w_mul(eta, G0));
         const V hffpp = w_mul(w_mul(f, fpp), c->HALF);
         const V den = w_fmsub(fp, fp, hffpp);
-        XX = w_sub(XX, w_div(w_mul(f, fp), den));
+        const V Xn = w_sub(XX, w_div(w_mul(f, fp), den));
+        XX = (h==0) ? w_sel(need_first, Xn, XX) : Xn;   // first step only for lanes without the third-order start
     }
 
     // Newton iterations with the accurate series; lanes stop individually.
