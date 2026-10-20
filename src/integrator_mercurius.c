@@ -511,6 +511,9 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     const size_t encounter_N = mercurius->encounter_N;
     const size_t encounter_N_active = mercurius->encounter_N_active;
     size_t* map = mercurius->encounter_map;
+    // Pairs farther apart than the changeover region have L = 1 exactly for the default
+    // changeover function (see the WH-mode acceleration), so their force (1-L) is exactly zero.
+    const int L_default = (_L == reb_integrator_mercurius_L_mercury);
 #ifndef OPENMP
     particles[0].ax = 0; // map[0] is always 0 
     particles[0].ay = 0; 
@@ -537,8 +540,10 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
             const double dx = particles[mi].x - particles[mj].x;
             const double dy = particles[mi].y - particles[mj].y;
             const double dz = particles[mi].z - particles[mj].z;
-            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
+            const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+            if (L_default && r2 > 1.0002000100*dcritmax*dcritmax) continue; // (1.0001 dcritmax)^2: no force
+            const double _r = sqrt(r2);
             const double L = _L(r,_r,dcritmax);
             double prefact = G*(1.-L)/(_r*_r*_r);
             double prefactj = -prefact*particles[mj].m;
@@ -560,8 +565,10 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
             const double dx = particles[mi].x - particles[mj].x;
             const double dy = particles[mi].y - particles[mj].y;
             const double dz = particles[mi].z - particles[mj].z;
-            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
+            const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+            if (L_default && r2 > 1.0002000100*dcritmax*dcritmax) continue; // (1.0001 dcritmax)^2: no force
+            const double _r = sqrt(r2);
             const double L = _L(r,_r,dcritmax);
             double prefact = G*(1.-L)/(_r*_r*_r);
             double prefactj = -prefact*particles[mj].m;
