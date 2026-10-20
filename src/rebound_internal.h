@@ -112,4 +112,22 @@ int reb_strcmp_ignore_whitespace(const char *s1, const char *s2);
 REB_API char** reb_integrators_registered(); // only used by python
 extern struct reb_integrator_configuration* reb_integrator_configurations_custom;
 
+
+// Function multiversioning for a few hot kernels: on x86-64 Linux/glibc with GCC or clang, an
+// extra AVX2 version of the function is compiled and chosen at load time (ifunc) on CPUs that
+// support it; other platforms and compilers get the plain function. Results are bitwise
+// identical: floating-point contraction stays off (-std=c99 / ISO mode; the clone is built
+// without "fma"), and +, *, /, sqrt are correctly rounded at any vector width; only the number
+// of lanes per instruction and the VEX encoding change. Define REB_NO_TARGET_CLONES to disable.
+#if defined(__has_attribute)
+#if __has_attribute(target_clones)
+#define REB_HAS_TARGET_CLONES_ATTR 1
+#endif
+#endif
+#if defined(REB_HAS_TARGET_CLONES_ATTR) && defined(__x86_64__) && defined(__linux__) && defined(__GLIBC__) && !defined(OPENMP) && !defined(REB_NO_TARGET_CLONES)
+#define REB_TARGET_CLONES __attribute__((target_clones("avx2","default")))
+#else
+#define REB_TARGET_CLONES
+#endif
+
 #endif // _REBOUND_INTERNAL_H

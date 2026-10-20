@@ -522,7 +522,7 @@ static REB_WHFAST_INLINE void stiefel_Gs3_lanes(double* restrict G0, double* res
         G3[l] = c3[l]*(X2[l]*X[l]);
     }
 }
-static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r, const int lanes){
+static REB_WHFAST_INLINE void reb_integrator_whfast_kepler_solver_batch_body(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r, const int lanes){
     double x[WHFAST_KEPLER_BATCH], y[WHFAST_KEPLER_BATCH], z[WHFAST_KEPLER_BATCH];
     double vx[WHFAST_KEPLER_BATCH], vy[WHFAST_KEPLER_BATCH], vz[WHFAST_KEPLER_BATCH];
     double r0[WHFAST_KEPLER_BATCH], r0i[WHFAST_KEPLER_BATCH], beta[WHFAST_KEPLER_BATCH];
@@ -682,6 +682,23 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
             p1.vx = vx[l]; p1.vy = vy[l]; p1.vz = vz[l];
             reb_whfast_kepler_variations(r, ps[l], p1, mus[l], beta[l], X[l], eta0[l], zeta0[l], r0[l], r0i[l], ri[l], fl[l], gl[l], fdl[l], gdl[l]);
         }
+    }
+}
+
+// Two instantiations of the batched solver. The per-planet version (lanes = 0) also gets an AVX2
+// clone (see REB_TARGET_CLONES): +6-14% on WHFast benchmarks with bitwise identical results. The
+// lane-wise test-particle version is ~7% slower as an AVX2 clone, so it is compiled for the default target only.
+REB_TARGET_CLONES static void reb_integrator_whfast_kepler_solver_batch_scalar(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r){
+    reb_integrator_whfast_kepler_solver_batch_body(ps, mus, n, dt, r, 0);
+}
+static void reb_integrator_whfast_kepler_solver_batch_lanes(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r){
+    reb_integrator_whfast_kepler_solver_batch_body(ps, mus, n, dt, r, 1);
+}
+static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r, const int lanes){
+    if (lanes){
+        reb_integrator_whfast_kepler_solver_batch_lanes(ps, mus, n, dt, r);
+    }else{
+        reb_integrator_whfast_kepler_solver_batch_scalar(ps, mus, n, dt, r);
     }
 }
 #endif // OPENMP

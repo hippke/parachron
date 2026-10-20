@@ -175,7 +175,8 @@ void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){
 
 #define REB_GRAVITY_BLOCK 32      // partners per block in the two-pass inner loop
 #define REB_GRAVITY_BLOCK_MIN 16  // rows with fewer partners use the plain loop
-void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
+// AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h); identical results.
+REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
     PROFILING_START();
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;

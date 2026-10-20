@@ -113,7 +113,7 @@ static inline void reb_integrator_eos_interaction_shell0(struct reb_simulation* 
 }
 
 #define REB_EOS_BLOCK 32
-static inline void reb_integrator_eos_interaction_shell1(struct reb_simulation* r, double y, double v){
+REB_TARGET_CLONES static void reb_integrator_eos_interaction_shell1(struct reb_simulation* r, double y, double v){
     const size_t N = r->N;
     const size_t N_active = r->N_active==SIZE_MAX?N:r->N_active;
     const int testparticle_type   = r->testparticle_type;
