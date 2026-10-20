@@ -188,7 +188,8 @@ void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){
 // so particles can be distributed over threads freely and the result is bitwise identical to the
 // serial loop for any number of threads (also with ghost boxes). Costs N^2 instead of N^2/2 pairs.
 // Separations and 1/r^3 are computed in blocks (vectorisable), the accumulation stays in order.
-static inline __attribute__((always_inline)) void reb_gravity_basic_onesided_segment(const struct reb_particle* const particles, const size_t k, const size_t j0, const size_t j1, const int own_row, const struct reb_vec6d gb, const double G, const double softening2, double* const ax, double* const ay, double* const az){
+static inline __attribute__((always_inline)) void reb_gravity_basic_onesided_segment(const struct reb_particle* const particles, const size_t k, const size_t j0, const size_t j1, const int own_row, const struct reb_vec6d gb, const double G, const double softening, double* const ax, double* const ay, double* const az){
+    const double softening2 = softening*softening; // squared here: provably >= 0, so sqrt vectorises
     const double xk = particles[k].x;
     const double yk = particles[k].y;
     const double zk = particles[k].z;
@@ -234,27 +235,27 @@ static inline __attribute__((always_inline)) void reb_gravity_basic_onesided_seg
     }
     *ax = axk; *ay = ayk; *az = azk;
 }
-static inline __attribute__((always_inline)) void reb_gravity_basic_onesided(struct reb_particle* const particles, const size_t k, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening2){
+static inline __attribute__((always_inline)) void reb_gravity_basic_onesided(struct reb_particle* const particles, const size_t k, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening){
     double ax = particles[k].ax, ay = particles[k].ay, az = particles[k].az;
     if (k>=starti){ // own row (active particles and test particles)
         const size_t jend = k<N_active ? k : N_active;
-        if (jend>startj) reb_gravity_basic_onesided_segment(particles, k, startj, jend, 1, gb, G, softening2, &ax, &ay, &az);
+        if (jend>startj) reb_gravity_basic_onesided_segment(particles, k, startj, jend, 1, gb, G, softening, &ax, &ay, &az);
     }
     if (k<N_active && k>=startj){ // later rows: active partners, then test particles (type 1)
         const size_t i0 = (k+1>starti) ? k+1 : starti;
-        if (N_active>i0) reb_gravity_basic_onesided_segment(particles, k, i0, N_active, 0, gb, G, softening2, &ax, &ay, &az);
+        if (N_active>i0) reb_gravity_basic_onesided_segment(particles, k, i0, N_active, 0, gb, G, softening, &ax, &ay, &az);
         if (testparticle_type){
             const size_t t0 = (N_active>starti) ? N_active : starti;
-            if (N>t0) reb_gravity_basic_onesided_segment(particles, k, t0, N, 0, gb, G, softening2, &ax, &ay, &az);
+            if (N>t0) reb_gravity_basic_onesided_segment(particles, k, t0, N, 0, gb, G, softening, &ax, &ay, &az);
         }
     }
     particles[k].ax = ax; particles[k].ay = ay; particles[k].az = az;
 }
 // Particles [k0, k1); own function (not inlined into the outlined OpenMP region) so that it
 // gets the AVX2 clone, called once per chunk rather than once per particle.
-REB_TARGET_CLONES static void reb_gravity_basic_onesided_range(struct reb_particle* const particles, const size_t k0, const size_t k1, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening2){
+REB_TARGET_CLONES static void reb_gravity_basic_onesided_range(struct reb_particle* const particles, const size_t k0, const size_t k1, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening){
     for (size_t k=k0; k<k1; k++){
-        reb_gravity_basic_onesided(particles, k, N, N_active, starti, startj, testparticle_type, gb, G, softening2);
+        reb_gravity_basic_onesided(particles, k, N, N_active, starti, startj, testparticle_type, gb, G, softening);
     }
 }
 #define REB_GRAVITY_ONESIDED_CHUNK 64
@@ -285,8 +286,17 @@ struct reb_gravity_soa {
     const double* x; const double* y; const double* z; const double* m;
     double* ax; double* ay; double* az;
 };
+// f[l] = G/r^3 with r = sqrt(dx^2+dy^2+dz^2+softening^2), the serial loop's expression; a helper
+// with non-aliasing arrays so that the loop is vectorised (square roots, divisions).
+static inline __attribute__((always_inline)) void reb_gravity_rinv3(const size_t n, const double* const REB_RESTRICT dx, const double* const REB_RESTRICT dy, const double* const REB_RESTRICT dz, const double G, const double softening, double* const REB_RESTRICT f){
+    const double softening2 = softening*softening; // squared here: provably >= 0, so sqrt vectorises
+    for (size_t l=0; l<n; l++){
+        const double _r = sqrt(dx[l]*dx[l] + dy[l]*dy[l] + dz[l]*dz[l] + softening2);
+        f[l] = G/(_r*_r*_r);
+    }
+}
 // Off-diagonal part of row i: partners j in [j0, j1); stores f into frow[j-j0] if frow != NULL.
-REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa p, const size_t i, const size_t j0, const size_t j1, const struct reb_vec6d gb, const double G, const double softening2, double* const REB_RESTRICT frow){
+REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa p, const size_t i, const size_t j0, const size_t j1, const struct reb_vec6d gb, const double G, const double softening, double* const REB_RESTRICT frow){
     const double xi = gb.x+p.x[i];
     const double yi = gb.y+p.y[i];
     const double zi = gb.z+p.z[i];
@@ -302,9 +312,8 @@ REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa 
             bdx[l] = xi - px[b0+l];
             bdy[l] = yi - py[b0+l];
             bdz[l] = zi - pz[b0+l];
-            const double _r = sqrt(bdx[l]*bdx[l] + bdy[l]*bdy[l] + bdz[l]*bdz[l] + softening2);
-            bf[l] = G/(_r*_r*_r);
         }
+        reb_gravity_rinv3(nb, bdx, bdy, bdz, G, softening, bf);
         if (frow){
             double* const REB_RESTRICT fb = frow + (b0-j0);
             for (size_t l=0; l<nb; l++) fb[l] = bf[l];
@@ -319,7 +328,7 @@ REB_TARGET_CLONES static void reb_gravity_tile_row(const struct reb_gravity_soa 
     p.ax[i] = axi; p.ay[i] = ayi; p.az[i] = azi;
 }
 // Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
-REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening2){
+REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
     const size_t jlo = i0>startj ? i0 : startj;
     double* const REB_RESTRICT pax = p.ax;
     double* const REB_RESTRICT pay = p.ay;
@@ -337,9 +346,8 @@ REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity
                 bdx[l] = xi - p.x[b0+l];
                 bdy[l] = yi - p.y[b0+l];
                 bdz[l] = zi - p.z[b0+l];
-                const double _r = sqrt(bdx[l]*bdx[l] + bdy[l]*bdy[l] + bdz[l]*bdz[l] + softening2);
-                bf[l] = G/(_r*_r*_r);
             }
+            reb_gravity_rinv3(nb, bdx, bdy, bdz, G, softening, bf);
             for (size_t l=0; l<nb; l++){
                 const double prefact = bf[l];
                 const double prefactj = -prefact*p.m[b0+l];
@@ -382,7 +390,7 @@ REB_TARGET_CLONES static void reb_gravity_tile_later(const struct reb_gravity_so
     }
 }
 // Returns 0 if the table would be too large (the caller then uses the one-sided loop).
-static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening2){
+static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening){
     if (starti>N_active || startj>=starti) return 0;
     // Row blocks of the active particles, boundaries at equal pass-1 work (~ s^2), at least 8 rows.
     const int nthreads = omp_get_max_threads();
@@ -457,16 +465,16 @@ static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size
             const size_t i0 = s[b], i1 = s[b+1];
             if (s[b]>startj){
                 for (size_t i=(i0>starti?i0:starti); i<i1; i++){
-                    reb_gravity_tile_row(p, i, startj, s[b], gb, G, softening2, table + rowoff[i]);
+                    reb_gravity_tile_row(p, i, startj, s[b], gb, G, softening, table + rowoff[i]);
                 }
             }
-            reb_gravity_tile_diagonal(p, i0, i1, starti, startj, gb, G, softening2);
+            reb_gravity_tile_diagonal(p, i0, i1, starti, startj, gb, G, softening);
         }
         // Pass 1, test-particle rows (own row only; stored for type 1).
 #pragma omp for schedule(static)
         for (size_t i=N_active; i<N; i++){
             if (i<starti || N_active<=startj) continue;
-            reb_gravity_tile_row(p, i, startj, N_active, gb, G, softening2, testparticle_type ? table + rowoff[i] : NULL);
+            reb_gravity_tile_row(p, i, startj, N_active, gb, G, softening, testparticle_type ? table + rowoff[i] : NULL);
         }
         // (barrier) Pass 2: later rows for each active block, in chunks of REB_GRAVITY_PASS2_CHUNK
         // particles (independent: each particle only receives its own terms). Early blocks have
@@ -595,13 +603,13 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
 #ifdef OPENMP
                 // Parallel: one-sided, each particle sums all its partners in the serial order
                 // (bitwise identical to the serial loop, see reb_gravity_basic_onesided).
-                else if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, _testparticle_type, gb, G, softening2)){
+                else if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening)){
                     const size_t nchunk = (N+REB_GRAVITY_ONESIDED_CHUNK-1)/REB_GRAVITY_ONESIDED_CHUNK;
 #pragma omp parallel for schedule(static)
                     for (size_t c=0; c<nchunk; c++){
                         const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
                         const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;
-                        reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, _testparticle_type, gb, G, softening2);
+                        reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening);
                     }
                 }
 #endif // OPENMP
