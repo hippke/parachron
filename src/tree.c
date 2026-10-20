@@ -119,9 +119,11 @@ static struct reb_treecell *reb_tree_add_particle_to_cell(struct reb_simulation*
             return NULL;
         }
         node->pt = pt; 
+        node->rmax = p.r;
         return node;
     }
     // In a existing node
+    if (particles[pt].r > node->rmax) node->rmax = particles[pt].r;
     if (node->pt >= 0) { // It's a leaf node
         int o1 = reb_reb_tree_get_octant_for_particle_in_cell(particles[node->pt], node);
         int o2 = reb_reb_tree_get_octant_for_particle_in_cell(particles[pt], node);
