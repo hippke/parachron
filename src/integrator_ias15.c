@@ -298,7 +298,9 @@ static void reb_integrator_ias15_alloc(struct reb_simulation* r, struct reb_inte
 // Tries to do one actual timestep.
 //   Returns 1 if successful.
 //   Returns 0 if step is rejected.
-static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15) {
+// AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h): the vectorised
+// predictor/corrector loops run 4 wide; results identical.
+REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15) {
     reb_integrator_ias15_alloc(r, ias15);
 
     struct reb_particle* const particles = r->particles;
