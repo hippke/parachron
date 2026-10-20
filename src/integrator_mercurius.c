@@ -284,6 +284,15 @@ static void reb_mercurius_encounter_predict(struct reb_simulation* const r, stru
             const double drndt = (dxn*dvxn+dyn*dvyn+dzn*dvzn)*2.;
             const double drodt = (dxo*dvxo+dyo*dvyo+dzo*dvzo)*2.;
 
+            double dcritmax2 = MAX(dcrit[i],dcrit[j]);
+            dcritmax2 *= 1.21*dcritmax2;
+            // Conservative early exit: the cubic Hermite interpolant of r^2 used below is
+            // h00*ro + h01*rn + h10*dt*drodt + h11*dt*drndt with h00+h01=1 (both in [0,1]) and
+            // |h10|,|h11| <= 4/27 on [0,1], so it never drops below this bound. If the bound is
+            // above twice the threshold, the test at the end cannot succeed.
+            const double r2_lower = MIN(rn,ro) - 0.15*(fabs(dt*drodt) + fabs(dt*drndt));
+            if (r2_lower > 2.*dcritmax2) continue;
+
             const double a = 6.*(ro-rn)+3.*dt*(drodt+drndt); 
             const double b = 6.*(rn-ro)-2.*dt*(2.*drodt+drndt); 
             const double c = dt*drodt; 
@@ -309,8 +318,6 @@ static void reb_mercurius_encounter_predict(struct reb_simulation* const r, stru
                 rmin = MIN(MAX(rmin2,0.),rmin);
             }
 
-            double dcritmax2 = MAX(dcrit[i],dcrit[j]);
-            dcritmax2 *= 1.21*dcritmax2;
             if (rmin < dcritmax2){
                 if (mercurius->encounter_map[i]==0){
                     mercurius->encounter_map[i] = i;
