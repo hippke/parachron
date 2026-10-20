@@ -706,9 +706,17 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
 void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const particles, const size_t first, const size_t N, const double mu, const double dt, const struct reb_simulation* const r){
 #ifdef OPENMP
     if (reb_omp_parallel(32.*(double)(N>first?N-first:0))){
+        // Parallel: full batches of the batched solver (lane-wise path, as below), any chunking
+        // gives identical results.
+        const size_t nbatch = (N-first+WHFAST_KEPLER_BATCH-1)/WHFAST_KEPLER_BATCH;
 #pragma omp parallel for schedule(static)
-        for (size_t i=first; i<N; i++){
-            reb_integrator_whfast_kepler_solver(&particles[i], mu, dt, r);
+        for (size_t c=0; c<nbatch; c++){
+            const size_t i0 = first+c*WHFAST_KEPLER_BATCH;
+            const int n = (int)((N-i0)<WHFAST_KEPLER_BATCH ? (N-i0) : WHFAST_KEPLER_BATCH);
+            struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
+            double batch_mu[WHFAST_KEPLER_BATCH];
+            for (int l=0; l<n; l++){ batch_p[l] = &particles[i0+l]; batch_mu[l] = mu; }
+            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, n, dt, r, n==WHFAST_KEPLER_BATCH);
         }
         return;
     }
@@ -936,43 +944,45 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
     }
     }
 #ifdef OPENMP
-    else switch (coordinates){
-        case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
-#pragma omp parallel for private(eta)
-            for (size_t i=1;i<N;i++){
-                // Same mu as the serial loop: m0 plus the masses of all active particles up to
-                // and including i (the serial loop adds p_jh[i].m before the drift).
-                eta = m0;
-                for (size_t j=1;j<MIN(i+1,N_active);j++){
-                    eta += p_jh[j].m;
-                }
-                reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r);
-            }
-            break;
-        case REB_INTEGRATOR_WHFAST_COORDINATES_DEMOCRATICHELIOCENTRIC:
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
-            for (size_t i=1;i<N;i++){
-                reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r); // eta = m0
-            }
-            break;
-        case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
-#pragma omp parallel for private(eta)
-            for (size_t i=1;i<N;i++){
-                if (i<N_active){
-                    eta = m0+p_jh[i].m;
-                }else{
-                    eta = m0;
-                }
-                reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r);
-            }
-            break;
-        case REB_INTEGRATOR_WHFAST_COORDINATES_BARYCENTRIC:
+    else{
+        // Parallel: the same mu as above (the running mass sum is computed serially, in the same
+        // order), then each thread drifts a contiguous chunk with the batched solver. Every lane of
+        // the batched solver is bitwise identical to the scalar solver, so results do not depend
+        // on the chunking or on the number of threads.
+        double* const mus = malloc(sizeof(double)*N);
+        if (coordinates==REB_INTEGRATOR_WHFAST_COORDINATES_BARYCENTRIC){
             eta = p_jh[0].m;
-            for (size_t i=1;i<N;i++){
-                reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r);
+        }
+        for (size_t i=1;i<N;i++){
+            switch (coordinates){
+                case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
+                    if (i<N_active){
+                        eta += p_jh[i].m;
+                    }
+                    break;
+                case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
+                    if (i<N_active){
+                        eta = m0+p_jh[i].m;
+                    }else{
+                        eta = m0;
+                    }
+                    break;
+                default: // DEMOCRATICHELIOCENTRIC (eta = m0), BARYCENTRIC (eta = p_jh[0].m)
+                    break;
             }
-            break;
-    };
+            mus[i] = eta*G;
+        }
+        const size_t nbatch = (N-1+WHFAST_KEPLER_BATCH-1)/WHFAST_KEPLER_BATCH;
+#pragma omp parallel for schedule(static)
+        for (size_t c=0; c<nbatch; c++){
+            const size_t i0 = 1+c*WHFAST_KEPLER_BATCH;
+            const int n = (int)((N-i0)<WHFAST_KEPLER_BATCH ? (N-i0) : WHFAST_KEPLER_BATCH);
+            struct reb_particle* batch_p[WHFAST_KEPLER_BATCH];
+            for (int l=0; l<n; l++) batch_p[l] = &p_jh[i0+l];
+            reb_integrator_whfast_kepler_solver_batch(batch_p, &mus[i0], n, _dt, r, 0);
+        }
+        free(mus);
+    }
 #endif // OPENMP
 }
 

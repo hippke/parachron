@@ -163,6 +163,7 @@ void reb_simulation_free(struct reb_simulation* const r){
     reb_simulation_stop_server(r);
 #endif // SERVER
     free(r->gravity_cs);
+    free(r->gravity_pair_table);
     free(r->collisions);
     free(r->tree_root);
     if(r->free_particle_ap){

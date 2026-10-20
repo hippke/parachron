@@ -1430,6 +1430,8 @@ Simulation._fields_ = [
                 ("_name_hash_table", c_void_p),
                 ("gravity_cs", POINTER(Vec3dBasic)),
                 ("N_allocated_gravity_cs", c_size_t),
+                ("_gravity_pair_table", POINTER(c_double)),
+                ("_N_allocated_gravity_pair_table", c_size_t),
                 ("_tree_root", c_void_p),
                 ("opening_angle2", c_double),
                 ("_status", c_int),

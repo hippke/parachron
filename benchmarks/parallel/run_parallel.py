@@ -14,7 +14,7 @@ and checks the final-state signatures:
   python3 run_parallel.py                       # all cases, threads 1..nproc
   python3 run_parallel.py --only ias15_n512 --threads 1,2,4,8 --repeat 5
   python3 run_parallel.py --src ../../ --json out.json
-  python3 run_parallel.py --compare-src ../rebound-base   # A/B: same table for another tree
+  python3 run_parallel.py --compare-src ../rebound-base   # also interleaved A/B of the OpenMP builds of two trees
 
 Run it on a quiet machine with as many physical cores as possible.
 """
@@ -85,6 +85,8 @@ def measure(exes, cases, threads, repeat, scale):
         rows = {}
         # interleave configurations per repeat so slow drift of the machine affects all equally
         configs = [("serial", 1)] + [("openmp", t) for t in threads]
+        if "openmp_b" in exes:
+            configs += [("openmp_b", t) for t in threads]
         times = {c: [] for c in configs}
         sigs = {}
         for _ in range(repeat):
@@ -100,6 +102,21 @@ def measure(exes, cases, threads, repeat, scale):
 
 def relerr(a, b):
     return abs(a - b) / max(abs(a), abs(b), 1e-300)
+
+
+def report_ab(results, threads):
+    print("\nA/B of the OpenMP builds (A = --src, B = --compare-src), median time ratio B/A (>1: A faster):")
+    hdr = "%-15s" % "case" + "".join(" %8s" % ("T=%d" % t) for t in threads) + "  signatures"
+    print(hdr)
+    for case, rows in results.items():
+        line = "%-15s" % case
+        same = True
+        for t in threads:
+            a = rows["openmp:%d" % t]
+            b = rows["openmp_b:%d" % t]
+            line += " %7.3fx" % (b["median_s"] / a["median_s"])
+            same = same and a["signature"] == b["signature"]
+        print(line + ("  identical" if same else "  CHANGED"))
 
 
 def report(results, threads):
@@ -131,6 +148,7 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--compare-src", default=None, help="second source tree: interleaved A/B of the OpenMP builds")
     args = ap.parse_args()
 
     src = os.path.abspath(args.src)
@@ -147,8 +165,14 @@ def main():
     cases = args.only.split(",") if args.only else CASES
 
     exes = build(src, build_root, args.jobs)
+    if args.compare_src:
+        other = os.path.abspath(args.compare_src)
+        exes_b = build(other, build_root + "_B", args.jobs)
+        exes["openmp_b"] = exes_b["openmp"]
     results = measure(exes, cases, threads, args.repeat, args.scale)
     report(results, threads)
+    if args.compare_src:
+        report_ab(results, threads)
     if args.json:
         with open(args.json, "w") as f:
             json.dump({"src": src, "threads": threads, "repeat": args.repeat, "results": results}, f, indent=1)

@@ -272,6 +272,8 @@ struct reb_simulation {
     struct reb_name_hash_item*    name_hash_table;        // Internal use only. Speeds up name search.
     struct reb_vec3d* gravity_cs; 
     size_t N_allocated_gravity_cs;
+    double* gravity_pair_table;     // Internal use only (OpenMP builds): 1/r^3 factors of all pairs.
+    size_t N_allocated_gravity_pair_table;
     struct reb_treecell** tree_root;// Pointer to the temporary tree structure.
     double opening_angle2;          // Opening angle for tree-based gravity calculation. Default 0.25.
     enum REB_STATUS status;         // Current simulation status
