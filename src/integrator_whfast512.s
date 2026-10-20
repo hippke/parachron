@@ -128,6 +128,7 @@
     # Ignore exceptions
     subq $8, %rsp
     stmxcsr (%rsp)
+    movl (%rsp), %r11d     # keep caller's MXCSR (restored on exit)
     orl $0x8040, (%rsp)    # Set Global FTZ and DAZ
     ldmxcsr (%rsp)
     addq $8, %rsp
@@ -152,6 +153,14 @@
     vmovapd     P512_VY(%rdi), .LVY
     vmovapd     P512_VZ(%rdi), .LVZ
 .endm  
+
+.macro reb_whfast512_restore_caller_state
+    subq $8, %rsp
+    movl %r11d, (%rsp)
+    ldmxcsr (%rsp)         # restore caller's FTZ/DAZ setting
+    addq $8, %rsp
+    vzeroupper             # avoid AVX-SSE transition penalties in the (SSE) caller
+.endm
 
 .macro reb_whfast512_store_results
     vmovapd    .LVX, P512_VX(%rdi)
@@ -866,6 +875,7 @@
 
     free_stack64
     reb_whfast512_store_results
+    reb_whfast512_restore_caller_state
     ret
 .endm
 
@@ -875,6 +885,7 @@ reb_whfast512_kepler_step:
     reb_whfast512_init_registers
     kepler_step
     reb_whfast512_store_results
+    reb_whfast512_restore_caller_state
     ret
 
 # Helper functions to load and move data
@@ -956,6 +967,7 @@ reb_whfast512_movu_pd:
     # Store final data in P512 structure
     reb_whfast512_store_results
     free_stack64
+    reb_whfast512_restore_caller_state
     ret
 .endm
 
