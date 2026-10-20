@@ -102,6 +102,9 @@ void reb_integrator_mercurius_free(void* p){
     struct reb_integrator_mercurius_state* mercurius = p;
     free(mercurius->particles_backup);
     free(mercurius->particles_backup_xv);
+    free(mercurius->sap_box);
+    free(mercurius->sap_order);
+    free(mercurius->sap_pairs);
     free(mercurius->particles_backup_additional_forces);
     free(mercurius->encounter_map);
     free(mercurius->dcrit);
@@ -245,6 +248,159 @@ void reb_integrator_mercurius_dh_to_inertial(struct reb_simulation* r, struct re
 }
 
 
+// Close-encounter test for one pair (i < j), unchanged from the original double loop.
+static inline void reb_mercurius_encounter_predict_pair(struct reb_integrator_mercurius_state* const mercurius, const struct reb_particle* const particles, const struct reb_vec6d* const particles_backup, const double* const dcrit, const double dt, const size_t N_active, const size_t i, const size_t j){
+    const double dxn = particles[i].x - particles[j].x;
+    const double dyn = particles[i].y - particles[j].y;
+    const double dzn = particles[i].z - particles[j].z;
+    const double dvxn = particles[i].vx - particles[j].vx;
+    const double dvyn = particles[i].vy - particles[j].vy;
+    const double dvzn = particles[i].vz - particles[j].vz;
+    const double rn = (dxn*dxn + dyn*dyn + dzn*dzn);
+    const double dxo = particles_backup[i].x - particles_backup[j].x;
+    const double dyo = particles_backup[i].y - particles_backup[j].y;
+    const double dzo = particles_backup[i].z - particles_backup[j].z;
+    const double dvxo = particles_backup[i].vx - particles_backup[j].vx;
+    const double dvyo = particles_backup[i].vy - particles_backup[j].vy;
+    const double dvzo = particles_backup[i].vz - particles_backup[j].vz;
+    const double ro = (dxo*dxo + dyo*dyo + dzo*dzo);
+
+    const double drndt = (dxn*dvxn+dyn*dvyn+dzn*dvzn)*2.;
+    const double drodt = (dxo*dvxo+dyo*dvyo+dzo*dvzo)*2.;
+
+    double dcritmax2 = MAX(dcrit[i],dcrit[j]);
+    dcritmax2 *= 1.21*dcritmax2;
+    // Conservative early exit: the cubic Hermite interpolant of r^2 used below is
+    // h00*ro + h01*rn + h10*dt*drodt + h11*dt*drndt with h00+h01=1 (both in [0,1]) and
+    // |h10|,|h11| <= 4/27 on [0,1], so it never drops below this bound. If the bound is
+    // above twice the threshold, the test at the end cannot succeed.
+    const double r2_lower = MIN(rn,ro) - 0.15*(fabs(dt*drodt) + fabs(dt*drndt));
+    if (r2_lower > 2.*dcritmax2) return;
+
+    const double a = 6.*(ro-rn)+3.*dt*(drodt+drndt); 
+    const double b = 6.*(rn-ro)-2.*dt*(2.*drodt+drndt); 
+    const double c = dt*drodt; 
+
+    double rmin = MIN(rn,ro);
+
+    const double s = b*b-4.*a*c;
+    const double sr = sqrt(MAX(0.,s));
+    const double tmin1 = (-b + sr)/(2.*a); 
+    const double tmin2 = (-b - sr)/(2.*a); 
+    if (tmin1>0. && tmin1<1.){
+        const double rmin1 = (1.-tmin1)*(1.-tmin1)*(1.+2.*tmin1)*ro
+        + tmin1*tmin1*(3.-2.*tmin1)*rn
+        + tmin1*(1.-tmin1)*(1.-tmin1)*dt*drodt
+        - tmin1*tmin1*(1.-tmin1)*dt*drndt;
+        rmin = MIN(MAX(rmin1,0.),rmin);
+    }
+    if (tmin2>0. && tmin2<1.){
+        const double rmin2 = (1.-tmin2)*(1.-tmin2)*(1.+2.*tmin2)*ro
+        + tmin2*tmin2*(3.-2.*tmin2)*rn
+        + tmin2*(1.-tmin2)*(1.-tmin2)*dt*drodt
+        - tmin2*tmin2*(1.-tmin2)*dt*drndt;
+        rmin = MIN(MAX(rmin2,0.),rmin);
+    }
+
+    if (rmin < dcritmax2){
+        if (mercurius->encounter_map[i]==0){
+            mercurius->encounter_map[i] = i;
+            mercurius->encounter_N++;
+        }
+        if (mercurius->encounter_map[j]==0){
+            mercurius->encounter_map[j] = j;
+            mercurius->encounter_N++;
+        }
+        if (j<N_active){ // Two massive particles have a close encounter
+            mercurius->tponly_encounter = 0;
+        }
+    }
+}
+
+// Broadphase (default for many active bodies): the Hermite cubic f(t) of the squared separation
+// used below is bounded from below by its Bernstein control values
+//   b0 = ro, b1 = ro + dt*drodt/3, b2 = rn - dt*drndt/3, b3 = rn,
+// and b1 = |P1_i - P1_j|^2 - (dt/3)^2 |v0_i - v0_j|^2 with P1 = x0 + v0 dt/3 (b2 likewise with
+// P2 = x1 - v1 dt/3). Each particle gets the bounding box of x0, P1, P2, x1, padded by
+// p = 1.1 (1+1e-6) dcrit + (1+1e-6) (dt/3) max(|v0|,|v1|) + 1e-7 (|x0|+|x1|). If two boxes are
+// disjoint along one axis, every control value exceeds (1.1 max(dcrit_i,dcrit_j))^2 = dcritmax2,
+// so the pair test cannot trigger. The outcome (flags and counts) does not depend on the order in
+// which pairs are tested, so the results are bitwise identical.
+#define REB_MERCURIUS_SAP_MIN_ACTIVE 32
+static size_t reb_mercurius_encounter_broadphase(struct reb_simulation* const r, struct reb_integrator_mercurius_state* const mercurius, const size_t N_active){
+    const size_t N = r->N;
+    const struct reb_particle* const ps = r->particles;
+    const struct reb_vec6d* const b0 = mercurius->particles_backup_xv;
+    const double* const dcrit = mercurius->dcrit;
+    const double dt3 = r->dt/3.;
+    if (mercurius->N_allocated_sap < N){
+        mercurius->sap_box = realloc(mercurius->sap_box, sizeof(double)*6*N);
+        mercurius->sap_order = realloc(mercurius->sap_order, sizeof(size_t)*N);
+        mercurius->N_allocated_sap = N;
+        mercurius->N_sap_order = 0;
+    }
+    double* const box = mercurius->sap_box; // xmin, xmax, ymin, ymax, zmin, zmax
+    size_t* const order = mercurius->sap_order;
+    for (size_t k=0; k<N; k++){
+        const double x0[3] = {b0[k].x, b0[k].y, b0[k].z};
+        const double v0[3] = {b0[k].vx, b0[k].vy, b0[k].vz};
+        const double x1[3] = {ps[k].x, ps[k].y, ps[k].z};
+        const double v1[3] = {ps[k].vx, ps[k].vy, ps[k].vz};
+        const double vm0 = sqrt(v0[0]*v0[0]+v0[1]*v0[1]+v0[2]*v0[2]);
+        const double vm1 = sqrt(v1[0]*v1[0]+v1[1]*v1[1]+v1[2]*v1[2]);
+        const double R = sqrt(x0[0]*x0[0]+x0[1]*x0[1]+x0[2]*x0[2]) + sqrt(x1[0]*x1[0]+x1[1]*x1[1]+x1[2]*x1[2]);
+        const double pad = 1.1*(1.+1e-6)*dcrit[k] + (1.+1e-6)*dt3*(vm0 > vm1 ? vm0 : vm1) + 1e-7*R;
+        for (int a=0; a<3; a++){
+            const double p1 = x0[a] + v0[a]*dt3;
+            const double p2 = x1[a] - v1[a]*dt3;
+            double lo = x0[a], hi = x0[a];
+            if (p1 < lo) lo = p1;
+            if (p1 > hi) hi = p1;
+            if (p2 < lo) lo = p2;
+            if (p2 > hi) hi = p2;
+            if (x1[a] < lo) lo = x1[a];
+            if (x1[a] > hi) hi = x1[a];
+            box[6*k+2*a] = lo - pad;
+            box[6*k+2*a+1] = hi + pad;
+        }
+    }
+    if (mercurius->N_sap_order != N){
+        for (size_t k=0; k<N; k++) order[k] = k;
+        mercurius->N_sap_order = N;
+    }
+    for (size_t a=1; a<N; a++){ // insertion sort by xmin (nearly sorted)
+        const size_t ka = order[a];
+        const double la = box[6*ka];
+        size_t b = a;
+        while (b>0 && box[6*order[b-1]] > la){
+            order[b] = order[b-1];
+            b--;
+        }
+        order[b] = ka;
+    }
+    size_t n = 0;
+    for (size_t a=0; a<N; a++){
+        const size_t i = order[a];
+        const double* const bi = &box[6*i];
+        for (size_t b=a+1; b<N; b++){
+            const size_t j = order[b];
+            const double* const bj = &box[6*j];
+            if (bj[0] > bi[1]) break;
+            if (i >= N_active && j >= N_active) continue;
+            if (bj[2] > bi[3] || bi[2] > bj[3]) continue;
+            if (bj[4] > bi[5] || bi[4] > bj[5]) continue;
+            if (2*(n+1) > mercurius->N_allocated_sap_pairs){
+                mercurius->N_allocated_sap_pairs = mercurius->N_allocated_sap_pairs ? 2*mercurius->N_allocated_sap_pairs : 1024;
+                mercurius->sap_pairs = realloc(mercurius->sap_pairs, sizeof(size_t)*mercurius->N_allocated_sap_pairs);
+            }
+            mercurius->sap_pairs[2*n]   = i < j ? i : j;
+            mercurius->sap_pairs[2*n+1] = i < j ? j : i;
+            n++;
+        }
+    }
+    return n;
+}
+
 static void reb_mercurius_encounter_predict(struct reb_simulation* const r, struct reb_integrator_mercurius_state* mercurius){
     // This function predicts close encounters during the timestep
     // It makes use of the old and new position and velocities obtained
@@ -265,73 +421,16 @@ static void reb_mercurius_encounter_predict(struct reb_simulation* const r, stru
     for (size_t i=1; i<N; i++){
         mercurius->encounter_map[i] = 0;
     }
+    if (N_active >= REB_MERCURIUS_SAP_MIN_ACTIVE){
+        const size_t n = reb_mercurius_encounter_broadphase(r, mercurius, N_active);
+        for (size_t c=0; c<n; c++){
+            reb_mercurius_encounter_predict_pair(mercurius, particles, particles_backup, dcrit, dt, N_active, mercurius->sap_pairs[2*c], mercurius->sap_pairs[2*c+1]);
+        }
+        return;
+    }
     for (size_t i=0; i<N_active; i++){
         for (size_t j=i+1; j<N; j++){
-            const double dxn = particles[i].x - particles[j].x;
-            const double dyn = particles[i].y - particles[j].y;
-            const double dzn = particles[i].z - particles[j].z;
-            const double dvxn = particles[i].vx - particles[j].vx;
-            const double dvyn = particles[i].vy - particles[j].vy;
-            const double dvzn = particles[i].vz - particles[j].vz;
-            const double rn = (dxn*dxn + dyn*dyn + dzn*dzn);
-            const double dxo = particles_backup[i].x - particles_backup[j].x;
-            const double dyo = particles_backup[i].y - particles_backup[j].y;
-            const double dzo = particles_backup[i].z - particles_backup[j].z;
-            const double dvxo = particles_backup[i].vx - particles_backup[j].vx;
-            const double dvyo = particles_backup[i].vy - particles_backup[j].vy;
-            const double dvzo = particles_backup[i].vz - particles_backup[j].vz;
-            const double ro = (dxo*dxo + dyo*dyo + dzo*dzo);
-
-            const double drndt = (dxn*dvxn+dyn*dvyn+dzn*dvzn)*2.;
-            const double drodt = (dxo*dvxo+dyo*dvyo+dzo*dvzo)*2.;
-
-            double dcritmax2 = MAX(dcrit[i],dcrit[j]);
-            dcritmax2 *= 1.21*dcritmax2;
-            // Conservative early exit: the cubic Hermite interpolant of r^2 used below is
-            // h00*ro + h01*rn + h10*dt*drodt + h11*dt*drndt with h00+h01=1 (both in [0,1]) and
-            // |h10|,|h11| <= 4/27 on [0,1], so it never drops below this bound. If the bound is
-            // above twice the threshold, the test at the end cannot succeed.
-            const double r2_lower = MIN(rn,ro) - 0.15*(fabs(dt*drodt) + fabs(dt*drndt));
-            if (r2_lower > 2.*dcritmax2) continue;
-
-            const double a = 6.*(ro-rn)+3.*dt*(drodt+drndt); 
-            const double b = 6.*(rn-ro)-2.*dt*(2.*drodt+drndt); 
-            const double c = dt*drodt; 
-
-            double rmin = MIN(rn,ro);
-
-            const double s = b*b-4.*a*c;
-            const double sr = sqrt(MAX(0.,s));
-            const double tmin1 = (-b + sr)/(2.*a); 
-            const double tmin2 = (-b - sr)/(2.*a); 
-            if (tmin1>0. && tmin1<1.){
-                const double rmin1 = (1.-tmin1)*(1.-tmin1)*(1.+2.*tmin1)*ro
-                + tmin1*tmin1*(3.-2.*tmin1)*rn
-                + tmin1*(1.-tmin1)*(1.-tmin1)*dt*drodt
-                - tmin1*tmin1*(1.-tmin1)*dt*drndt;
-                rmin = MIN(MAX(rmin1,0.),rmin);
-            }
-            if (tmin2>0. && tmin2<1.){
-                const double rmin2 = (1.-tmin2)*(1.-tmin2)*(1.+2.*tmin2)*ro
-                + tmin2*tmin2*(3.-2.*tmin2)*rn
-                + tmin2*(1.-tmin2)*(1.-tmin2)*dt*drodt
-                - tmin2*tmin2*(1.-tmin2)*dt*drndt;
-                rmin = MIN(MAX(rmin2,0.),rmin);
-            }
-
-            if (rmin < dcritmax2){
-                if (mercurius->encounter_map[i]==0){
-                    mercurius->encounter_map[i] = i;
-                    mercurius->encounter_N++;
-                }
-                if (mercurius->encounter_map[j]==0){
-                    mercurius->encounter_map[j] = j;
-                    mercurius->encounter_N++;
-                }
-                if (j<N_active){ // Two massive particles have a close encounter
-                    mercurius->tponly_encounter = 0;
-                }
-            }
+            reb_mercurius_encounter_predict_pair(mercurius, particles, particles_backup, dcrit, dt, N_active, i, j);
         }
     }
 }
