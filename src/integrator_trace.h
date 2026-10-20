@@ -67,6 +67,14 @@ struct reb_integrator_trace_state {
     unsigned int force_accept; // Force accept for irreversible steps: collisions and adding particles
     double* dcrit6;            // Scratch: per-particle critical distance^6 for the default switching function
     size_t N_allocated_dcrit6;
+    // Scratch for the broadphase of the encounter checks (default switching function, many active bodies)
+    double* sap_h;             // Half-width of each particle's swept box
+    double* sap_lo;            // x - half-width
+    size_t* sap_order;         // Particles sorted by sap_lo (kept between calls; nearly sorted)
+    size_t* sap_pairs;         // Candidate pairs (lo, hi)
+    size_t N_allocated_sap;
+    size_t N_sap_order;        // Number of particles in sap_order (0: needs initialisation)
+    size_t N_allocated_sap_pairs;
 };
 
 // Built in trace switching functions
