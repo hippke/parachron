@@ -643,6 +643,9 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     const int _testparticle_type   = r->testparticle_type;
     double (*_L) (const struct reb_simulation* const r, double d, double dcrit) = mercurius->L;
     const double* const dcrit = mercurius->dcrit;
+    // The default changeover function returns exactly 1 for d > dcrit; with a small margin
+    // (y >= 1.0001 in reb_integrator_mercurius_L_mercury) the call can be skipped.
+    const int L_default = (_L == reb_integrator_mercurius_L_mercury);
 #ifndef OPENMP
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
@@ -657,7 +660,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
             const double dz = particles[i].z - particles[j].z;
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[i],dcrit[j]);
-            const double L = _L(r,_r,dcritmax);
+            const double L = (L_default && _r > 1.0001*dcritmax) ? 1. : _L(r,_r,dcritmax);
             const double prefact = G*L/(_r*_r*_r);
             const double prefactj = -prefact*particles[j].m;
             const double prefacti = prefact*particles[i].m;
@@ -678,7 +681,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
             const double dz = particles[i].z - particles[j].z;
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[i],dcrit[j]);
-            const double L = _L(r,_r,dcritmax);
+            const double L = (L_default && _r > 1.0001*dcritmax) ? 1. : _L(r,_r,dcritmax);
             const double prefact = G*L/(_r*_r*_r);
             const double prefactj = -prefact*particles[j].m;
             particles[i].ax    += prefactj*dx;
