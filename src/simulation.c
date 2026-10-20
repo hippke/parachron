@@ -165,6 +165,8 @@ void reb_simulation_free(struct reb_simulation* const r){
     free(r->gravity_cs);
     free(r->gravity_pair_table);
     free(r->collisions);
+    reb_tree_delete(r);
+    reb_tree_free_cells(r);
     free(r->tree_root);
     if(r->free_particle_ap){
         for(size_t i=0; i<r->N; i++){
@@ -423,8 +425,7 @@ static void reb_walltime_tracker_finish(struct reb_simulation* const r, struct r
 }
 
 static void* reb_simulation_integrate_raw(void* args){
-    reb_sigint = 0;
-    signal(SIGINT, reb_sigint_handler);
+    reb_integration_begin();
     struct reb_thread_info* thread_info = (struct reb_thread_info*)args;
     struct reb_simulation* const r = thread_info->r;
 
@@ -514,7 +515,7 @@ static void* reb_simulation_integrate_raw(void* args){
         r->dt = last_full_dt; 
     }
     if (r->simulationarchive_filename){ reb_simulationarchive_heartbeat(r);}
-
+    reb_integration_end();
     return NULL;
 }
 
@@ -556,6 +557,131 @@ enum REB_STATUS reb_simulation_integrate(struct reb_simulation* const r, double 
     reb_simulation_integrate_raw(&thread_info);
 #endif // OPENGL
     return r->status;
+}
+
+// Integrate (or step) several independent simulations with a pool of threads. Each simulation is
+// integrated by one thread from start to end, exactly as reb_simulation_integrate would do it, so
+// the results are bitwise identical to integrating them one after another.
+struct reb_simulations_batch {
+    struct reb_simulation** sims;
+    size_t N;
+    const double* tmax;     // NULL: step mode
+    size_t N_steps;
+    volatile long next;     // next simulation to start
+};
+
+static void* reb_simulations_batch_worker(void* args){
+    struct reb_simulations_batch* b = args;
+    while (1){
+#if defined(_MSC_VER) && !defined(__clang__)
+        const long k = _InterlockedExchangeAdd(&b->next, 1);
+#else
+        const long k = __atomic_fetch_add(&b->next, 1, __ATOMIC_SEQ_CST);
+#endif
+        if (k < 0 || (size_t)k >= b->N) break;
+        struct reb_simulation* const r = b->sims[k];
+        if (!r) continue;
+        if (b->tmax){
+            struct reb_thread_info thread_info = { .r = r, .tmax = b->tmax[k] };
+            reb_simulation_integrate_raw(&thread_info);
+        }else{
+            reb_simulation_steps(r, b->N_steps);
+        }
+    }
+    return NULL;
+}
+
+#if defined(_WIN32)
+#include <windows.h>
+static void* reb_simulations_batch_worker_omp1(void* b);
+static DWORD WINAPI reb_simulations_batch_worker_win(LPVOID args){ reb_simulations_batch_worker_omp1(args); return 0; }
+#elif !defined(__EMSCRIPTEN__)
+#include <pthread.h>
+#include <unistd.h>
+#endif
+
+// Ensemble workers run their simulations with one OpenMP thread each: the cores are already used
+// by the workers, and nested teams would oversubscribe them (OpenMP builds; results do not depend
+// on the thread count).
+static void* reb_simulations_batch_worker_omp1(void* b){
+#ifdef OPENMP
+    omp_set_num_threads(1); // affects only this (worker) thread
+#endif // OPENMP
+    return reb_simulations_batch_worker(b);
+}
+
+static int reb_simulations_default_threads(void){
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (int)si.dwNumberOfProcessors;
+#elif defined(__EMSCRIPTEN__)
+    return 1;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+#endif
+}
+
+static void reb_simulations_run_batch(struct reb_simulations_batch* b, int N_threads){
+    if (N_threads <= 0) N_threads = reb_simulations_default_threads();
+    if ((size_t)N_threads > b->N) N_threads = (int)b->N;
+    if (N_threads <= 1){
+        reb_simulations_batch_worker(b);
+        return;
+    }
+#if defined(_WIN32)
+    HANDLE* th = malloc(sizeof(HANDLE)*(size_t)N_threads);
+    int started = 0;
+    for (int t=0; t<N_threads; t++){
+        th[t] = CreateThread(NULL, 0, reb_simulations_batch_worker_win, b, 0, NULL);
+        if (th[t]) started++;
+    }
+#ifdef OPENMP
+    const int omp_threads_caller = omp_get_max_threads();
+    omp_set_num_threads(1);
+#endif // OPENMP
+    reb_simulations_batch_worker(b); // the calling thread works too (also covers failed starts)
+#ifdef OPENMP
+    omp_set_num_threads(omp_threads_caller);
+#endif // OPENMP
+    for (int t=0; t<N_threads; t++){
+        if (th[t]){ WaitForSingleObject(th[t], INFINITE); CloseHandle(th[t]); }
+    }
+    free(th);
+    (void)started;
+#elif defined(__EMSCRIPTEN__)
+    reb_simulations_batch_worker(b);
+#else
+    pthread_t* th = malloc(sizeof(pthread_t)*(size_t)N_threads);
+    int* ok = calloc((size_t)N_threads, sizeof(int));
+    for (int t=1; t<N_threads; t++){
+        ok[t] = (pthread_create(&th[t], NULL, reb_simulations_batch_worker_omp1, b) == 0);
+    }
+#ifdef OPENMP
+    const int omp_threads_caller = omp_get_max_threads();
+    omp_set_num_threads(1);
+#endif // OPENMP
+    reb_simulations_batch_worker(b); // the calling thread is worker 0 (also covers failed starts)
+#ifdef OPENMP
+    omp_set_num_threads(omp_threads_caller); // restore the caller's setting
+#endif // OPENMP
+    for (int t=1; t<N_threads; t++){
+        if (ok[t]) pthread_join(th[t], NULL);
+    }
+    free(ok);
+    free(th);
+#endif
+}
+
+void reb_simulations_integrate(struct reb_simulation** sims, size_t N, const double* tmax, int N_threads){
+    struct reb_simulations_batch b = { .sims = sims, .N = N, .tmax = tmax, .N_steps = 0, .next = 0 };
+    reb_simulations_run_batch(&b, N_threads);
+}
+
+void reb_simulations_steps(struct reb_simulation** sims, size_t N, size_t N_steps, int N_threads){
+    struct reb_simulations_batch b = { .sims = sims, .N = N, .tmax = NULL, .N_steps = N_steps, .next = 0 };
+    reb_simulations_run_batch(&b, N_threads);
 }
 
 enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_steps){

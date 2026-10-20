@@ -337,6 +337,27 @@ static void pair_destroy(void* p){ struct pairctx* c = p; reb_simulation_free(c-
 static void* create_pair_ss_avx512(void){ return pair_create(make_w512c_ss, 2); }
 static void* create_pair_3p_avx2(void){ return pair_create(make_w512c_small, 3); }
 
+// 3d) Output after every step: reb_simulation_steps(r, 1) in a loop (each call synchronizes),
+// WHFast512 with the default kernel. Measures the per-call cost (item 53).
+static struct reb_simulation* make_w512_out1(int variant){
+    struct reb_simulation* r = new_sim();
+    reb_simulation_set_integrator(r, "whfast512");
+    struct reb_integrator_whfast512_state* w = r->integrator.state;
+    w->gr_potential = 1;
+    w->concatenate_steps = 1;
+    r->dt = 5.0/365.25*2.*M_PI;
+    r->exact_finish_time = 0;
+    add_solar_system(r);
+    r->particles[1].x += 1e-12*variant;
+    return r;
+}
+static void* create_w512_out1(void){ return simctx_create(make_w512_out1, 1, 0); }
+static double work_w512_out1(void* p){
+    struct simctx* c = p;
+    for (int i=0; i<2000; i++) reb_simulation_steps(c->r, 1);
+    return 2000.;
+}
+
 // 4) Five Earth-mass planets, WHFast dt=0.05 yr (Obertas et al. 2017)
 static struct reb_simulation* make_obertas(int variant){
     const int k = variant % OBERTAS_N_SYSTEMS;
@@ -529,6 +550,58 @@ static struct reb_simulation* make_rings(int variant){
 }
 static void* create_rings(void){ return simctx_create(make_rings, 1, 0); }
 
+// 10b) Shearing sheet as in examples/shearing_sheet: power-law size distribution (1-4 m, slope -3),
+//      tree gravity and tree collisions, Bridges et al. coefficient of restitution (~5,000 particles).
+static double cor_bridges(const struct reb_simulation* r, double v){
+    (void)r;
+    double eps = 0.32*pow(fabs(v)*100.,-0.234);
+    if (eps>1) eps=1;
+    if (eps<0) eps=0;
+    return eps;
+}
+static double rng_powerlaw(double min, double max, double slope){
+    double y = rng_uniform(0., 1.);
+    if (slope == -1) return exp(y*log(max/min) + log(min));
+    return pow((pow(max,slope+1.)-pow(min,slope+1.))*y+pow(min,slope+1.), 1./(slope+1.));
+}
+static struct reb_simulation* make_rings_poly(int variant){
+    struct reb_simulation* r = new_sim();
+    r->opening_angle2 = .5;
+    reb_simulation_set_integrator(r, "sei");
+    r->boundary = REB_BOUNDARY_SHEAR;
+    r->gravity = REB_GRAVITY_TREE;
+    r->collision = REB_COLLISION_TREE;
+    r->collision_resolve = reb_collision_resolve_hardsphere;
+    r->OMEGA = 0.00013143527;
+    r->G = 6.67428e-11;
+    r->softening = 0.1;
+    r->dt = 1e-3*2.*M_PI/r->OMEGA;
+    r->root_size = 100.;
+    r->N_root_x = 2; r->N_root_y = 2; r->N_root_z = 1;
+    r->N_ghost_x = 2; r->N_ghost_y = 2; r->N_ghost_z = 0;
+    r->coefficient_of_restitution = cor_bridges;
+    r->minimum_collision_velocity = 1.*r->OMEGA*0.001;
+    const double bx = 200., by = 200.;
+    const double total_mass = 400.*bx*by;
+    rng_seed(11 + (uint64_t)variant);
+    double mass = 0;
+    while (mass < total_mass){
+        struct reb_particle p = {0};
+        p.x = rng_uniform(-bx/2., bx/2.);
+        p.y = rng_uniform(-by/2., by/2.);
+        // Box-Muller normal with sigma 1 m
+        double u1 = rng_uniform(1e-300, 1.), u2 = rng_uniform(0., 1.);
+        p.z = sqrt(-2.*log(u1))*cos(2.*M_PI*u2);
+        p.vy = -1.5*p.x*r->OMEGA;
+        p.r = rng_powerlaw(1., 4., -3.);
+        p.m = 400.*4./3.*M_PI*p.r*p.r*p.r;
+        reb_simulation_add(r, p);
+        mass += p.m;
+    }
+    return r;
+}
+static void* create_rings_poly(void){ return simctx_create(make_rings_poly, 1, 0); }
+
 // 11) Self-gravitating disc with tree gravity (examples/selfgravity_disc), N=10,000
 static struct reb_simulation* make_selfgrav(int variant){
     struct reb_simulation* r = new_sim();
@@ -560,6 +633,14 @@ static struct reb_simulation* make_selfgrav(int variant){
     return r;
 }
 static void* create_selfgrav(void){ return simctx_create(make_selfgrav, 2, 0); }
+static struct reb_simulation* make_selfgrav_group(int variant){
+    struct reb_simulation* r = make_selfgrav(variant);
+#ifdef REB_HAS_TREE_GROUP_SIZE
+    r->tree_group_size = 32;  // opt-in group walk (different, more accurate results at the same opening angle)
+#endif
+    return r;
+}
+static void* create_selfgrav_group(void){ return simctx_create(make_selfgrav_group, 1, 0); }
 
 // 12) MERCURIUS planetesimal-driven migration (examples/planetesimal_disk_migration, 2,500 planetesimals)
 static struct reb_simulation* make_mercurius(int variant){
@@ -597,6 +678,42 @@ static struct reb_simulation* make_mercurius(int variant){
     return r;
 }
 static void* create_mercurius(void){ return simctx_create(make_mercurius, 20, 0); }
+
+// 13b) Fully active planetesimal disc (all bodies interact, e.g. embryo/planetesimal growth):
+//      2 planets + 500 active planetesimals with merging, MERCURIUS (variant 0) or TRACE (variant 1).
+static struct reb_simulation* make_disc_active(int variant, int trace){
+    struct reb_simulation* r = new_sim();
+    r->rand_seed = 12 + variant;
+    reb_simulation_set_integrator(r, trace ? "trace" : "mercurius");
+    r->collision = REB_COLLISION_DIRECT;
+    r->collision_resolve = reb_collision_resolve_merge;
+    const double m_earth = 3.003e-6;
+    r->dt = 6.283/50;
+    struct reb_particle star = {0};
+    star.m = 1; star.r = 0.005;
+    reb_simulation_add(r, star);
+    struct reb_particle p = reb_particle_from_orbit(r->G, star, 5.1e-4, 1.0, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.000467;
+    reb_simulation_add(r, p);
+    p = reb_particle_from_orbit(r->G, star, 2.3*m_earth, 1.67, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.0000788215;
+    reb_simulation_add(r, p);
+    const int Np = 500;
+    const double mp = 2.3*10*m_earth/Np;
+    for (int i=0; i<Np; i++){
+        double a = reb_random_powerlaw(r, 1.65, 2.67, 1);
+        double e = reb_random_rayleigh(r, 0.01), inc = reb_random_rayleigh(r, 0.005);
+        struct reb_particle pt = reb_particle_from_orbit(r->G, star, mp, a, e, inc, reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI));
+        pt.r = 0.00000934532*pow(1000./Np, 1./3.);
+        reb_simulation_add(r, pt);
+    }
+    reb_simulation_move_to_com(r);
+    return r;
+}
+static struct reb_simulation* make_mercurius_disc(int variant){ return make_disc_active(variant, 0); }
+static struct reb_simulation* make_trace_disc(int variant){ return make_disc_active(variant, 1); }
+static void* create_mercurius_disc(void){ return simctx_create(make_mercurius_disc, 1, 0); }
+static void* create_trace_disc(void){ return simctx_create(make_trace_disc, 1, 0); }
 
 // 13) TRACE with two planets and 2,000 test particles (debris/Kuiper-belt style)
 static struct reb_simulation* make_trace(int variant){
@@ -652,6 +769,11 @@ struct bench {
 };
 
 static int always(void){ return 1; }
+#ifdef REB_HAS_TREE_GROUP_SIZE
+static int has_tree_group(void){ return 1; }
+#else
+static int has_tree_group(void){ return 0; }
+#endif
 
 static const struct bench benches[] = {
     // name             unit        use case                                                          create/work/signature/destroy                     available    warm meas
@@ -662,6 +784,7 @@ static const struct bench benches[] = {
     {"w512c_ss_avx512", "steps/s",  "Solar System, WHFast512 C kernel AVX-512 + GR",                      create_w512c_ss_avx512, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx512, 5, 30},
     {"w512c_3p_avx2",   "steps/s",  "3 compact planets, WHFast512 C AVX2 (four-lane path; SPOCK-like)",   create_w512c_small_avx2, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,  5, 40},
     {"w512c_4x2_avx2",  "steps/s",  "4 systems x 2 planets per vector, WHFast512 C AVX2 (ensembles)",     create_w512c_4x2_avx2,  simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,   5, 40},
+    {"w512_out1",       "calls/s",  "Solar System, WHFast512, output after every step (steps(r,1) per call)", create_w512_out1, work_w512_out1, simctx_signature, simctx_destroy, always, 3, 30},
     {"w512c_pair_ss512", "steps/s", "2 Solar Systems per call, WHFast512 C AVX-512 (steps_pair)",          create_pair_ss_avx512, pair_work, pair_signature, pair_destroy, have_w512c_avx512, 2, 16},
     {"w512c_pair_3p_avx2", "steps/s", "2 x 3 compact planets per call, WHFast512 C AVX2 four-lane (steps_pair)", create_pair_3p_avx2, pair_work, pair_signature, pair_destroy, have_w512c_avx2, 2, 24},
     {"obertas_5p",      "steps/s",  "5 Earth-mass planets, WHFast (Obertas et al. 2017)",                create_obertas,      simctx_work, simctx_signature, simctx_destroy, always,    5,   28},
@@ -671,9 +794,13 @@ static const struct bench benches[] = {
     {"megno_grid",      "points/s", "MEGNO stability map, 2 planets x 500 yr (Hadden & Lithwick 2018)",  create_megno,        work_megno,  sig_grid,         destroy_free,   always,  100, 1200},
     {"short_posterior", "sims/s",   "Many short WHFast runs of posterior draws (Wang et al. 2018)",      create_posterior,    work_posterior, sig_grid,      destroy_free,   always,  200, 2500},
     {"rings_sei_tree",  "steps/s",  "Saturn's rings, SEI + tree collisions (Rein & Latter 2013)",        create_rings,        simctx_work, simctx_signature, simctx_destroy, always,    3,  400},
+    {"rings_poly_tree", "steps/s",  "Shearing sheet with size distribution, tree gravity + collisions (examples/shearing_sheet)", create_rings_poly, simctx_work, simctx_signature, simctx_destroy, always,    2,   20},
     {"selfgrav_tree",   "steps/s",  "Self-gravitating disc, tree gravity, N=10k",                        create_selfgrav,     simctx_work, simctx_signature, simctx_destroy, always,    3,   18},
+    {"selfgrav_group", "steps/s",  "Self-gravitating disc, tree gravity with group walk (tree_group_size = 32, opt-in)", create_selfgrav_group, simctx_work, simctx_signature, simctx_destroy, has_tree_group, 3, 18},
     {"mercurius_plts",  "steps/s",  "MERCURIUS, 2 planets + 2,500 planetesimals (planetesimal migration)", create_mercurius,  simctx_work, simctx_signature, simctx_destroy, always,   10,   50},
     {"trace_tp",        "steps/s",  "TRACE, 2 planets + 2,000 test particles",                           create_trace,        simctx_work, simctx_signature, simctx_destroy, always,   20,  135},
+    {"mercurius_disc",  "steps/s",  "MERCURIUS, 2 planets + 500 active planetesimals with merging (embryo/planetesimal growth)", create_mercurius_disc, simctx_work, simctx_signature, simctx_destroy, always, 3, 30},
+    {"trace_disc",      "steps/s",  "TRACE, 2 planets + 500 active planetesimals with merging", create_trace_disc, simctx_work, simctx_signature, simctx_destroy, always, 3, 30},
     {"eos_pmlf6_tp",    "steps/s",  "EOS PMLF6, 2 planets + 300 test particles",                         create_eos,          simctx_work, simctx_signature, simctx_destroy, always,    2,   12},
 };
 static const int N_benches = sizeof(benches)/sizeof(benches[0]);

@@ -46,9 +46,13 @@ i.e. the same flags users get from `make`.
 | `megno_grid` | points/s | MEGNO stability map, 2 planets × 500 yr per point (Hadden & Lithwick 2018; `ipython_examples/Megno.ipynb`) | Variational equations, per-simulation setup |
 | `short_posterior` | sims/s | Many 300-step WHFast runs of posterior draws (Wang et al. 2018, HR 8799) | Simulation create/add/free overhead |
 | `rings_sei_tree` | steps/s | Saturn's rings, SEI + tree collisions, 200×5×20 root boxes (Rein & Latter 2013; `examples/overstability`) | Collision tree search, shear boundary |
+| `rings_poly_tree` | steps/s | Shearing sheet as in `examples/shearing_sheet`: power-law radii 1–4 m (slope −3), tree gravity + tree collisions, Bridges et al. restitution, ~5,000 particles | Tree gravity and collision search with a size distribution |
 | `selfgrav_tree` | steps/s | Self-gravitating disc, N = 10,000, tree gravity (`examples/selfgravity_disc`) | Tree build and walk |
+| `selfgrav_group` | steps/s | Same disc with the opt-in group walk (`tree_group_size = 32`); more accurate at the same opening angle, ~3x faster at equal trajectory accuracy (`tools/treeint.c`) | Group tree walk |
 | `mercurius_plts` | steps/s | MERCURIUS, 2 planets + 2,500 planetesimals (`examples/planetesimal_disk_migration`) | Hybrid encounters, IAS15 sub-steps, merging |
 | `trace_tp` | steps/s | TRACE, 2 planets + 2,000 test particles | TRACE encounter checks (N×N bookkeeping) |
+| `mercurius_disc` | steps/s | MERCURIUS, 2 planets + 500 fully active planetesimals with merging | Encounter-mode forces, encounter prediction (O(N²)) |
+| `trace_disc` | steps/s | TRACE, same disc | Encounter checks (O(N²)), interaction step |
 | `eos_pmlf6_tp` | steps/s | EOS PMLF6 (jerk kernel), 2 planets + 300 test particles | Jerk loop (O(N_tp²) at the time of writing) |
 
 Adaptive integrators report simulated time per second rather than steps per
@@ -129,6 +133,47 @@ check, not necessarily an error.
   identical. Define `REB_NO_TARGET_CLONES` to disable this, e.g. to measure CPUs without AVX2.
 - `OPT="-march=native -ffp-contract=fast"` adds ~7% more (FMA), but results then differ from the
   stock build at the round-off level.
+
+## Running many simulations in parallel (Python)
+
+**Threads (recommended for ensembles):** the C library releases the Python interpreter lock while it integrates, so independent simulations can run in threads without pickling or process start-up:
+
+```python
+import rebound
+sims = [make_sim(i) for i in range(1000)]
+statuses = rebound.integrate_simulations(sims, tmax=1e4)      # one C call, thread pool, all CPUs
+rebound.steps_simulations(sims, 100, n_threads=8)            # same with a fixed number of steps
+```
+
+The results are bitwise identical to integrating the simulations one after another (tests in `rebound/tests/test_ensemble.py`). Measured on this 2-vCPU VM: 8 five-planet WHFast runs 1.97x. Plain `threading.Thread(target=sim.integrate, ...)` works too. Python callbacks (heartbeat, additional forces) take the interpreter lock on every call and serialise the threads. Ctrl-C stops all running integrations. In C: `reb_simulations_integrate(sims, N, tmax, N_threads)` and `reb_simulations_steps(...)`.
+
+**Processes:**
+
+Many workloads (MEGNO grids, posterior sampling, stability ensembles) run thousands of
+short simulations with `multiprocessing`. Measured on the benchmark machine (4 workers,
+2,000 three-body WHFast jobs, `integrate(50)` each):
+
+| | fork | forkserver | spawn |
+|---|---|---|---|
+| Pool start-up (incl. importing rebound in workers) | 18 ms | 78 ms | 61 ms |
+| 2,000 jobs, workers build the simulation from parameters | 452 ms | 457 ms | 522 ms |
+| 2,000 jobs, pickled `Simulation` objects passed in | 338 ms | 323 ms | 334 ms |
+
+- Create the pool once and reuse it; start-up costs as much as 100-200 short jobs.
+  `spawn` is the default on macOS and Windows and `forkserver` on Linux from Python 3.14.
+- Pickling a `Simulation` is cheap (about 35 us round trip and 3 KB for three particles),
+  so passing simulations is fine; there is no need to pass initial conditions instead.
+- Use `chunksize` (here 50) in `Pool.map`, so that each task message carries many jobs.
+- For WHFast512 ensembles, `sim.steps_pair()` and the packed-system mode (`N_systems`)
+  give more than extra processes do on one core.
+
+## Tree gravity: accuracy for speed
+
+Measured with `tools/treeacc.c` (force error vs direct summation) and `tools/treeint.c` (position deviation after 100 leapfrog steps vs a direct-summation run), self-gravitating disc (3,000–10,000 bodies) and shearing sheet:
+
+- `sim.tree_group_size = 32` (opt-in group walk): about 3x faster at equal trajectory accuracy. For example, θ = 0.5 with groups gives the accuracy of the default walk at θ = 0.3. At the same θ it is more accurate, so raise θ (about 1.6x) to gain speed. Results differ from the default walk. They are deterministic and saved in binary files.
+- `-DQUADRUPOLE` build: quadrupole moments pay at high accuracy (1.2–2.5x at equal cost). They do not pay at low accuracy, where monopole is as good or better.
+- The b_max opening criterion was tested and rejected: its 99th-percentile force error is smaller, but at equal cost it gives larger trajectory deviations.
 
 ## Files
 

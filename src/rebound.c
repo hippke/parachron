@@ -30,6 +30,7 @@
 #else
 #include <unistd.h>
 #endif
+#include <signal.h>
 #include "rebound.h"
 #include "rebound_internal.h"
 #ifdef OPENMP
@@ -192,6 +193,29 @@ int reb_pop_message(char** messages, char* const buf){
 
 // Handles graceful shutdown. For example triggered by keyboard interrupts.
 volatile sig_atomic_t reb_sigint;
+
+// Number of integrations currently running (in any thread). The interrupt flag is only reset when
+// an integration starts while no other one runs, so that Ctrl-C stops all concurrent integrations
+// and a newly started one cannot clear an interrupt meant for the others.
+static volatile long reb_integrations_running = 0;
+void reb_integration_begin(void){
+#if defined(_MSC_VER) && !defined(__clang__)
+    long before = _InterlockedExchangeAdd(&reb_integrations_running, 1);
+#else
+    long before = __atomic_fetch_add(&reb_integrations_running, 1, __ATOMIC_SEQ_CST);
+#endif
+    if (before == 0){
+        reb_sigint = 0;
+    }
+    signal(SIGINT, reb_sigint_handler);
+}
+void reb_integration_end(void){
+#if defined(_MSC_VER) && !defined(__clang__)
+    _InterlockedExchangeAdd(&reb_integrations_running, -1);
+#else
+    __atomic_fetch_sub(&reb_integrations_running, 1, __ATOMIC_SEQ_CST);
+#endif
+}
 void reb_sigint_handler(int signum) {
     if (signum == SIGINT){
         reb_sigint += 1;

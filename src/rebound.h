@@ -26,6 +26,13 @@
 #ifndef _MAIN_H
 #define _MAIN_H
 
+// A compiler with OpenMP enabled (-fopenmp, e.g. through CFLAGS for a pip install) defines
+// _OPENMP. REBOUND's parallel code paths are selected by OPENMP (set by the Makefile with
+// OPENMP=1); without this, -fopenmp alone would run the serial code inside parallel regions.
+#if defined(_OPENMP) && !defined(OPENMP)
+#define OPENMP
+#endif
+
 #define REB_API     // Public REBOUND API definitions
 
 // Helper macros for padding structures
@@ -275,7 +282,12 @@ struct reb_simulation {
     double* gravity_pair_table;     // Internal use only (OpenMP builds): 1/r^3 factors of all pairs.
     size_t N_allocated_gravity_pair_table;
     struct reb_treecell** tree_root;// Pointer to the temporary tree structure.
+    struct reb_treecell* tree_free_cells; // Internal use only. Cells of deleted trees, reused by the next tree (linked through oct[0]).
     double opening_angle2;          // Opening angle for tree-based gravity calculation. Default 0.25.
+#define REB_HAS_TREE_GROUP_SIZE 1
+    unsigned int tree_group_size;   // Tree gravity: 0 (default): one tree walk per particle. G > 0: one walk per group of
+                                    // up to G nearby particles (opening criterion against the group's bounding sphere),
+                                    // e.g. 32. Faster at equal accuracy, but different (not bitwise identical) results.
     enum REB_STATUS status;         // Current simulation status
     int     exact_finish_time;      // 1 (default): integrate exactly to the time requested and adjust timestep if needed, 0: may overshoot by one timestep
 
@@ -490,6 +502,12 @@ REB_API int reb_simulation_output_screenshot(struct reb_simulation* r, const cha
 
 // Advance simulation by N_steps timesteps.
 REB_API enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_steps);
+// Integrate N independent simulations, sims[k] up to time tmax[k], using N_threads threads
+// (N_threads <= 0: number of CPUs). Same results as calling reb_simulation_integrate for each.
+// Callbacks (heartbeat etc.) must be thread safe. Ctrl-C stops all simulations.
+REB_API void reb_simulations_integrate(struct reb_simulation** sims, size_t N, const double* tmax, int N_threads);
+// Same, but advances each simulation by N_steps steps (as reb_simulation_steps).
+REB_API void reb_simulations_steps(struct reb_simulation** sims, size_t N, size_t N_steps, int N_threads);
 // WHFast512 only: advances two simulations by N_steps time steps each in one interleaved kernel
 // call (about 1.3x faster per simulation with the C AVX-512 kernel and 1.5x with the four-lane
 // AVX2 kernel, see integrator.kernel). The results are bitwise identical to setting

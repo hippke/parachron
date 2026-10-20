@@ -49,6 +49,7 @@ const struct reb_binarydata_field_descriptor reb_binarydata_field_descriptor_lis
     { "", REB_SIZE_T,       "N_active",                     offsetof(struct reb_simulation, N_active), 0, 0, 0},
     { "", REB_INT,          "testparticle_type",            offsetof(struct reb_simulation, testparticle_type), 0, 0, 0},
     { "", REB_DOUBLE,       "opening_angle2",               offsetof(struct reb_simulation, opening_angle2), 0, 0, 0},
+    { "", REB_UINT,         "tree_group_size",              offsetof(struct reb_simulation, tree_group_size), 0, 0, 0},
     { "", REB_INT,          "status",                       offsetof(struct reb_simulation, status), 0, 0, 0},
     { "", REB_INT,          "exact_finish_time",            offsetof(struct reb_simulation, exact_finish_time), 0, 0, 0},
     { "", REB_UINT,         "force_is_velocity_dependent",  offsetof(struct reb_simulation, force_is_velocity_dependent), 0, 0, 0},

@@ -128,6 +128,8 @@ void* reb_integrator_whfast512_create(){
 void reb_integrator_whfast512_free(void* state){
     struct reb_integrator_whfast512_state* whfast512 = state;
     reb_aligned_free(whfast512->data);
+    reb_aligned_free(whfast512->cache);
+    free(whfast512->cache_m);
     free(whfast512);
 }
 
@@ -485,7 +487,7 @@ static void inertial_to_jacobi_posvel(struct reb_simulation* r, struct simd_data
 
 
 // Precalculate various constants and put them in 512 bit vectors.
-static void recalculate_constants(struct reb_simulation* r, unsigned int N_systems){
+static void recalculate_constants_compute(struct reb_simulation* r, unsigned int N_systems){
     struct reb_integrator_whfast512_state* whfast512 = r->integrator.state;
     reb_aligned_free(whfast512->data); // free in case previously allocated
     whfast512->data = reb_aligned_alloc(64,sizeof(struct simd_data));
@@ -594,6 +596,56 @@ static void recalculate_constants(struct reb_simulation* r, unsigned int N_syste
     //    SIMD_DATA_MEMBERS
 #undef X
 
+}
+
+// The constants (masses, matrices, masks, dt, exit distances) only depend on N, N_systems, the
+// masses, dt and the exit distances. Rebuilding them took ~25 % of a single-step call (e.g.
+// output after every step), so the last result is cached and copied if the inputs are the same
+// (bitwise identical to recomputing).
+static int whfast512_cache_valid(const struct reb_simulation* r, const struct reb_integrator_whfast512_state* w, unsigned int N_systems){
+    if (!w->cache || w->cache_N != r->N || w->cache_N_systems != N_systems) return 0;
+    if (w->cache_dt != r->dt || w->cache_exit_max != r->exit_max_distance || w->cache_exit_min != r->exit_min_distance) return 0;
+    for (size_t i=0; i<r->N; i++){
+        if (w->cache_m[i] != r->particles[i].m) return 0;
+    }
+    return 1;
+}
+static void recalculate_constants(struct reb_simulation* r, unsigned int N_systems){
+    struct reb_integrator_whfast512_state* whfast512 = r->integrator.state;
+    if (whfast512_cache_valid(r, whfast512, N_systems)){
+        reb_aligned_free(whfast512->data);
+        whfast512->data = reb_aligned_alloc(64, sizeof(struct simd_data));
+        if (!whfast512->data){
+            reb_simulation_error(r, "WHFast512 was not able to allocate memory.");
+            return;
+        }
+        memcpy(whfast512->data, whfast512->cache, sizeof(struct simd_data));
+        return;
+    }
+    recalculate_constants_compute(r, N_systems);
+    if (!whfast512->data) return;
+    if (!whfast512->cache){
+        whfast512->cache = reb_aligned_alloc(64, sizeof(struct simd_data));
+        if (!whfast512->cache) return;
+    }
+    if (whfast512->cache_N_allocated < r->N){
+        free(whfast512->cache_m);
+        whfast512->cache_m = malloc(sizeof(double)*r->N);
+        whfast512->cache_N_allocated = whfast512->cache_m ? r->N : 0;
+        if (!whfast512->cache_m){
+            whfast512->cache_N = 0;
+            return;
+        }
+    }
+    memcpy(whfast512->cache, whfast512->data, sizeof(struct simd_data));
+    for (size_t i=0; i<r->N; i++){
+        whfast512->cache_m[i] = r->particles[i].m;
+    }
+    whfast512->cache_N = r->N;
+    whfast512->cache_N_systems = N_systems;
+    whfast512->cache_dt = r->dt;
+    whfast512->cache_exit_max = r->exit_max_distance;
+    whfast512->cache_exit_min = r->exit_min_distance;
 }
 
 static int reb_integrator_whfast512_verify_setup(struct reb_simulation* const r){
@@ -756,7 +808,9 @@ void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct
             && enc1 == enc2 && esc1 == esc2){
         switch (w1->kernel_used){
             case REB_WHFAST512_KERNEL_C_AVX512: kernel = reb_whfast512c_full_steps_pair_avx512; break;
-            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : reb_whfast512c_full_steps_pair_avx2; break;
+            // Eight-lane AVX2: one simulation already fills the 16 registers, pairing gains nothing
+            // (0.97-1.00x measured), so the two are stepped separately.
+            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : NULL; break;
             case REB_WHFAST512_KERNEL_C_GENERIC: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic; break;
             default: break; // the assembly kernel has no paired version
         }

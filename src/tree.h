@@ -89,6 +89,9 @@ void reb_tree_add_particle_to_tree(struct reb_simulation* const r, int pt);
  */
 void reb_tree_delete(struct reb_simulation* const r);
 
+// Frees the cells kept for reuse by reb_tree_delete.
+void reb_tree_free_cells(struct reb_simulation* const r);
+
 #ifdef MPI
 /**
  * @brief MPI related function used to calculate gravity from nearby nodes

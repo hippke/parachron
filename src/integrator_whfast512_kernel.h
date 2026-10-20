@@ -323,11 +323,21 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
     const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
     const V zeta = w_fnmadd(beta, R, c->M);
-    V XX = w_mul(c->DT, IR);                       // first order guess
+    // Starting value (item 54): third-order series in dt/r where it is a small correction to the
+    // first-order guess dt/r (|X3 - X1| < 0.1 |X1|, finite), otherwise the first-order guess.
+    // Lanes with the third-order start skip the first Halley step (two Halley steps would be
+    // wasted there). The decision is per lane, so packed systems stay independent.
+    const V X1 = w_mul(c->DT, IR);
+    const V inner3 = w_fnmadd(X1, w_fnmadd(w_set1(1.0/3.0), zeta, w_mul(w_mul(eta, eta), IR)), eta);
+    const V X3 = w_mul(X1, w_fnmadd(w_mul(w_mul(c->HALF, X1), IR), inner3, c->ONE));
+    const K good3 = w_klt(w_abs(w_sub(X3, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
+    V XX = w_sel(good3, X3, X1);
 
     V G0, G1, G2, G3;
     // Two Halley steps with short series.
+    const K need_first = w_knot(good3);
     for (int h=0; h<2; h++){
+        if (h==0 && !w_kany(w_kand(need_first, c->k1))) continue;   // every occupied lane has the third-order start (empty lanes are masked out)
         REB_W512_NAME(w512_stiefel_Gs03_)(h==0 ? 9 : 11, XX, beta, &G0, &G1, &G2, &G3);
         V f = w_fmsub(zeta, G3, c->DT);
         f = w_fmadd(eta, G2, f);
@@ -337,7 +347,8 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
         const V fpp = w_fmadd(G1, zeta, w_mul(eta, G0));
         const V hffpp = w_mul(w_mul(f, fpp), c->HALF);
         const V den = w_fmsub(fp, fp, hffpp);
-        XX = w_sub(XX, w_div(w_mul(f, fp), den));
+        const V Xn = w_sub(XX, w_div(w_mul(f, fp), den));
+        XX = (h==0) ? w_sel(need_first, Xn, XX) : Xn;   // first step only for lanes without the third-order start
     }
 
     // Newton iterations with the accurate series; lanes stop individually.
@@ -651,6 +662,32 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
     return ret;
 }
 
+// Out-of-line Kepler and interaction steps for the paired loop (eight-lane instantiations; the
+// four-lane ones define W_PAIR_INLINE and inline them, see item 51 in PERF_LOG.md) (one copy of the Kepler step and one
+// interaction step per gr/nsys/encounter/escape combination used): the out-of-order core still
+// overlaps the two simulations' chains across the calls, and the paired kernels stay small.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define REB_W512_NOINLINE static __declspec(noinline)
+#else
+#define REB_W512_NOINLINE static __attribute__((noinline, unused))
+#endif
+REB_W512_NOINLINE void REB_W512_NAME(w512_kepler_step_ool_)(const W512_CONSTS* c, W512_STATE* s){
+    REB_W512_NAME(w512_kepler_step_)(c, s);
+}
+#define W512_INTERACTION_OOL(GR, NSYS) \
+REB_W512_NOINLINE void REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), GR##_##NSYS)(const W512_CONSTS* c, W512_STATE* s, const int encounter, const int escape, int* status){ \
+    REB_W512_NAME(w512_interaction_step_)(c, s, GR, NSYS, encounter, escape, status); \
+}
+W512_INTERACTION_OOL(0, 1) W512_INTERACTION_OOL(0, 2) W512_INTERACTION_OOL(0, 4)
+W512_INTERACTION_OOL(1, 1) W512_INTERACTION_OOL(1, 2) W512_INTERACTION_OOL(1, 4)
+#define W512_INTERACTION_OOL_CALL(c, s, st) do { \
+    if (gr==0 && nsys==1) REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 0_1)(c, s, encounter, escape, st); \
+    else if (gr==0 && nsys==2) REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 0_2)(c, s, encounter, escape, st); \
+    else if (gr==0) REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 0_4)(c, s, encounter, escape, st); \
+    else if (nsys==1) REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 1_1)(c, s, encounter, escape, st); \
+    else if (nsys==2) REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 1_2)(c, s, encounter, escape, st); \
+    else REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), 1_4)(c, s, encounter, escape, st); \
+} while (0)
 // Two independent simulations per call (item 49): the steps of A and B alternate in one loop,
 // so the out-of-order core overlaps the two dependency chains (each step is one long chain of
 // dependent operations; the vector units are idle most of the time with a single chain). Each
@@ -668,11 +705,20 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_pair_)(struct simd_data* da, s
     int stopped = 0;
     int ska = skip_a, skb = skip_b;
     while (n < N_steps){
+#ifdef W_PAIR_INLINE
+        // Small (four-lane) instantiations: steps inlined, the compiler interleaves both chains.
         if (!ska) REB_W512_NAME(w512_kepler_step_)(&ca, &sa);
         if (!skb) REB_W512_NAME(w512_kepler_step_)(&cb, &sb);
         ska = 0; skb = 0;
         REB_W512_NAME(w512_interaction_step_)(&ca, &sa, gr, nsys, encounter, escape, &sta);
         REB_W512_NAME(w512_interaction_step_)(&cb, &sb, gr, nsys, encounter, escape, &stb);
+#else
+        if (!ska) REB_W512_NAME(w512_kepler_step_ool_)(&ca, &sa);
+        if (!skb) REB_W512_NAME(w512_kepler_step_ool_)(&cb, &sb);
+        ska = 0; skb = 0;
+        W512_INTERACTION_OOL_CALL(&ca, &sa, &sta);
+        W512_INTERACTION_OOL_CALL(&cb, &sb, &stb);
+#endif
         n++;
         if (*sigint){ sta = 6; stb = 6; stopped = 3; break; }
         if ((encounter || escape) && (sta || stb)){
@@ -697,13 +743,11 @@ REB_W512_TARGET int REB_W512_CAT(reb_whfast512c_full_steps_pair_, REB_W512_SUFFI
 #else
     if (nsys != 2 && nsys != 4) nsys = 1;
 #endif
+    // Specialised on gr and nsys only; the encounter/escape checks are run-time flags here (a
+    // compare per step), which keeps code size and compile time small (24 -> 6 copies).
 #define W512_PAIR_CASE(GR, NSYS) \
-    if (gr==GR && nsys==NSYS){ \
-        if (encounter){ if (escape) return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 1, 1); \
-                        else        return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 1, 0); } \
-        else          { if (escape) return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 0, 1); \
-                        else        return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 0, 0); } \
-    }
+    if (gr==GR && nsys==NSYS) \
+        return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, encounter, escape);
 #ifdef W_ONLY_NSYS2
     W512_PAIR_CASE(0, 2) W512_PAIR_CASE(1, 2)
 #else

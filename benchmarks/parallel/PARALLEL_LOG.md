@@ -351,6 +351,27 @@ Readings:
   work to the first N/64 threads inside it, or set `OMP_WAIT_POLICY=passive`-like behaviour for mixed
   regions; test also `OMP_WAIT_POLICY` on the workstation.
 
+## Merge with `main` (28 commits of the parallel single-core work, up to `870ca53`)
+
+`main` (= `perf-bench`) had moved on from this branch's base `62d6d93a`: TRACE/MERCURIUS broadphase and
+blocked loops, tree gravity group walk and cell reuse, WHFast512 NEON and cheaper restarts, an ensemble API
+(`reb_simulations_integrate`/`steps`, Python `integrate_simulations`, a pthread pool), and `rebound.h`
+mapping `_OPENMP` to `OPENMP` (so `-fopenmp` via CFLAGS selects the parallel code paths, which now are the
+thread-threshold paths of this branch).
+- One textual conflict, MERCURIUS encounter mode: `main` added an exact far-pair skip to the serial loop
+  (`#ifndef OPENMP`), this branch had made serial/parallel a runtime choice. Resolved: the new serial
+  loop is the serial branch of the runtime choice. TRACE merged automatically; checked that `main`'s new
+  serial loops read the encounter flags at `[lower*N + higher]`, the convention the OpenMP branch uses.
+- Interaction fixed in the merge: ensemble workers are threads of their own; in an OpenMP build each would
+  have started full OpenMP teams inside REBOUND's loops (workers × threads on the same cores). Workers now
+  run with one OpenMP thread (`omp_set_num_threads(1)` in the worker thread; the calling thread's setting
+  is restored). Results do not depend on the thread count, so ensemble results are unchanged.
+- Checks: test suites 966 passed (serial build) and 966 passed (OpenMP build, 2 threads) — `main`'s tests
+  plus this branch's; `gravity_check` 189/189 bitwise: merged serial = `main` serial = merged OpenMP at
+  T = 1, 2, 3, 5; pbench signatures (stage mode, whfast_n256, whfast_tp10k) identical in the serial build and
+  at T = 2, 3; an ensemble of 4 stage-mode IAS15 simulations (N = 300) equals running them one by one.
+  No performance runs (to be done on the workstation).
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):

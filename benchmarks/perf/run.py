@@ -245,6 +245,11 @@ def cmd_ab(a):
         results.append(_new_result(src, label, a, cc_version))
     listing = json.loads(sh([exes[1], "--list"]))
     info = {b["name"]: b for b in listing}
+    # A benchmark counts as available only if both builds have it (e.g. a new opt-in feature).
+    info_a = {b["name"]: b for b in json.loads(sh([exes[0], "--list"]))}
+    for b in listing:
+        if b["name"] not in info_a or not info_a[b["name"]]["available"]:
+            info[b["name"]] = dict(b, available=0)
     names = [b["name"] for b in listing]
     if a.only:
         wanted = a.only.split(",")

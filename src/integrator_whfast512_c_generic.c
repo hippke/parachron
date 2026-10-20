@@ -34,8 +34,9 @@
 
 #define REB_W512_TARGET
 
-typedef struct { double v[8]; } V;
-typedef struct { unsigned char b; } K;   // bit i set: lane i true
+#if defined(__aarch64__) && defined(__ARM_NEON) && !defined(REB_W512_NO_NEON)
+#define REB_W512_NEON 1
+#endif
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #define W_INL static __forceinline
@@ -52,6 +53,12 @@ typedef struct { unsigned char b; } K;   // bit i set: lane i true
 #define REB_W512_STEP_FUNC static __attribute__((noinline))
 #endif
 
+#ifdef REB_W512_NEON
+#define W_Q 4
+#include "integrator_whfast512_neon_ops.h"
+#else // plain C
+typedef struct { double v[8]; } V;
+typedef struct { unsigned char b; } K;   // bit i set: lane i true
 #define W_LOOP for (int i=0; i<8; i++)
 W_INL V w_set1(double a){ V r; W_LOOP r.v[i] = a; return r; }
 W_INL V w_zero(void){ return w_set1(0.0); }
@@ -96,6 +103,8 @@ W_INL V w_swap_pairs(V a){ return w_permute(a, w_idx_swap); }
 W_INL V w_perm_b3(V a){ return w_permute(a, w_idx_b3); }
 W_INL V w_perm_b4(V a){ return w_permute(a, w_idx_b4); }
 W_INL V w_perm_b34(V a){ return w_permute(a, w_idx_b34); }
+
+#endif // REB_W512_NEON
 
 #define REB_W512_SUFFIX generic
 #include "integrator_whfast512_kernel.h"

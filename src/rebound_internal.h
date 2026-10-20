@@ -73,6 +73,8 @@ void usleep(__int64 usec);
 #include <signal.h>
 extern volatile sig_atomic_t reb_sigint;  
 void reb_sigint_handler(int signum);
+void reb_integration_begin(void); // Call when an integration starts (resets the interrupt flag if no other integration runs)
+void reb_integration_end(void);
 
 
 // Global constants and variables

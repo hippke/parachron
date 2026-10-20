@@ -53,7 +53,8 @@ struct reb_integrator_trace_state {
     unsigned int tponly_encounter;      // 0 if any encounters are between two massive bodies. 1 if encounters only involve test particles
 
     struct reb_particle* REB_RESTRICT particles_backup; //  Contains coordinates before the entire step
-    struct reb_particle* REB_RESTRICT particles_backup_kepler; //  Contains coordinates before kepler step
+    struct reb_particle* REB_RESTRICT particles_backup_kepler; //  Particles after the kepler step (only for test-particle-only encounters)
+    struct reb_vec6d* REB_RESTRICT particles_backup_kepler_xv; //  Positions and velocities before kepler step
     struct reb_particle* REB_RESTRICT particles_backup_additional_forces; // For additional forces
 
     size_t* encounter_map;              // Map to represent which particles are integrated with BS
@@ -66,6 +67,18 @@ struct reb_integrator_trace_state {
     unsigned int force_accept; // Force accept for irreversible steps: collisions and adding particles
     double* dcrit6;            // Scratch: per-particle critical distance^6 for the default switching function
     size_t N_allocated_dcrit6;
+    // Scratch for the broadphase of the encounter checks (default switching function, many active bodies)
+    double* sap_h;             // Half-width of each particle's swept box
+    double* sap_lo;            // x - half-width
+    size_t* sap_order;         // Particles sorted by sap_lo (kept between calls; nearly sorted)
+    size_t* sap_pairs;         // Candidate pairs (lo, hi)
+    size_t N_allocated_sap;
+    size_t N_sap_order;        // Number of particles in sap_order (0: needs initialisation)
+    size_t N_allocated_sap_pairs;
+    // ks_any[k] = 1 if particle k is in any pair with current_Ks set (rows < N_active, upper triangle).
+    unsigned char* ks_any;
+    size_t N_allocated_ks_any;
+    int ks_any_valid;          // 0: must be recomputed from current_Ks (e.g. after adding/removing particles)
 };
 
 // Built in trace switching functions

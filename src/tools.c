@@ -400,10 +400,40 @@ struct reb_particle reb_particle_com_of_pair(struct reb_particle p1, struct reb_
 }
 
 struct reb_particle reb_simulation_com_range(struct reb_simulation* r, size_t first, size_t last){
-    struct reb_particle com = {0};
+    // Same operations in the same order as repeated reb_particle_com_of_pair(com, p) calls
+    // (bitwise identical), but in local variables instead of copying two particle structs per
+    // particle. WHFast512 calls this twice per synchronisation.
+    double x = 0., y = 0., z = 0., vx = 0., vy = 0., vz = 0., ax = 0., ay = 0., az = 0., m = 0.;
+    const struct reb_particle* const ps = r->particles;
     for(size_t i=first; i<last; i++){
-        com = reb_particle_com_of_pair(com, r->particles[i]);
+        const struct reb_particle p = ps[i];
+        x  = x*m  + p.x*p.m;
+        y  = y*m  + p.y*p.m;
+        z  = z*m  + p.z*p.m;
+        vx = vx*m + p.vx*p.m;
+        vy = vy*m + p.vy*p.m;
+        vz = vz*m + p.vz*p.m;
+        ax = ax*m + p.ax*p.m;
+        ay = ay*m + p.ay*p.m;
+        az = az*m + p.az*p.m;
+        m += p.m;
+        if (m>0.){
+            x  /= m;
+            y  /= m;
+            z  /= m;
+            vx /= m;
+            vy /= m;
+            vz /= m;
+            ax /= m;
+            ay /= m;
+            az /= m;
+        }
     }
+    struct reb_particle com = {0};
+    com.x = x; com.y = y; com.z = z;
+    com.vx = vx; com.vy = vy; com.vz = vz;
+    com.ax = ax; com.ay = ay; com.az = az;
+    com.m = m;
     return com;
 }
 
