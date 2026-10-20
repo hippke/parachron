@@ -448,7 +448,63 @@ void reb_integrator_whfast_kepler_solver(struct reb_particle* const restrict p, 
 // evaluations. Lanes that need the quartic solver or the bisection fallback, and simulations
 // with variational particles, use the scalar solver.
 #define WHFAST_KEPLER_BATCH 4
-static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r){
+
+// stiefel_Gs3 for all lanes of a batch at once (structure-of-arrays). Every lane goes through
+// exactly the operations of stiefel_Gs3 in the same order: the argument reduction count n is
+// determined per lane, the series and the n doubling steps run as fixed-width lane loops (a lane
+// only takes the doubling step k if k < n), which the compiler can vectorise.
+static REB_WHFAST_INLINE void stiefel_Gs3_lanes(double* restrict G0, double* restrict G1, double* restrict G2, double* restrict G3, const double* restrict beta, const double* restrict X){
+    double X2[WHFAST_KEPLER_BATCH], z[WHFAST_KEPLER_BATCH];
+    unsigned int nred[WHFAST_KEPLER_BATCH];
+    unsigned int nred_max = 0;
+    for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+        X2[l] = X[l]*X[l];
+        z[l] = beta[l]*X2[l];
+    }
+    for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+        unsigned int n = 0;
+        while(fabs(z[l])>0.1){
+            z[l] = z[l]/4.;
+            n++;
+        }
+        nred[l] = n;
+        if (n>nred_max) nred_max = n;
+    }
+    double c0[WHFAST_KEPLER_BATCH], c1[WHFAST_KEPLER_BATCH], c2[WHFAST_KEPLER_BATCH], c3[WHFAST_KEPLER_BATCH];
+    for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+        const int nmax = 13;
+        double c_odd  = invfactorial[nmax];
+        double c_even = invfactorial[nmax-1];
+        for(int np=nmax-2;np>=3;np-=2){
+            c_odd  = invfactorial[np]    - z[l] *c_odd;
+            c_even = invfactorial[np-1]  - z[l] *c_even;
+        }
+        c3[l] = c_odd;
+        c2[l] = c_even;
+        c1[l] = invfactorial[1]  - z[l] *c_odd;
+        c0[l] = invfactorial[0]  - z[l] *c_even;
+    }
+    for (unsigned int k=0; k<nred_max; k++){
+        for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+            const double n3 = (c2[l]+c0[l]*c3[l])*0.25;
+            const double n2 = c1[l]*c1[l]*0.5;
+            const double n1 = c0[l]*c1[l];
+            const double n0 = 2.*c0[l]*c0[l]-1.;
+            const int take = k < nred[l];
+            c3[l] = take ? n3 : c3[l];
+            c2[l] = take ? n2 : c2[l];
+            c1[l] = take ? n1 : c1[l];
+            c0[l] = take ? n0 : c0[l];
+        }
+    }
+    for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+        G0[l] = c0[l];
+        G1[l] = c1[l]*X[l];
+        G2[l] = c2[l]*X2[l];
+        G3[l] = c3[l]*(X2[l]*X[l]);
+    }
+}
+static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const* const ps, const double* const mus, const int n, const double dt, const struct reb_simulation* const r, const int lanes){
     if (r && r->N_var_config){
         for (int l=0; l<n; l++){
             reb_integrator_whfast_kepler_solver(ps[l], mus[l], dt, r);
@@ -492,35 +548,91 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
         }
         oldX[l] = X[l];
     }
-    // One Newton step, then choose the solver
-    for (int l=0; l<n; l++){
-        stiefel_Gs3(Gs[l], beta[l], X[l]);
-        const double eta0Gs1zeta0Gs2 = eta0[l]*Gs[l][1] + zeta0[l]*Gs[l][2];
-        ri[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
-        X[l]  = ri[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*Gs[l][2]-zeta0[l]*Gs[l][3]+dt);
-        state[l] = (fastabs(X[l]-oldX[l]) > 0.01*X_per_period[l]) ? 2 : 0;
-        oldX2[l] = nan("");
-    }
-    // Newton's method
-    for (int n_hg=1; n_hg<WHFAST_NMAX_NEWT; n_hg++){
-        int active = 0;
+    if (lanes){
+        // Lane-wise evaluation (see stiefel_Gs3_lanes); pays off when the lanes converge in a
+        // similar number of iterations, e.g. many test particles on similar orbits.
+        // Padding lanes (l >= n) get harmless values; their results are never used.
+        for (int l=n; l<WHFAST_KEPLER_BATCH; l++){
+            beta[l] = 0.; r0[l] = 1.; eta0[l] = 0.; zeta0[l] = 0.; X[l] = 0.; oldX[l] = 0.;
+            X_per_period[l] = nan(""); state[l] = 1;
+        }
+        double g0[WHFAST_KEPLER_BATCH], g1[WHFAST_KEPLER_BATCH], g2[WHFAST_KEPLER_BATCH], g3[WHFAST_KEPLER_BATCH];
+        double Xin[WHFAST_KEPLER_BATCH], Xn[WHFAST_KEPLER_BATCH], rin[WHFAST_KEPLER_BATCH];
+        // One Newton step, then choose the solver
+        stiefel_Gs3_lanes(g0, g1, g2, g3, beta, X);
+        for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+            const double eta0Gs1zeta0Gs2 = eta0[l]*g1[l] + zeta0[l]*g2[l];
+            rin[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
+            Xn[l]  = rin[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*g2[l]-zeta0[l]*g3[l]+dt);
+        }
         for (int l=0; l<n; l++){
-            if (state[l]!=0) continue;
-            oldX2[l] = oldX[l];
-            oldX[l] = X[l];
+            Gs[l][0] = g0[l]; Gs[l][1] = g1[l]; Gs[l][2] = g2[l]; Gs[l][3] = g3[l];
+            ri[l] = rin[l];
+            X[l] = Xn[l];
+            state[l] = (fastabs(X[l]-oldX[l]) > 0.01*X_per_period[l]) ? 2 : 0;
+            oldX2[l] = nan("");
+        }
+        // Newton's method. All lanes are evaluated together; only lanes still iterating take the
+        // results. Lanes that are done get X = 0 as input (their X may be non-finite).
+        for (int n_hg=1; n_hg<WHFAST_NMAX_NEWT; n_hg++){
+            for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+                Xin[l] = state[l]==0 ? X[l] : 0.;
+            }
+            stiefel_Gs3_lanes(g0, g1, g2, g3, beta, Xin);
+            for (int l=0; l<WHFAST_KEPLER_BATCH; l++){
+                const double eta0Gs1zeta0Gs2 = eta0[l]*g1[l] + zeta0[l]*g2[l];
+                rin[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
+                Xn[l]  = rin[l]*(Xin[l]*eta0Gs1zeta0Gs2-eta0[l]*g2[l]-zeta0[l]*g3[l]+dt);
+            }
+            int active = 0;
+            for (int l=0; l<n; l++){
+                if (state[l]!=0) continue;
+                oldX2[l] = oldX[l];
+                oldX[l] = X[l];
+                Gs[l][0] = g0[l]; Gs[l][1] = g1[l]; Gs[l][2] = g2[l]; Gs[l][3] = g3[l];
+                ri[l] = rin[l];
+                X[l] = Xn[l];
+                if (!isnormal(X[l])){
+                    state[l] = 2; // scalar solver will use bisection
+                }else if (X[l]==oldX[l]||X[l]==oldX2[l]){
+                    state[l] = 1;
+                }else{
+                    active = 1;
+                }
+            }
+            if (!active) break;
+        }
+    }else{
+        // One Newton step, then choose the solver
+        for (int l=0; l<n; l++){
             stiefel_Gs3(Gs[l], beta[l], X[l]);
             const double eta0Gs1zeta0Gs2 = eta0[l]*Gs[l][1] + zeta0[l]*Gs[l][2];
             ri[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
             X[l]  = ri[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*Gs[l][2]-zeta0[l]*Gs[l][3]+dt);
-            if (!isnormal(X[l])){
-                state[l] = 2; // scalar solver will use bisection
-            }else if (X[l]==oldX[l]||X[l]==oldX2[l]){
-                state[l] = 1;
-            }else{
-                active = 1;
-            }
+            state[l] = (fastabs(X[l]-oldX[l]) > 0.01*X_per_period[l]) ? 2 : 0;
+            oldX2[l] = nan("");
         }
-        if (!active) break;
+        // Newton's method
+        for (int n_hg=1; n_hg<WHFAST_NMAX_NEWT; n_hg++){
+            int active = 0;
+            for (int l=0; l<n; l++){
+                if (state[l]!=0) continue;
+                oldX2[l] = oldX[l];
+                oldX[l] = X[l];
+                stiefel_Gs3(Gs[l], beta[l], X[l]);
+                const double eta0Gs1zeta0Gs2 = eta0[l]*Gs[l][1] + zeta0[l]*Gs[l][2];
+                ri[l] = 1./(r0[l] + eta0Gs1zeta0Gs2);
+                X[l]  = ri[l]*(X[l]*eta0Gs1zeta0Gs2-eta0[l]*Gs[l][2]-zeta0[l]*Gs[l][3]+dt);
+                if (!isnormal(X[l])){
+                    state[l] = 2; // scalar solver will use bisection
+                }else if (X[l]==oldX[l]||X[l]==oldX2[l]){
+                    state[l] = 1;
+                }else{
+                    active = 1;
+                }
+            }
+            if (!active) break;
+        }
     }
     for (int l=0; l<n; l++){
         if (state[l]!=1){
@@ -563,12 +675,12 @@ void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const partic
         batch_mu[nb] = mu;
         nb++;
         if (nb==WHFAST_KEPLER_BATCH){
-            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r);
+            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r, 1);
             nb = 0;
         }
     }
     if (nb){
-        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r);
+        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, dt, r, 0);
     }
 #else // OPENMP
     for (size_t i=first; i<N; i++){
@@ -772,12 +884,12 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
         batch_mu[nb] = eta*G;
         nb++;
         if (nb==WHFAST_KEPLER_BATCH){
-            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r);
+            reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r, 0);
             nb = 0;
         }
     }
     if (nb){
-        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r);
+        reb_integrator_whfast_kepler_solver_batch(batch_p, batch_mu, nb, _dt, r, 0);
     }
 #else // OPENMP
     switch (coordinates){
