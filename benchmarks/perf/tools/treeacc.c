@@ -1,11 +1,12 @@
 // Tree gravity accuracy vs cost: relative force error against direct summation, time per evaluation.
+// Usage: build librebound with or without -DREB_TREE_BMAX (and -DQUADRUPOLE), then
+//   cc -O2 -I../../../src treeacc.c -L../../../src -lrebound -lm -o treeacc && ./treeacc 0   (disc; 1: sheet)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include "rebound.h"
-extern int reb_tree_mac_bmax;
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 static uint32_t s=11; static double u(void){ s=s*1664525u+1013904223u; return (s+0.5)/4294967296.0; }
 static struct reb_simulation* make(int kind){
@@ -47,8 +48,7 @@ int main(int argc, char** argv){
     r->gravity = REB_GRAVITY_TREE;
     double thetas[] = {0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.2};
     double* err = malloc(sizeof(double)*N);
-    for (int mac=0; mac<2; mac++){
-        reb_tree_mac_bmax = mac;
+    for (int mac=0; mac<1; mac++){
         for (int t=0;t<10;t++){
             r->opening_angle2 = thetas[t]*thetas[t];
             reb_simulation_update_acceleration(r);  // warm up
@@ -64,7 +64,13 @@ int main(int argc, char** argv){
             size_t i0 = (kind==0) ? 1 : 0;
             int cmp(const void* a, const void* b){ double x=*(double*)a, y=*(double*)b; return x<y?-1:x>y; }
             qsort(err+i0, N-i0, sizeof(double), cmp);
-            printf("%s %s theta=%.1f  time=%7.2f ms  err_median=%.2e  err_99=%.2e\n", kind?"sheet":"disc", mac?"bmax ":"width", thetas[t], dt*1e3, err[i0+(N-i0)/2], err[i0+(size_t)(0.99*(N-i0))]);
+            printf("%s %s theta=%.1f  time=%7.2f ms  err_median=%.2e  err_99=%.2e\n", kind?"sheet":"disc",
+#ifdef REB_TREE_BMAX
+                "bmax ",
+#else
+                "width",
+#endif
+                thetas[t], dt*1e3, err[i0+(N-i0)/2], err[i0+(size_t)(0.99*(N-i0))]);
         }
     }
     return 0;
