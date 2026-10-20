@@ -33,6 +33,7 @@
 #include <signal.h>
 #include "rebound.h"
 #include "rebound_internal.h"
+#include "integrator_ias15.h"
 #ifdef OPENMP
 #include <omp.h>
 #endif
@@ -549,7 +550,11 @@ void reb_omp_select_cores(const struct reb_simulation* const r){
         return;
     }
     const size_t N_active = (r->N_active==SIZE_MAX || r->N_active>r->N) ? r->N : r->N_active;
-    reb_omp_all_cores_now = N_active >= REB_OMP_ALL_CORES_N;
+    // IAS15 stage mode hands out many small tasks dynamically, so slower cores already help from
+    // about N = 512 on (i5-13500: n512+stages 5.79x with all cores vs 4.60x on the P-cores).
+    const int stages = r->integrator.callbacks.step==reb_integrator_ias15.step && r->integrator.state
+        && ((const struct reb_integrator_ias15_state*)r->integrator.state)->parallel_stages;
+    reb_omp_all_cores_now = N_active >= (stages ? REB_OMP_ALL_CORES_N_STAGES : REB_OMP_ALL_CORES_N);
 }
 int reb_omp_performance_cores(void){
     static int cached = -1;   // computed once; a race only computes the same value twice

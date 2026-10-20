@@ -206,6 +206,9 @@ static inline int reb_omp_parallel_gravity(const double work){
 #ifndef REB_OMP_ALL_CORES_N
 #define REB_OMP_ALL_CORES_N 1024
 #endif
+#ifndef REB_OMP_ALL_CORES_N_STAGES
+#define REB_OMP_ALL_CORES_N_STAGES 512   // IAS15 with parallel_stages = 1
+#endif
 struct reb_simulation;
 void reb_omp_select_cores(const struct reb_simulation* const r);
 
