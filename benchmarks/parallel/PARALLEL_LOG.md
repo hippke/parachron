@@ -372,6 +372,65 @@ thread-threshold paths of this branch).
   at T = 2, 3; an ensemble of 4 stage-mode IAS15 simulations (N = 300) equals running them one by one.
   No performance runs (to be done on the workstation).
 
+## Iteration 12 — one team size for all regions (item P14, commit `d50ee29`) — kept
+
+Problem (iteration 10): since iteration 7, gravity ran with N/64 threads (4 at N = 256) and the other
+loops of a step (Kepler drifts) with all threads. whfast_n256 fell from 1.93x (T = 4) to 1.27x
+(T >= 8, 6 P-cores), and to 0.04x with all cores at T = 16-20. Likely mechanism: idle pool threads
+are put to sleep and woken again whenever the team size changes, much more expensive when threads
+outnumber cores (libgomp then throttles spinning).
+Change: every parallel region runs with `reb_omp_threads()` threads. The gravity kernels let
+threads 0..nw-1 (nw = the N/64 cap) work, through static ranges (`reb_omp_static_range`) and an
+atomic block counter (`reb_omp_next`, `omp atomic capture`); the others wait at the barriers.
+Results unchanged (gravity_check 189/189, pbench signatures). VM reproduction with 8 threads on
+2 vCPUs (oversubscribed like T = 16-20 with all cores): whfast_n256 0.21 s (old) → 0.175 s (new);
+at T = 2 equal within noise (min 0.187 vs 0.198 s). OpenMP suite 966 passed (T = 3).
+
+## Iteration 13 — efficiency cores for large systems (item P15, commit `e8f5f50`) — kept
+
+The core policy is chosen once per step and per force evaluation (`reb_omp_select_cores(r)` in
+`reb_simulation_step` and `reb_simulation_update_acceleration`, thread-local flag), so the team size
+stays constant within a step (iteration 12): all cores when N_active >= 1024 (`REB_OMP_ALL_CORES_N`),
+otherwise only the performance cores. Basis (iteration 10, i5-13500): all cores won at N = 2048
+(default 4.42x vs 3.85x, stage mode 8.04x vs 5.32x) and lost at N = 512 (default 2.75x vs 3.15x,
+stage 4.53x vs 4.70x) and for whfast_tp10k (N_active = 3). Override: `REBOUND_OMP_CORES=all` or
+`performance` (the old `REBOUND_OMP_ALL_CORES=1` still works); `run_parallel.py --all-cores`,
+`--performance-cores`. Policy unit test: N = 500 → P-cores, N = 2000 → all, N_active = 3 with 10,000
+test particles → P-cores, N_active = 1500 → all; overrides respected. Hybrid detection itself cannot
+run on the VM (tested on fake sysfs trees in iteration 9). Tests 966 passed (serial and OpenMP).
+
+## Iteration 14 — stage mode for test particles, compensated gravity, ghost boxes (item P16, commit `6c3dc56`) — kept
+
+- Basic gravity: row blocks of the active particles (as before) plus row blocks of the test-particle
+  rows (partners: the active particles; back-reaction only for `testparticle_type = 1`), about 8,192
+  pair interactions per block; each task loops over the ghost boxes in the serial order; partial
+  accelerations summed in a fixed task order. `gravity_ignore_terms` via the serial start indices.
+- Compensated gravity: particle chunks, each particle summing its partners with the serial Kahan
+  order (one-sided form of the serial loop), so the stage forces are bitwise equal to the serial
+  compensated gravity at the same positions; no partial sums to combine.
+- The plan depends on N, N_active and the gravity settings only. Previously supported configurations
+  give unchanged results (pbench stage signatures).
+- New `benchmarks/parallel/stage_check.c`: 14 configurations (all-active, test particles type 0/1
+  incl. 3 active + 2,000 test particles, ignored terms, ghost boxes, compensated with and without test
+  particles). Stage mode: same step counts as the default mode, final positions within 0–9e-15
+  (relative), and bitwise identical between the serial build and the OpenMP build at T = 1, 2, 3.
+  4 new Python tests. New pbench case `ias15_tp2000` (20 planets + 2,000 test particles).
+- VM, 2 threads, ias15_tp2000 vs serial default IAS15: default 1.45x, stage mode **1.7x**.
+- Still unsupported (flag ignored): additional forces (user callbacks read `r->particles`),
+  variational particles, particle maps, MEGNO.
+
+## Iteration 15 — stage mode beyond 7 cores: up to 64 blocks per stage (item P13, commit `61a3894`) — kept
+
+Stage parallelism × row-block parallelism already existed since iteration 8 (7 × K tasks, K ≤ 16);
+the i5-13500 reached 8.04x at T = 20 (N = 2048). Profile of stage mode (callgrind, one thread):
+stage force kernel 86.6 % (N = 512) / 91.4 % (N = 2048), force at the step start 4.8 / 5.1 %
+(parallel), prediction and reduction 3.5 / 1.3 % (parallel), IAS15's serial loops ~1 % / < 1 %: no
+Amdahl limit below ~100 threads. The limit is granularity: 112 tasks are thin for many cores or mixed
+core speeds. Change: K ≈ N/64 up to 64 (448 tasks per iteration), scratch ≤ 64 MB. Results
+independent of T (serial and T = 1, 2, 3, 5 identical), round-off change for N ≥ 1024 in stage mode.
+VM A/B (N = 2048, K 16 → 32): neutral at T = 1, 2 (min 0.542 vs 0.552 s, 0.288 vs 0.295 s). The gain
+can only be measured on many cores. Tests 970 passed (serial and OpenMP).
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
@@ -409,10 +468,10 @@ Priority = expected speedup at T > 1 vs the serial build × breadth ÷ effort/ri
 | L1 | IAS15 stage-parallel (Jacobi over the 7 substeps, PIRK) | ias15_* N ≳ 100 | up to 7x on the force part | medium | **done (it. 6): 1.6–2.1x on 2 cores, opt-in `parallel_stages`** |
 | P11 | Hybrid CPUs: balance stage tasks; P-cores only | stage mode, gravity at T > 6 | no loss beyond 6 threads | low | **done (it. 8, 9); measured in it. 10** |
 | P12 | Lower the gravity threshold after measurements on real CPUs | ias15_n512 at T = 2, whfast_n256 | 1.5x+ where now 1.0x | trivial | **done (it. 7)** |
-| P13 | Stage mode × particle-parallel gravity (nested) for > 7 cores | ias15_n* | > 7x | medium | open |
-| P14 | One team size per step (gravity on a subset of threads inside the full team), or a persistent parallel region per step (P7) | whfast_n256 T ≥ 8 (1.27x → ≥ 1.9x), all mixed-size cases | removes the 0.04x pathology | low–medium | open (high priority) |
-| P15 | Use efficiency cores where tasks are many and dynamically scheduled (stage mode with K ≥ 8; test-particle loops) | ias15_n2048+stages | 5.7x → 8.5x | low | open |
-| P16 | Stage mode for more configurations: test particles, compensated gravity, ghost boxes | IAS15 users with test particles | same speedups | medium | open |
+| P13 | Stage mode × particle-parallel gravity (nested) for > 7 cores | ias15_n* | > 7x | medium | **done (it. 8, 15): 8.0x at T = 20 measured (it. 8 version); up to 448 tasks now** |
+| P14 | One team size per step (gravity on a subset of threads inside the full team), or a persistent parallel region per step (P7) | whfast_n256 T ≥ 8 (1.27x → ≥ 1.9x), all mixed-size cases | removes the 0.04x pathology | low–medium | **done (it. 12)**; to be measured on the workstation |
+| P15 | Use efficiency cores where tasks are many and dynamically scheduled (stage mode with K ≥ 8; test-particle loops) | ias15_n2048+stages | 5.7x → 8.5x | low | **done (it. 13)**; to be measured |
+| P16 | Stage mode for more configurations: test particles, compensated gravity, ghost boxes | IAS15 users with test particles | same speedups | medium | **done (it. 14)** |
 | P17 | Speculative overlap of consecutive IAS15 steps (start step n+1 from the predicted b while step n converges) | IAS15 N ≲ 100 | 1.2–1.5x on top of stage mode (estimate) | high (research) | open |
 | P18 | Ensembles: run independent simulations on separate cores (Python helper), WHFast512 several systems per vector | small systems (Solar System, WHFast512) | ~linear in cores | low | open (the way to use cores for N ≲ 10) |
 
