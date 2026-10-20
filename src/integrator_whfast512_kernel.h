@@ -9,9 +9,10 @@
  *          operations in the same order, and the same operands in each fused multiply-add, so that
  *          results agree with the assembly to round-off. Differences to the assembly:
  *          - In the interaction step, 1/sqrt(r^2) (planet-planet forces, Jacobi term, central body and
- *            GR terms) is computed by w512_rsqrt(): an integer bit-trick seed, three Newton iterations
- *            and one fused-multiply-add correction (at most 1 ulp error, mean 0.14 ulp; more accurate
- *            than sqrt followed by a division). The assembly uses vrsqrt14pd plus Newton iterations
+ *            GR terms) is computed by w512_rsqrt(): an integer bit-trick seed, Newton iterations and
+ *            one fused-multiply-add correction: at most 1 ulp error for the central-body and Jacobi
+ *            terms, ~2e-11 relative error for the planet-planet forces (a function of r only, so
+ *            the forces stay conservative). The assembly uses vrsqrt14pd plus Newton iterations
  *            (vrsqrt14pd does not exist for AVX2, and its result is not specified bit for bit), and
  *            square roots and divisions for the other terms. Distance checks for encounters and
  *            escapes compare squared distances.
@@ -414,18 +415,26 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
 ///////////////////////////////////////////////////////////////////////////////
 // Interaction step
 
-// 1/sqrt(a) for a > 0 (at most 1 ulp error). Deterministic: the same operations on every
-// instruction set, so all C kernels agree bit for bit.
-REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
+// 1/sqrt(a) for a > 0. Bit-trick seed (relative error 3.4e-2), Newton iterations (1.7e-3, 4.4e-6,
+// 2.9e-11) and a quadratically convergent FMA correction. full=1: three iterations, at most 1 ulp
+// error (used for the central-body and Jacobi terms, which are full-strength Kepler forces that
+// nearly cancel). full=0: two iterations, relative error ~2e-11 (used for the planet-planet
+// forces, i.e. a ~2e-11 change of perturbations that are already ~1e-3 of the total force). The
+// result is a function of a only, so all forces stay central and conservative. Deterministic: the
+// same operations on every instruction set, so all C kernels agree bit for bit.
+REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a, const int full){
     const V th = w_set1(1.5);
     V y = w_rsqrt_seed(a);
     y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
     y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
-    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    if (full){
+        y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    }
     const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
     return w_fmadd(w_mul(w_set1(0.5), y), e, y);
 }
-#define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)))
+#define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)), 1)
+#define W512_RSQRT_PAIR(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)), 0)
 
 // 8x8 matrix (stored transposed: element (i,k) at mat[i+8k]) times three vectors (mat8_mul3).
 REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a, const V b, const V cc, V* oa, V* ob, V* oc){
@@ -461,7 +470,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a
 // multiplier/r^3 for separations (d0, d1, d2); with_mult=0 means multiplier 1.
 REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, const V d0, const V d1, const V d2, const int with_mult, const V mult, const int encounter, int* status){
     const V r2 = w_fmadd(d2, d2, w_fmadd(d1, d1, w_mul(d0, d0)));
-    const V y = W512_RSQRT(r2);
+    const V y = W512_RSQRT_PAIR(r2);
     if (encounter){
         if (w_kany(w_kand(w_kgt(y, w_load(c->data->exit_min_distance_r.lanes)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
     }
