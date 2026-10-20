@@ -42,6 +42,7 @@
 //#define GENERATE_CONSTANTS
 #include "particle.h"
 #include "gravity.h"
+#include "boundary.h"
 #include "tools.h"
 #include "integrator_ias15.h"
 #include "binarydata.h"
@@ -112,10 +113,12 @@ const struct reb_binarydata_field_descriptor reb_integrator_ias15_field_descript
         "the substeps, as in the parallel iterated Runge-Kutta methods of van der Houwen & Sommeijer), "
         "instead of one substep after another. In OpenMP builds the seven force evaluations run on "
         "different threads: with N of about 100 or more particles this makes IAS15 faster on several "
-        "cores (up to 7 threads are used). The converged solution is the same, but the round-off "
-        "differs from the default mode. Results do not depend on the number of threads or on whether "
-        "the library was built with OpenMP. Used only with gravity='basic', all particles active, no "
-        "additional forces, no variational particles and no ghost boxes; otherwise ignored. Default: 0.",
+        "cores (each force evaluation is also split into row blocks, so more than 7 threads can be "
+        "used for large N). The converged solution is the same, but the round-off differs from the "
+        "default mode. Results do not depend on the number of threads or on whether the library was "
+        "built with OpenMP. Works with basic and compensated gravity, test particles, ghost boxes and "
+        "gravity_ignore_terms; ignored with additional forces, variational particles or a particle "
+        "map. Default: 0.",
         REB_UINT,         "parallel_stages",     offsetof(struct reb_integrator_ias15_state, parallel_stages), 0, 0, 0},
     { "", REB_UINT64,       "iterations_max_exceeded", offsetof(struct reb_integrator_ias15_state, iterations_max_exceeded), 0, 0, 0},
     { "", REB_POINTER,      "at",                  offsetof(struct reb_integrator_ias15_state, at), offsetof(struct reb_integrator_ias15_state, N_allocated), sizeof(double), 0},
@@ -317,27 +320,69 @@ static void reb_integrator_ias15_alloc(struct reb_simulation* r, struct reb_inte
 // of van der Houwen & Sommeijer), instead of one after another with the predictor updated after
 // every substep (Gauss-Seidel). The seven force evaluations are independent and run on different
 // threads, each with the serial gravity loop. The converged result is the same collocation
-// solution, but the iterates and round-off differ from the serial IAS15. Supported: basic gravity,
-// all particles active, no ghost boxes, no additional forces, no variational particles, no map.
+// solution, but the iterates and round-off differ from the serial IAS15. Supported: basic and
+// compensated gravity, test particles (both types), ghost boxes, gravity_ignore_terms; not with
+// additional forces, variational particles or a particle map (the flag is then ignored).
 // Without OpenMP the seven evaluations simply run one after another, with identical results.
 static int reb_integrator_ias15_stage_parallel_possible(const struct reb_simulation* const r, const struct reb_integrator_ias15_state* const ias15, const size_t N){
     if (!ias15->parallel_stages) return 0;
-    return r->gravity==REB_GRAVITY_BASIC && !r->additional_forces && !r->map && r->N_var==0
-        && !r->calculate_megno && (r->N_active==SIZE_MAX || r->N_active>=N)
-        && r->N_ghost_x==0 && r->N_ghost_y==0 && r->N_ghost_z==0
-        && r->gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_NONE && N>=2;
+    return (r->gravity==REB_GRAVITY_BASIC || r->gravity==REB_GRAVITY_COMPENSATED)
+        && !r->additional_forces && !r->map && r->N_var==0 && !r->calculate_megno && N>=2;
 }
-// Row blocks per stage in the stage-parallel mode: a function of N only (never of the thread
-// count), so that results do not depend on the number of threads. 7*K tasks of about equal cost
-// keep cores of different speed (e.g. performance and efficiency cores) busy. Scratch memory:
-// 21*K*N doubles, at most 2^22 (32 MB).
+// Task plan of the stage-parallel mode: a function of N, N_active and the gravity settings only
+// (never of the thread count), so that results do not depend on the number of threads. 7 stages
+// times K tasks of about equal cost keep cores of different speed busy. Scratch memory for the
+// basic-gravity blocks: 21*K*N doubles, at most 2^22 (32 MB).
 #define REB_IAS15_STAGE_ROWS_PER_BLOCK 64
 #define REB_IAS15_STAGE_MAX_BLOCKS 16
-static size_t reb_integrator_ias15_stage_blocks(const size_t N){
-    size_t K = N/REB_IAS15_STAGE_ROWS_PER_BLOCK;
-    if (K>REB_IAS15_STAGE_MAX_BLOCKS) K = REB_IAS15_STAGE_MAX_BLOCKS;
-    while (K>1 && 21*K*N > ((size_t)1<<22)) K--;
-    return K<1 ? 1 : K;
+#define REB_IAS15_STAGE_TP_PAIRS_PER_BLOCK 8192
+struct reb_ias15_stage_plan {
+    int compensated;            // compensated gravity: one-sided particle chunks, no reduction
+    size_t Na;                  // active particles
+    size_t Ka;                  // row blocks of active particles (basic) / particle chunks (compensated)
+    size_t Kt;                  // row blocks of test particles (basic)
+    size_t rb[REB_IAS15_STAGE_MAX_BLOCKS+1];   // active block boundaries
+    size_t tr[REB_IAS15_STAGE_MAX_BLOCKS+1];   // test-particle block boundaries (absolute indices)
+    int fused;                  // Ka == 1 and Kt == 0: one task per stage, written in place
+};
+static void reb_integrator_ias15_stage_plan(const struct reb_simulation* const r, const size_t N, struct reb_ias15_stage_plan* const pl){
+    const size_t Na = (r->N_active==SIZE_MAX || r->N_active>N) ? N : r->N_active;
+    const size_t Nt = N-Na;
+    pl->Na = Na;
+    pl->compensated = r->gravity==REB_GRAVITY_COMPENSATED;
+    if (pl->compensated){
+        size_t C = N/REB_IAS15_STAGE_ROWS_PER_BLOCK;
+        if (C>REB_IAS15_STAGE_MAX_BLOCKS) C = REB_IAS15_STAGE_MAX_BLOCKS;
+        if (C<1) C = 1;
+        pl->Ka = C; pl->Kt = 0;
+        for (size_t q=0; q<=C; q++) pl->rb[q] = q*N/C;
+        pl->fused = C==1;
+        return;
+    }
+    size_t Ka = Na/REB_IAS15_STAGE_ROWS_PER_BLOCK;
+    if (Ka>REB_IAS15_STAGE_MAX_BLOCKS) Ka = REB_IAS15_STAGE_MAX_BLOCKS;
+    if (Ka<1) Ka = 1;
+    size_t Kt = 0;
+    if (Nt){
+        Kt = (Nt*Na)/REB_IAS15_STAGE_TP_PAIRS_PER_BLOCK;
+        if (Kt>REB_IAS15_STAGE_MAX_BLOCKS) Kt = REB_IAS15_STAGE_MAX_BLOCKS;
+        if (Kt>Nt) Kt = Nt;
+        if (Kt<1) Kt = 1;
+    }
+    while (Ka+Kt>1 && 21*(Ka+Kt)*N > ((size_t)1<<22)){
+        if (Kt>1) Kt--; else if (Ka>1) Ka--; else break;
+    }
+    pl->Ka = Ka; pl->Kt = Kt;
+    for (size_t q=0; q<=Ka; q++){
+        pl->rb[q] = q==Ka ? Na : (size_t)((double)Na*sqrt((double)q/(double)Ka));
+    }
+    for (size_t q=1; q<=Ka; q++){ if (pl->rb[q]<pl->rb[q-1]+1) pl->rb[q] = pl->rb[q-1]+1; }
+    pl->rb[Ka] = Na;
+    for (size_t u=0; u<=Kt; u++) pl->tr[u] = Na + u*Nt/(Kt?Kt:1);
+    pl->fused = Ka==1 && Kt==0;
+}
+static size_t reb_integrator_ias15_stage_scratch(const struct reb_ias15_stage_plan* const pl, const size_t N){
+    return (pl->compensated || pl->fused) ? 0 : 21*(pl->Ka+pl->Kt)*N;
 }
 // Predicted positions of substep n into buf + (n-1)*6N (x, y, z): IAS15's predictor.
 static inline void reb_integrator_ias15_stage_predict(const struct reb_simulation* const r, const size_t N, const size_t n, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf){
@@ -355,32 +400,56 @@ static inline void reb_integrator_ias15_stage_predict(const struct reb_simulatio
     }
 }
 // Forces of substeps n = 1..7 into buf: stage n uses buf + (n-1)*6N (x, y, z, ax, ay, az).
-// With K > 1 row blocks, task (n, b) computes rows [rb_b, rb_b+1) of the half-pair loop into its
-// own arrays tb + ((n-1)*K+b)*3N; the acceleration of particle k is then the sum over blocks
-// b >= block(k) in ascending order (blocks before k's own do not touch k).
-static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const r, const size_t N, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf, const double* const m, double* const tb, const size_t K){
+// Basic gravity, several tasks: task (n, q) computes row block q into its own arrays
+// tb + ((n-1)*K+q)*3N (active rows with partner terms; test-particle rows with partner terms only
+// for testparticle_type 1), each over all ghost boxes in the serial order; the acceleration of
+// particle k is then the sum over the tasks that touch k, in ascending task order.
+// Compensated gravity: task (n, q) computes particle chunk q directly (one-sided, no reduction).
+static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const r, const size_t N, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf, const double* const m, double* const tb, const struct reb_ias15_stage_plan* const pl){
     const double G = r->G;
     const double softening = r->softening;
-    size_t rb[REB_IAS15_STAGE_MAX_BLOCKS+1];
-    for (size_t q=0; q<=K; q++){
-        rb[q] = q==K ? N : (size_t)((double)N*sqrt((double)q/(double)K));
+    const size_t Na = pl->Na;
+    const int tptype = r->testparticle_type;
+    const unsigned int ign = r->gravity_ignore_terms;
+    const size_t starti = (ign==REB_GRAVITY_IGNORE_TERMS_NONE)?1:2;
+    const size_t startj = (ign==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0)?1:0;
+    // Ghost boxes in the serial order (basic gravity only; compensated gravity has none).
+    const int ngx = r->N_ghost_x, ngy = r->N_ghost_y, ngz = r->N_ghost_z;
+    const size_t ngb = pl->compensated ? 1 : (size_t)(2*ngx+1)*(size_t)(2*ngy+1)*(size_t)(2*ngz+1);
+    struct reb_vec6d gb_buf[27];
+    struct reb_vec6d* const gbs = ngb<=27 ? gb_buf : malloc(sizeof(struct reb_vec6d)*ngb);
+    {
+        size_t c = 0;
+        if (pl->compensated){
+            gbs[0] = (struct reb_vec6d){0};
+        }else{
+            for (int gx=-ngx; gx<=ngx; gx++) for (int gy=-ngy; gy<=ngy; gy++) for (int gz=-ngz; gz<=ngz; gz++){
+                gbs[c++] = reb_boundary_get_ghostbox((struct reb_simulation*)r, gx, gy, gz);
+            }
+        }
     }
-    for (size_t q=1; q<=K; q++){ if (rb[q]<rb[q-1]+1) rb[q] = rb[q-1]+1; }
-    rb[K] = N;
-    const size_t RCHUNK = 256;
-    const size_t nrchunk = (N+RCHUNK-1)/RCHUNK;
-    if (K==1){
-        // One block per stage: prediction and force evaluation fused into one task per stage.
+    const size_t K = pl->Ka + pl->Kt;
+    if (pl->fused){
+        // One task per stage: prediction and force evaluation fused, written in place.
 #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel()) num_threads(reb_omp_threads())
         for (size_t n=1; n<8; n++){
             reb_integrator_ias15_stage_predict(r, N, n, b, x0, v0, a0, csx, buf);
             double* const x = buf + (n-1)*6*N;
             double* const ax = x + 3*N;
-            for (size_t i=0; i<N; i++){ ax[i] = 0.; ax[N+i] = 0.; ax[2*N+i] = 0.; }
-            reb_gravity_basic_rows_arrays(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, 0, N, G, softening);
+            if (pl->compensated){
+                reb_gravity_compensated_range_arrays(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, 0, N, N, Na, tptype, ign, G, softening);
+            }else{
+                for (size_t i=0; i<N; i++){ ax[i] = 0.; ax[N+i] = 0.; ax[2*N+i] = 0.; }
+                for (size_t g=0; g<ngb; g++){
+                    reb_gravity_basic_rows_arrays_ex(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, 0, Na, starti, startj, SIZE_MAX, 1, gbs[g], G, softening);
+                }
+            }
         }
+        if (gbs!=gb_buf) free(gbs);
         return;
     }
+    const size_t RCHUNK = 256;
+    const size_t nrchunk = (N+RCHUNK-1)/RCHUNK;
 #pragma omp parallel if(!omp_in_parallel()) num_threads(reb_omp_threads())
     {
 #pragma omp for schedule(static)
@@ -392,14 +461,31 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
         const size_t n = 1 + t/K;
         const size_t q = t%K;
         const double* const x = buf + (n-1)*6*N;
+        if (pl->compensated){
+            double* const ax = buf + (n-1)*6*N + 3*N;
+            reb_gravity_compensated_range_arrays(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, pl->rb[q], pl->rb[q+1], N, Na, tptype, ign, G, softening);
+            continue;
+        }
         double* const ax = tb + t*3*N;
         double* const ay = ax + N;
         double* const az = ay + N;
-        const size_t hi = rb[q+1];
-        for (size_t i=0; i<hi; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
-        reb_gravity_basic_rows_arrays(x, x+N, x+2*N, m, ax, ay, az, rb[q], hi, G, softening);
+        if (q<pl->Ka){
+            const size_t hi = pl->rb[q+1];
+            for (size_t i=0; i<hi; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
+            for (size_t g=0; g<ngb; g++){
+                reb_gravity_basic_rows_arrays_ex(x, x+N, x+2*N, m, ax, ay, az, pl->rb[q], hi, starti, startj, SIZE_MAX, 1, gbs[g], G, softening);
+            }
+        }else{
+            const size_t u = q-pl->Ka;
+            const size_t r0 = pl->tr[u], r1 = pl->tr[u+1];
+            for (size_t i=r0; i<r1; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
+            if (tptype){ for (size_t i=0; i<Na; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; } }
+            for (size_t g=0; g<ngb; g++){
+                reb_gravity_basic_rows_arrays_ex(x, x+N, x+2*N, m, ax, ay, az, r0, r1, starti, startj, Na, tptype, gbs[g], G, softening);
+            }
+        }
     }
-    {
+    if (!pl->compensated){
 #pragma omp for schedule(static)
         for (size_t t=0; t<7*nrchunk; t++){
             const size_t n = 1 + t/nrchunk;
@@ -409,16 +495,28 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
             const double* const tbn = tb + (n-1)*K*3*N;
             size_t q0 = 0;
             for (size_t k=k0; k<k1; k++){
-                while (rb[q0+1]<=k) q0++;          // block of particle k
-                for (int c=0; c<3; c++){
-                    double a = tbn[q0*3*N + c*N + k];
-                    for (size_t q=q0+1; q<K; q++) a += tbn[q*3*N + c*N + k];
-                    sa[c*N + k] = a;
+                if (k<Na){
+                    while (pl->rb[q0+1]<=k) q0++;          // block of particle k
+                    for (int c=0; c<3; c++){
+                        double a = tbn[q0*3*N + c*N + k];
+                        for (size_t q=q0+1; q<pl->Ka; q++) a += tbn[q*3*N + c*N + k];
+                        if (tptype){
+                            for (size_t q=pl->Ka; q<K; q++) a += tbn[q*3*N + c*N + k];
+                        }
+                        sa[c*N + k] = a;
+                    }
+                }else{
+                    size_t u = 0;
+                    while (pl->tr[u+1]<=k) u++;           // test-particle block of k
+                    for (int c=0; c<3; c++){
+                        sa[c*N + k] = tbn[(pl->Ka+u)*3*N + c*N + k];
+                    }
                 }
             }
         }
     }
     }
+    if (gbs!=gb_buf) free(gbs);
 }
 
 REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15) {
@@ -442,10 +540,10 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
     const int stage_parallel = reb_integrator_ias15_stage_parallel_possible(r, ias15, N);
     double* stage_buf = NULL;
     double* stage_m = NULL;
-    size_t stage_K = 1;
+    struct reb_ias15_stage_plan stage_plan;
     if (stage_parallel){
-        stage_K = reb_integrator_ias15_stage_blocks(N);
-        const size_t need = 43*N + (stage_K>1 ? 21*stage_K*N : 0);
+        reb_integrator_ias15_stage_plan(r, N, &stage_plan);
+        const size_t need = 43*N + reb_integrator_ias15_stage_scratch(&stage_plan, N);
         if (ias15->N_allocated_stage_buf<need){
             free(ias15->stage_buf);
             ias15->stage_buf = malloc(sizeof(double)*need);
@@ -565,7 +663,7 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
         integrator_megno_thisdt = integrator_megno_thisdt_init;
 
         if (stage_parallel){
-            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m, stage_buf + 43*N, stage_K);
+            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m, stage_buf + 43*N, &stage_plan);
         }
         for(size_t n=1;n<8;n++) {                          // Loop over interval using Gauss-Radau spacings
             r->t = t_beginning + r->dt * h[n];

@@ -133,6 +133,14 @@ static struct work make_case(const char* name, double scale){
         add_disc(r, N, 1e-7, 1., 3., 31);
         r->dt = 1e-3;
         w.t_end = (N==128 ? 10. : (N==512 ? 0.5 : 0.04))*scale;
+    }else if (!strcmp(name, "ias15_tp2000")){  // 20 massive bodies + 2,000 test particles (type 0)
+        reb_simulation_set_integrator(r, "ias15");
+        add_disc(r, 20, 1e-6, 1., 3., 51);
+        rng_seed(52);
+        const struct reb_particle star = r->particles[0];
+        for (int i=0; i<2000; i++) reb_simulation_add_fmt(r, "primary a e inc l", star, rng_uniform(1., 3.), rng_uniform(0, 0.05), rng_uniform(0, 0.02), rng_uniform(0, 2*M_PI));
+        r->N_active = 20;
+        r->dt = 1e-3; w.t_end = 2.*scale;
     }else if (!strcmp(name, "whfast_ss")){      // 8 planets: must not get slower
         reb_simulation_set_integrator(r, "whfast");
         r->G = 1.;                        // units as in benchmarks/perf (G=1, AU, Msun)
@@ -161,7 +169,7 @@ static struct work make_case(const char* name, double scale){
 
 int main(int argc, char** argv){
     if (argc<2){
-        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
+        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 ias15_tp2000 whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
         return 1;
     }
     const double scale = argc>2 ? atof(argv[2]) : 1.;

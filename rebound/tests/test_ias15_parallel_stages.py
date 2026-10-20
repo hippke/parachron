@@ -44,6 +44,54 @@ class TestIAS15ParallelStages(unittest.TestCase):
             self.assertEqual(p1.x, p2.x)
             self.assertEqual(p1.vz, p2.vz)
 
+    def _compare(self, setup, tmax, tol=1e-11):
+        a = rebound.Simulation(); b = rebound.Simulation()
+        for sim, ps in ((a, 0), (b, 1)):
+            random.seed(11)
+            sim.integrator = "ias15"
+            sim.integrator.parallel_stages = ps
+            setup(sim)
+            sim.integrate(tmax)
+        self.assertEqual(a.steps_done, b.steps_done)
+        for pa, pb in zip(a.particles, b.particles):
+            self.assertAlmostEqual(pa.x, pb.x, delta=tol)
+            self.assertAlmostEqual(pa.vy, pb.vy, delta=tol)
+
+    def _planets_and_testparticles(self, sim, n_active, n_tp, tptype):
+        sim.testparticle_hidewarnings = 1
+        sim.add(m=1.)
+        for _ in range(n_active-1):
+            sim.add(m=1e-6, a=1.+random.random(), e=0.05*random.random(), f=6.28*random.random(), primary=sim.particles[0])
+        for _ in range(n_tp):
+            sim.add(m=1e-10, a=1.+2.*random.random(), e=0.05*random.random(), f=6.28*random.random(), primary=sim.particles[0])
+        sim.N_active = n_active
+        sim.testparticle_type = tptype
+        sim.move_to_com()
+
+    def test_testparticles_type0(self):
+        self._compare(lambda s: self._planets_and_testparticles(s, 20, 150, 0), 3.)
+
+    def test_testparticles_type1(self):
+        self._compare(lambda s: self._planets_and_testparticles(s, 20, 150, 1), 3.)
+
+    def test_compensated_gravity(self):
+        def setup(s):
+            s.gravity = "compensated"
+            self._planets_and_testparticles(s, 30, 60, 1)
+        self._compare(setup, 3.)
+
+    def test_ghost_boxes(self):
+        def setup(s):
+            s.root_size = 1.
+            s.N_root_x = 1; s.N_root_y = 1; s.N_root_z = 1
+            s.boundary = "periodic"
+            s.N_ghost_x = 1; s.N_ghost_y = 1; s.N_ghost_z = 0
+            s.softening = 0.02
+            for _ in range(80):
+                s.add(m=1e-4*(0.5+random.random()), x=random.random()-0.5, y=random.random()-0.5, z=0.05*(random.random()-0.5),
+                      vx=0.01*(random.random()-0.5), vy=0.01*(random.random()-0.5))
+        self._compare(setup, 0.5, tol=1e-10)
+
     def test_unsupported_configuration_falls_back(self):
         # additional forces: the flag is ignored, results equal the default mode bitwise
         def drag(simp):

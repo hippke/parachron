@@ -384,8 +384,10 @@ static inline __attribute__((always_inline)) void reb_gravity_rinv3(const size_t
         f[l] = G/(_r*_r*_r);
     }
 }
-// The serial half-pair loop for rows i in [ifirst, i1), partners j in [jlo, i).
-static inline __attribute__((always_inline)) void reb_gravity_rows(const struct reb_gravity_soa p, const size_t ifirst, const size_t i1, const size_t jlo, const struct reb_vec6d gb, const double G, const double softening){
+// The serial half-pair loop for rows i in [ifirst, i1), partners j in [jlo, min(i, jhi)); the
+// partner terms (to a_j) are added only if partner is set (test-particle rows of type 0 do not
+// act on their partners).
+static inline __attribute__((always_inline)) void reb_gravity_rows_ex(const struct reb_gravity_soa p, const size_t ifirst, const size_t i1, const size_t jlo, const size_t jhi, const int partner, const struct reb_vec6d gb, const double G, const double softening){
     double* const REB_RESTRICT pax = p.ax;
     double* const REB_RESTRICT pay = p.ay;
     double* const REB_RESTRICT paz = p.az;
@@ -396,8 +398,9 @@ static inline __attribute__((always_inline)) void reb_gravity_rows(const struct 
         const double zi = gb.z+p.z[i];
         const double mi = p.m[i];
         double axi = pax[i], ayi = pay[i], azi = paz[i];
-        for (size_t b0=jlo; b0<i; b0+=REB_GRAVITY_BLOCK){
-            const size_t nb = (i-b0) < REB_GRAVITY_BLOCK ? (i-b0) : REB_GRAVITY_BLOCK;
+        const size_t jend = i<jhi ? i : jhi;
+        for (size_t b0=jlo; b0<jend; b0+=REB_GRAVITY_BLOCK){
+            const size_t nb = (jend-b0) < REB_GRAVITY_BLOCK ? (jend-b0) : REB_GRAVITY_BLOCK;
             for (size_t l=0; l<nb; l++){
                 bdx[l] = xi - p.x[b0+l];
                 bdy[l] = yi - p.y[b0+l];
@@ -411,13 +414,18 @@ static inline __attribute__((always_inline)) void reb_gravity_rows(const struct 
                 axi += prefactj*bdx[l];
                 ayi += prefactj*bdy[l];
                 azi += prefactj*bdz[l];
-                pax[b0+l] += prefacti*bdx[l];
-                pay[b0+l] += prefacti*bdy[l];
-                paz[b0+l] += prefacti*bdz[l];
+                if (partner){
+                    pax[b0+l] += prefacti*bdx[l];
+                    pay[b0+l] += prefacti*bdy[l];
+                    paz[b0+l] += prefacti*bdz[l];
+                }
             }
         }
         pax[i] = axi; pay[i] = ayi; paz[i] = azi;
     }
+}
+static inline __attribute__((always_inline)) void reb_gravity_rows(const struct reb_gravity_soa p, const size_t ifirst, const size_t i1, const size_t jlo, const struct reb_vec6d gb, const double G, const double softening){
+    reb_gravity_rows_ex(p, ifirst, i1, jlo, SIZE_MAX, 1, gb, G, softening);
 }
 // Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
 REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
@@ -431,6 +439,63 @@ REB_TARGET_CLONES void reb_gravity_basic_rows_arrays(const double* x, const doub
     const struct reb_gravity_soa p = {x, y, z, m, ax, ay, az};
     const struct reb_vec6d gb = {0};
     reb_gravity_rows(p, i0, i1, 0, gb, G, softening);
+}
+// General row block for IAS15's stage mode: rows [i0, i1) (from at least starti), partners
+// [startj, min(i, jhi)), partner terms only if partner, ghost-box offset gb.
+REB_TARGET_CLONES void reb_gravity_basic_rows_arrays_ex(const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const size_t jhi, const int partner, const struct reb_vec6d gb, const double G, const double softening){
+    const struct reb_gravity_soa p = {x, y, z, m, ax, ay, az};
+    const size_t ifirst = i0>starti ? i0 : starti;
+    if (partner){
+        reb_gravity_rows_ex(p, ifirst, i1, startj, jhi, 1, gb, G, softening);
+    }else{
+        reb_gravity_rows_ex(p, ifirst, i1, startj, jhi, 0, gb, G, softening);
+    }
+}
+// Compensated gravity for particles [k0, k1) on plain arrays: the same additions in the same order
+// (Kahan summation over partners in ascending index order, then the test-particle back-reaction)
+// as reb_gravity_compensated_calculate_acceleration, so the result is bitwise identical to it at
+// the same positions. Each particle only receives its own terms: chunks are independent.
+REB_TARGET_CLONES void reb_gravity_compensated_range_arrays(const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const size_t k0, const size_t k1, const size_t N, const size_t N_active, const int testparticle_type, const unsigned int gravity_ignore_terms, const double G, const double softening){
+    const double softening2 = softening*softening;
+    for (size_t i=k0; i<k1; i++){
+        double axi = 0., ayi = 0., azi = 0., csx = 0., csy = 0., csz = 0.;
+        const size_t jn = N_active<N ? N_active : N;
+        for (size_t j=0; j<jn; j++){
+            if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) || (i==1 && j==0))) continue;
+            if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0 && ((j==0 || i==0))) continue;
+            if (i==j) continue;
+            const double dx = x[i] - x[j];
+            const double dy = y[i] - y[j];
+            const double dz = z[i] - z[j];
+            const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+            const double r = sqrt(r2);
+            const double prefact  = G/(r2*r);
+            const double prefactj = -prefact*m[j];
+            double t, yv;
+            yv = prefactj*dx - csx; t = axi + yv; csx = (t - axi) - yv; axi = t;
+            yv = prefactj*dy - csy; t = ayi + yv; csy = (t - ayi) - yv; ayi = t;
+            yv = prefactj*dz - csz; t = azi + yv; csz = (t - azi) - yv; azi = t;
+        }
+        if (testparticle_type && i<N_active){
+            for (size_t k=N_active; k<N; k++){
+                // back-reaction of test particle k on active particle i (serial: j = i, i = k)
+                if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((i==1 && k==0) || (k==1 && i==0))) continue;
+                if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0 && ((i==0 || k==0))) continue;
+                const double dx = x[k] - x[i];
+                const double dy = y[k] - y[i];
+                const double dz = z[k] - z[i];
+                const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+                const double r = sqrt(r2);
+                const double prefact  = G/(r2*r);
+                const double prefacti = prefact*m[k];
+                double t, yv;
+                yv = prefacti*dx - csx; t = axi + yv; csx = (t - axi) - yv; axi = t;
+                yv = prefacti*dy - csy; t = ayi + yv; csy = (t - ayi) - yv; ayi = t;
+                yv = prefacti*dz - csz; t = azi + yv; csz = (t - azi) - yv; azi = t;
+            }
+        }
+        ax[i] = axi; ay[i] = ayi; az[i] = azi;
+    }
 }
 // Serial half-pair gravity on plain arrays (all particles active, no ghost boxes, no ignored
 // terms): the same additions in the same order as the serial loop in

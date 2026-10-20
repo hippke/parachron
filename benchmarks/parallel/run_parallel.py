@@ -32,8 +32,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
 CORES = None   # None: auto (all cores for N_active >= 1024 on hybrid CPUs), "all", "performance"
-CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n2048",
-         "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages",
+CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n2048", "ias15_tp2000",
+         "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages", "ias15_tp2000+stages",
          "whfast_ss", "whfast_tp10k", "whfast_n256"]
 
 
