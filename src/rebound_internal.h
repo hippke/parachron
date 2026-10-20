@@ -149,6 +149,8 @@ static inline int reb_omp_parallel(const double work){
 #define REB_OMP_MIN_WORK_GRAVITY 524288.
 #endif
 static inline int reb_omp_parallel_gravity(const double work){
+    // Cheap test first: small systems never call into the OpenMP runtime here.
+    if (work < REB_OMP_MIN_WORK || work < 2.*REB_OMP_MIN_WORK_GRAVITY/256.) return 0;
     return work*(double)omp_get_max_threads() >= 2.*REB_OMP_MIN_WORK_GRAVITY && reb_omp_parallel(work);
 }
 #endif // OPENMP
