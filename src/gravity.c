@@ -173,6 +173,8 @@ void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){
     PROFILING_STOP(PROFILING_CAT_GRAVITY);
 }
 
+#define REB_GRAVITY_BLOCK 32      // partners per block in the two-pass inner loop
+#define REB_GRAVITY_BLOCK_MIN 16  // rows with fewer partners use the plain loop
 void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
     PROFILING_START();
     struct reb_particle* const particles = r->particles;
@@ -214,21 +216,55 @@ void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
                     double axi = particles[i].ax;
                     double ayi = particles[i].ay;
                     double azi = particles[i].az;
-                    for (size_t j=startj; j<i; j++){
-                        const double dx = xi - particles[j].x;
-                        const double dy = yi - particles[j].y;
-                        const double dz = zi - particles[j].z;
-                        const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                        const double prefact = G/(_r*_r*_r);
-                        const double prefactj = -prefact*particles[j].m;
-                        const double prefacti = prefact*mi;
+                    if (i-startj < REB_GRAVITY_BLOCK_MIN){
+                        for (size_t j=startj; j<i; j++){
+                            const double dx = xi - particles[j].x;
+                            const double dy = yi - particles[j].y;
+                            const double dz = zi - particles[j].z;
+                            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+                            const double prefact = G/(_r*_r*_r);
+                            const double prefactj = -prefact*particles[j].m;
+                            const double prefacti = prefact*mi;
 
-                        axi    += prefactj*dx;
-                        ayi    += prefactj*dy;
-                        azi    += prefactj*dz;
-                        particles[j].ax    += prefacti*dx;
-                        particles[j].ay    += prefacti*dy;
-                        particles[j].az    += prefacti*dz;
+                            axi    += prefactj*dx;
+                            ayi    += prefactj*dy;
+                            azi    += prefactj*dz;
+                            particles[j].ax    += prefacti*dx;
+                            particles[j].ay    += prefacti*dy;
+                            particles[j].az    += prefacti*dz;
+                        }
+                    }else{
+                        // Blocks of up to REB_GRAVITY_BLOCK partners: first the separations and 1/r^3
+                        // factors (independent per pair, vectorisable: square roots and divisions run
+                        // two or more at a time), then the accumulation in the original order.
+                        for (size_t j0=startj; j0<i; j0+=REB_GRAVITY_BLOCK){
+                            const size_t nb = (i-j0) < REB_GRAVITY_BLOCK ? (i-j0) : REB_GRAVITY_BLOCK;
+                            double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bpf[REB_GRAVITY_BLOCK];
+                            for (size_t k=0; k<nb; k++){
+                                const struct reb_particle* const pj = &particles[j0+k];
+                                bdx[k] = xi - pj->x;
+                                bdy[k] = yi - pj->y;
+                                bdz[k] = zi - pj->z;
+                            }
+                            for (size_t k=0; k<nb; k++){
+                                const double _r = sqrt(bdx[k]*bdx[k] + bdy[k]*bdy[k] + bdz[k]*bdz[k] + softening2);
+                                bpf[k] = G/(_r*_r*_r);
+                            }
+                            for (size_t k=0; k<nb; k++){
+                                struct reb_particle* const pj = &particles[j0+k];
+                                const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
+                                const double prefact = bpf[k];
+                                const double prefactj = -prefact*pj->m;
+                                const double prefacti = prefact*mi;
+
+                                axi    += prefactj*dx;
+                                ayi    += prefactj*dy;
+                                azi    += prefactj*dz;
+                                pj->ax    += prefacti*dx;
+                                pj->ay    += prefacti*dy;
+                                pj->az    += prefacti*dz;
+                            }
+                        }
                     }
                     particles[i].ax = axi;
                     particles[i].ay = ayi;
