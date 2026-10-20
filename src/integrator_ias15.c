@@ -427,53 +427,44 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
             const double dt = r->dt;
             const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
             const double d6 = 7.*hn/8., d5 = 6.*hn/7., d4 = 5.*hn/6., d3 = 4.*hn/5., d2 = 3.*hn/4., d1 = 2.*hn/3., d0 = hn/2.;
-            // Prepare particles arrays for force calculation
-            for(size_t i=0;i<N+N_var;i++) {                      // Predict positions at interval n using b values
-                const size_t k0 = 3*i+0;
-                const size_t k1 = 3*i+1;
-                const size_t k2 = 3*i+2;
-
-                double xk0;
-                double xk1;
-                double xk2;
-                xk0 = -csx[k0] + ((((((((b.p6[k0]*c6 + b.p5[k0])*c5 + b.p4[k0])*c4 + b.p3[k0])*c3 + b.p2[k0])*c2 + b.p1[k0])*c1 + b.p0[k0])*c0 + a0[k0])*ca + v0[k0])*cv;
-                xk1 = -csx[k1] + ((((((((b.p6[k1]*c6 + b.p5[k1])*c5 + b.p4[k1])*c4 + b.p3[k1])*c3 + b.p2[k1])*c2 + b.p1[k1])*c1 + b.p0[k1])*c0 + a0[k1])*ca + v0[k1])*cv;
-                xk2 = -csx[k2] + ((((((((b.p6[k2]*c6 + b.p5[k2])*c5 + b.p4[k2])*c4 + b.p3[k2])*c3 + b.p2[k2])*c2 + b.p1[k2])*c1 + b.p0[k2])*c0 + a0[k2])*ca + v0[k2])*cv;
-                if (i<N){
-                    size_t mi = map ? map[i] : i;
-                    particles[mi].x = xk0 + x0[k0];
-                    particles[mi].y = xk1 + x0[k1];
-                    particles[mi].z = xk2 + x0[k2];
-                }else{
-                    size_t mi = i-N;
-                    particles_var[mi].x = xk0 + x0[k0];
-                    particles_var[mi].y = xk1 + x0[k1];
-                    particles_var[mi].z = xk2 + x0[k2];
-                }
+            // Prepare particles arrays for force calculation.
+            // The predictor is evaluated element-wise into the scratch array at (free here: its
+            // previous contents were consumed by the corrector, and it is refilled after the
+            // force evaluation), which vectorises, and then copied to the particles.
+            REB_IAS15_IVDEP
+            for(size_t k=0;k<N3;k++) {                      // Predict positions at interval n using b values
+                const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
+                at[k] = xk + x0[k];
+            }
+            for(size_t i=0;i<N;i++) {
+                const size_t mi = map ? map[i] : i;
+                particles[mi].x = at[3*i+0];
+                particles[mi].y = at[3*i+1];
+                particles[mi].z = at[3*i+2];
+            }
+            for(size_t mi=0;mi<N_var;mi++) {
+                const size_t i = mi + N;
+                particles_var[mi].x = at[3*i+0];
+                particles_var[mi].y = at[3*i+1];
+                particles_var[mi].z = at[3*i+2];
             }
             if (r->calculate_megno || (r->additional_forces && r->force_is_velocity_dependent)){
-                for(size_t i=0;i<N+N_var;i++) {                  // Predict velocities at interval n using b values
-                    const size_t k0 = 3*i+0;
-                    const size_t k1 = 3*i+1;
-                    const size_t k2 = 3*i+2;
-
-                    double vk0;
-                    double vk1;
-                    double vk2;
-                    vk0 =  -csv[k0] + (((((((b.p6[k0]*d6 + b.p5[k0])*d5 + b.p4[k0])*d4 + b.p3[k0])*d3 + b.p2[k0])*d2 + b.p1[k0])*d1 + b.p0[k0])*d0 + a0[k0])*cv;
-                    vk1 =  -csv[k1] + (((((((b.p6[k1]*d6 + b.p5[k1])*d5 + b.p4[k1])*d4 + b.p3[k1])*d3 + b.p2[k1])*d2 + b.p1[k1])*d1 + b.p0[k1])*d0 + a0[k1])*cv;
-                    vk2 =  -csv[k2] + (((((((b.p6[k2]*d6 + b.p5[k2])*d5 + b.p4[k2])*d4 + b.p3[k2])*d3 + b.p2[k2])*d2 + b.p1[k2])*d1 + b.p0[k2])*d0 + a0[k2])*cv;
-                    if (i<N){
-                        size_t mi = map ? map[i] : i;
-                        particles[mi].vx = vk0 + v0[k0];
-                        particles[mi].vy = vk1 + v0[k1];
-                        particles[mi].vz = vk2 + v0[k2];
-                    }else{
-                        size_t mi = i-N;
-                        particles_var[mi].vx = vk0 + v0[k0];
-                        particles_var[mi].vy = vk1 + v0[k1];
-                        particles_var[mi].vz = vk2 + v0[k2];
-                    }
+                REB_IAS15_IVDEP
+                for(size_t k=0;k<N3;k++) {                  // Predict velocities at interval n using b values
+                    const double vk =  -csv[k] + (((((((b.p6[k]*d6 + b.p5[k])*d5 + b.p4[k])*d4 + b.p3[k])*d3 + b.p2[k])*d2 + b.p1[k])*d1 + b.p0[k])*d0 + a0[k])*cv;
+                    at[k] = vk + v0[k];
+                }
+                for(size_t i=0;i<N;i++) {
+                    const size_t mi = map ? map[i] : i;
+                    particles[mi].vx = at[3*i+0];
+                    particles[mi].vy = at[3*i+1];
+                    particles[mi].vz = at[3*i+2];
+                }
+                for(size_t mi=0;mi<N_var;mi++) {
+                    const size_t i = mi + N;
+                    particles_var[mi].vx = at[3*i+0];
+                    particles_var[mi].vy = at[3*i+1];
+                    particles_var[mi].vz = at[3*i+2];
                 }
             }
 
