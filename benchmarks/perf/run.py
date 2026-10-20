@@ -10,6 +10,7 @@ them with a baseline: per-benchmark speedup plus one geometric-mean score.
   python3 run.py run --src ../rebound-base --label base   # benchmark another worktree
   python3 run.py set-baseline results/<file>.json
   python3 run.py compare A.json B.json
+  python3 run.py ab --a ../rebound-prev --repeat 3   # interleaved A/B of two trees (most robust)
   python3 run.py probe trace_tp --time 10  # how fast does the rate settle?
 
 See README.md for the benchmark list and methodology.
@@ -24,6 +25,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -209,6 +211,79 @@ def cmd_run(a):
         print("No baseline yet. Make this run the baseline with:\n  python3 %s set-baseline %s" % (os.path.relpath(__file__), path))
 
 
+def _new_result(src, label, a, cc_version):
+    return {
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "label": label, "src": src, "git": git_info(src),
+        "machine": {"node": platform.node(), "cpu": cpu_model(), "python": platform.python_version(), "cc": cc_version},
+        "settings": {"scale": a.scale, "repeat": a.repeat, "cpu": a.cpu, "mode": "ab-interleaved",
+                     "build_flags": "stock" if a.plain_build else ALIGN_FLAGS},
+        "benchmarks": {},
+    }
+
+
+def _save(a, result):
+    os.makedirs(a.results, exist_ok=True)
+    tag = result["git"]["commit"] + ("-dirty" if result["git"]["dirty_src"] else "")
+    fname = "%s_%s%s.json" % (datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), tag, ("_" + result["label"]) if result["label"] else "")
+    path = os.path.join(a.results, fname)
+    with open(path, "w") as f:
+        json.dump(result, f, indent=1)
+    return path
+
+
+def cmd_ab(a):
+    """Interleaved A/B comparison: for every benchmark, alternate runs of build A and build B
+    (A B A B ...), so slow drifts of the machine affect both equally."""
+    srcs = [os.path.abspath(a.a), os.path.abspath(a.b)]
+    labels = [a.label_a, a.label_b]
+    exes, results = [], []
+    for src, label in zip(srcs, labels):
+        print("Building %s ..." % src, flush=True)
+        exe, cc_version = build(src, os.path.join(a.results, ".build", os.path.basename(src)), a.jobs, a.plain_build)
+        exes.append(exe)
+        results.append(_new_result(src, label, a, cc_version))
+    listing = json.loads(sh([exes[1], "--list"]))
+    info = {b["name"]: b for b in listing}
+    names = [b["name"] for b in listing]
+    if a.only:
+        wanted = a.only.split(",")
+        names = [n for n in names if n in wanted]
+    t0 = time.time()
+    for name in names:
+        if not info[name]["available"]:
+            for res in results:
+                res["benchmarks"][name] = {"unit": info[name]["unit"], "skipped": "not available on this CPU"}
+            continue
+        meas = max(1, int(round(info[name]["meas_chunks"] * a.scale)))
+        warm = info[name]["warm_chunks"]
+        reps = [[], []]
+        for k in range(a.repeat):
+            order = (0, 1) if k % 2 == 0 else (1, 0)  # ABBA... balances any within-pair trend
+            for which in order:
+                out = run_json(bench_cmd(exes[which], a.cpu, "--fixed", name, "--warm-chunks", str(warm), "--meas-chunks", str(meas)))
+                if "error" in out:
+                    raise SystemExit("%s (%s) failed: %s" % (name, labels[which], out["error"]))
+                rate, spread, t = summarize_fixed(out["chunks"])
+                reps[which].append({"rate": rate, "spread": spread, "measured_s": t, "warmup_s": out["warmup_s"],
+                                    "setup_s": out["setup_s"], "signature": out["signature"], "chunks": out["chunks"]})
+        for which in (0, 1):
+            rr = reps[which]
+            rate = statistics.median([r["rate"] for r in rr])
+            sigs = {r["signature"] for r in rr}
+            results[which]["benchmarks"][name] = {
+                "unit": info[name]["unit"], "usecase": info[name]["usecase"], "rate": rate,
+                "spread": statistics.median([r["spread"] for r in rr]),
+                "warm_chunks": warm, "meas_chunks": meas, "repeats": rr,
+                "signature": rr[0]["signature"] if len(sigs) == 1 else None,
+            }
+        print("  %-16s done" % name, flush=True)
+    print("  wall time %.1f s" % (time.time() - t0))
+    paths = [_save(a, res) for res in results]
+    print("Saved %s\n      %s\n" % tuple(paths))
+    compare(results[0], results[1], paths[0], paths[1], a.threshold)
+
+
 def cpu_model():
     try:
         with open("/proc/cpuinfo") as f:
@@ -358,6 +433,19 @@ def main():
     c.add_argument("base")
     c.add_argument("new")
     c.set_defaults(func=cmd_compare)
+
+    ab = sub.add_parser("ab", help="interleaved A/B comparison of two source trees")
+    ab.add_argument("--a", required=True, help="reference source tree (A)")
+    ab.add_argument("--b", default=DEFAULT_SRC, help="candidate source tree (B, default: this checkout)")
+    ab.add_argument("--label-a", default="A")
+    ab.add_argument("--label-b", default="B")
+    ab.add_argument("--only")
+    ab.add_argument("--repeat", type=int, default=3, help="runs per build and benchmark (alternating)")
+    ab.add_argument("--scale", type=float, default=1.0)
+    ab.add_argument("--cpu", type=int, default=None)
+    ab.add_argument("--plain-build", action="store_true")
+    ab.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
+    ab.set_defaults(func=cmd_ab)
 
     s = sub.add_parser("set-baseline", help="make a result file the baseline")
     s.add_argument("file")
