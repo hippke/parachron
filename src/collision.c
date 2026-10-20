@@ -147,6 +147,7 @@ void reb_collision_search(struct reb_simulation* const r){
         case REB_COLLISION_LINE:
             {
                 double dt_last_done = r->dt_last_done;
+                const double dt2_last_done = dt_last_done*dt_last_done;
                 // Loop over ghost boxes, but only the inner most ring.
                 int N_ghost_xcol = (r->N_ghost_x>1?1:r->N_ghost_x);
                 int N_ghost_ycol = (r->N_ghost_y>1?1:r->N_ghost_y);
@@ -182,11 +183,17 @@ void reb_collision_search(struct reb_simulation* const r){
                                     const double dvx1 = gb.vx - p2.vx; 
                                     const double dvy1 = gb.vy - p2.vy;
                                     const double dvz1 = gb.vz - p2.vz;
+                                    const double dv2 = dvx1*dvx1 + dvy1*dvy1 + dvz1*dvz1;
+                                    const double rsum = p1.r + p2.r;
+                                    // Conservative early exit without a division: over the step the separation
+                                    // changes by at most |dv|*dt, and r1 > 3(rsum^2 + dv^2 dt^2) implies a minimum
+                                    // separation of at least sqrt(2)*rsum, so the test below could not succeed.
+                                    if (r1 > 3.*(rsum*rsum + dv2*dt2_last_done)) continue;
                                     const double dx2 = dx1 -dt_last_done*dvx1; // distance at beginning
                                     const double dy2 = dy1 -dt_last_done*dvy1;
                                     const double dz2 = dz1 -dt_last_done*dvz1;
                                     const double r2 = (dx2*dx2 + dy2*dy2 + dz2*dz2);
-                                    const double t_closest = (dx1*dvx1 + dy1*dvy1 + dz1*dvz1)/(dvx1*dvx1 + dvy1*dvy1 + dvz1*dvz1);
+                                    const double t_closest = (dx1*dvx1 + dy1*dvy1 + dz1*dvz1)/dv2;
 
                                     double rmin2_ab = MIN(r1,r2);
                                     if (t_closest/dt_last_done>=0. && t_closest/dt_last_done<=1.){
@@ -196,7 +203,6 @@ void reb_collision_search(struct reb_simulation* const r){
                                         const double r3 = (dx3*dx3 + dy3*dy3 + dz3*dz3);
                                         rmin2_ab = MIN(rmin2_ab, r3);
                                     }
-                                    double rsum = p1.r + p2.r;
                                     if (rmin2_ab>rsum*rsum) continue;
 
                                     // Add particles to collision array.
