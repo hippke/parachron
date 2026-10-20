@@ -167,6 +167,14 @@ short simulations with `multiprocessing`. Measured on the benchmark machine (4 w
 - For WHFast512 ensembles, `sim.steps_pair()` and the packed-system mode (`N_systems`)
   give more than extra processes do on one core.
 
+## Tree gravity: accuracy for speed
+
+Measured with `tools/treeacc.c` (force error vs direct summation) and `tools/treeint.c` (position deviation after 100 leapfrog steps vs a direct-summation run), self-gravitating disc (3,000–10,000 bodies) and shearing sheet:
+
+- `sim.tree_group_size = 32` (opt-in group walk): about 3x faster at equal trajectory accuracy. For example, θ = 0.5 with groups gives the accuracy of the default walk at θ = 0.3. At the same θ it is more accurate, so raise θ (about 1.6x) to gain speed. Results differ from the default walk. They are deterministic and saved in binary files.
+- `-DQUADRUPOLE` build: quadrupole moments pay at high accuracy (1.2–2.5x at equal cost). They do not pay at low accuracy, where monopole is as good or better.
+- The b_max opening criterion was tested and rejected: its 99th-percentile force error is smaller, but at equal cost it gives larger trajectory deviations.
+
 ## Files
 
 - `bench.c` — benchmark definitions and harness (public REBOUND API only, so it builds against other source trees).
