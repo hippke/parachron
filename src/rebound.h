@@ -26,6 +26,13 @@
 #ifndef _MAIN_H
 #define _MAIN_H
 
+// A compiler with OpenMP enabled (-fopenmp, e.g. through CFLAGS for a pip install) defines
+// _OPENMP. REBOUND's parallel code paths are selected by OPENMP (set by the Makefile with
+// OPENMP=1); without this, -fopenmp alone would run the serial code inside parallel regions.
+#if defined(_OPENMP) && !defined(OPENMP)
+#define OPENMP
+#endif
+
 #define REB_API     // Public REBOUND API definitions
 
 // Helper macros for padding structures
