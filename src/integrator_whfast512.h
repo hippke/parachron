@@ -31,10 +31,12 @@ struct reb_integrator_whfast512_state {
     unsigned int N_systems;
     unsigned int corrector;             
     uint64_t concatenate_steps;
+    unsigned int kernel;                // 0 (default): fastest available. 1: AVX-512 assembly, 2: C AVX-512, 3: C AVX2, 4: C generic. See enum REB_WHFAST512_KERNEL.
 
     // Internal use
     double last_synchronization;
     void* data;
+    unsigned int kernel_used;           // Kernel used by the last step (set by the integrator, for information).
 };
 
 #endif

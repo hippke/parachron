@@ -26,11 +26,7 @@
 #include <string.h>
 #include "rebound.h"
 #include "rebound_internal.h"
-#if !defined(_WIN32)
-#define REB_ATTRIBUTE_ALIGNED_64 __attribute__((aligned(64)))
-#else
-#define REB_ATTRIBUTE_ALIGNED_64 __declspec(align(64))
-#endif
+#include "integrator_whfast512_data.h"
 #if defined(__GNUC__) || defined(__clang__)
 #define REB_SYSV_ABI __attribute__((sysv_abi))
 #else // defined(__GNUC__) || defined(__clang__)
@@ -51,44 +47,14 @@ void reb_integrator_whfast512_step(struct reb_simulation* r, void* state);
 void reb_integrator_whfast512_synchronize(struct reb_simulation* r, void* state);
 const struct reb_binarydata_field_descriptor reb_integrator_whfast512_field_descriptor_list[];
 
-// We define __mmask8 and __m512d ourselves.
-// This way we don't have to compile this file with AVX512 support which helps
-// simplify the build system on windows.
-typedef unsigned char  REB_ATTRIBUTE_ALIGNED_64 __mmask8; 
-typedef struct {
-    double lanes[8];
-} REB_ATTRIBUTE_ALIGNED_64 __m512d;
-#ifdef DEBUG_AVX512
-typedef struct {
-    uint64_t lanes[8];
-} REB_ATTRIBUTE_ALIGNED_64 __m512i;
-#endif // DEBUG_AVX512
+// The main data structure (struct simd_data) is defined in integrator_whfast512_data.h. It is
+// passed as a pointer to the kernels: the AVX-512 assembly (integrator_whfast512.s) or the
+// portable C kernels (integrator_whfast512_c_*.c).
 
-// The main datasctructure. We pass this as a pointer to the assembly code.
-struct simd_data{
-    // Various constants
-    REB_ATTRIBUTE_ALIGNED_64 __m512d M;             //  Masses used in Kepler-Solver
-    REB_ATTRIBUTE_ALIGNED_64 __m512d dt;            //  Timestep
-    REB_ATTRIBUTE_ALIGNED_64 __m512d gr_prefac;     //  Prefactor for GR
-    REB_ATTRIBUTE_ALIGNED_64 __m512d m;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d x;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d y;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d z;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d vx;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d vy;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d vz;
-    REB_ATTRIBUTE_ALIGNED_64 double mat8_inertial_to_jacobi[64]; // Coordinate transformation matricies. Can be recalculated from particle masses.
-    REB_ATTRIBUTE_ALIGNED_64 double mat8_jacobi_to_heliocentric[64];
-    REB_ATTRIBUTE_ALIGNED_64 __m512d M0;            //  Masses used in Jacobi Term
-    REB_ATTRIBUTE_ALIGNED_64 __mmask8 mask;         // Mask for cases with less than 8 planets
-    REB_ATTRIBUTE_ALIGNED_64 __m512d exit_max_distance;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d exit_min_distance;
-    REB_ATTRIBUTE_ALIGNED_64 __m512d exit_min_distance_r; // Inverse of exit_min_distance
-    REB_ATTRIBUTE_ALIGNED_64 double mat8_jacobi_to_inertial[64];
-#ifdef DEBUG_AVX512
-    REB_ATTRIBUTE_ALIGNED_64 __m512i counter;
-#endif // DEBUG_AVX512
-};
+// The assembly kernel exists for x86-64 with GCC/clang-style toolchains (also clang on Windows).
+#if (defined(__x86_64__) || defined(_M_AMD64)) && ((defined(__GNUC__) || defined(__clang__)) || !defined(_WIN32)) && !defined(REB_WHFAST512_NO_ASM)
+#define REB_WHFAST512_HAVE_ASM 1
+#endif
 
 const struct reb_integrator reb_integrator_whfast512 = {
     .documentation =
@@ -129,6 +95,13 @@ const struct reb_binarydata_field_descriptor reb_integrator_whfast512_field_desc
         "By setting N_systems to either 2 or 4, one can integrate multiple planetary systems with 2, 3, or 4 particles at the same time. "
         "See the example problems on how to setup the particles for this case. ",
         REB_UINT,        "N_systems",       offsetof(struct reb_integrator_whfast512_state, N_systems), 0, 0, 0},
+    { "Kernel used for the integration: 0 (default) picks the fastest one available on this machine "
+        "(AVX-512 assembly if the CPU supports AVX-512, otherwise the C kernel for AVX2+FMA, otherwise the generic C kernel). "
+        "1: AVX-512 assembly, 2: C kernel compiled for AVX-512, 3: C kernel for AVX2+FMA, 4: generic C kernel (any CPU). "
+        "The C kernels give bitwise identical results on all machines; the assembly kernel differs from them at round-off level. ",
+        REB_UINT,        "kernel",          offsetof(struct reb_integrator_whfast512_state, kernel), 0, 0, 0},
+    { "Kernel used by the last step (read only). Same values as `kernel`.",
+        REB_UINT,        "kernel_used",     offsetof(struct reb_integrator_whfast512_state, kernel_used), 0, 0, 0},
     { "", REB_POINTER_ALIGNED, "data",        offsetof(struct reb_integrator_whfast512_state, data), SIZE_MAX, sizeof(struct simd_data), 0},
     { "", REB_DOUBLE,      "last_synchronization", offsetof(struct reb_integrator_whfast512_state, last_synchronization), 0, 0, 0},
     { 0 }, // Null terminated list
@@ -148,7 +121,6 @@ void reb_integrator_whfast512_free(void* state){
     free(whfast512);
 }
 
-#if (defined(__i386__) || defined(__x86_64__) || defined(_M_AMD64)) && ((defined(__GNUC__) || defined(__clang__)) || !defined(_WIN32))
 // Helper macro to print out offsets in structure for assembly code
 #define SIMD_DATA_MEMBERS X(M) X(dt) X(gr_prefac) X(m) X(x) X(y) X(z) X(vx) X(vy) X(vz) \
 X(mat8_inertial_to_jacobi) \
@@ -158,6 +130,7 @@ X(exit_max_distance) X(exit_min_distance_r) \
 X(mat8_jacobi_to_inertial)\
 X(counter) 
 
+#ifdef REB_WHFAST512_HAVE_ASM
 // External function definitions. Implemented in integrator_whfast512.s.
 REB_SYSV_ABI extern enum REB_STATUS reb_whfast512_kepler_step(struct simd_data* data);
 REB_SYSV_ABI extern void reb_whfast512_set1_pd(void* address, double value);
@@ -193,6 +166,78 @@ REB_SYSV_ABI extern void reb_whfast512_corrector_step_gr0_n4(struct simd_data* d
 REB_SYSV_ABI extern void reb_whfast512_corrector_step_gr1_n1(struct simd_data* data, double inv);
 REB_SYSV_ABI extern void reb_whfast512_corrector_step_gr1_n2(struct simd_data* data, double inv);
 REB_SYSV_ABI extern void reb_whfast512_corrector_step_gr1_n4(struct simd_data* data, double inv);
+#endif // REB_WHFAST512_HAVE_ASM
+
+// Small helpers to fill the 64-byte vectors in struct simd_data (plain C, no vector instructions).
+static void w512_set1_pd(void* address, double value){
+    double tmp[8];
+    for (int i=0; i<8; i++) tmp[i] = value;
+    memcpy(address, tmp, sizeof(tmp));
+}
+static void w512_movu_pd(void* destination, const void* source){
+    memcpy(destination, source, 8*sizeof(double));
+}
+
+// Returns 1 if this CPU (and OS) supports AVX2 and FMA.
+static int whfast512_avx2_fma_available(void){
+#if (defined(__i386__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+#elif defined(_WIN32) && (defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__))
+    return reb_avx2_fma_available();
+#else
+    return 0;
+#endif
+}
+
+static const char* whfast512_kernel_name(unsigned int k){
+    switch (k){
+        case REB_WHFAST512_KERNEL_ASM: return "AVX-512 assembly";
+        case REB_WHFAST512_KERNEL_C_AVX512: return "C, AVX-512";
+        case REB_WHFAST512_KERNEL_C_AVX2: return "C, AVX2+FMA";
+        case REB_WHFAST512_KERNEL_C_GENERIC: return "C, generic";
+        default: return "unknown";
+    }
+}
+
+// Returns 1 if kernel k can run on this machine.
+static int whfast512_kernel_available(unsigned int k){
+    switch (k){
+        case REB_WHFAST512_KERNEL_ASM:
+#ifdef REB_WHFAST512_HAVE_ASM
+            return reb_avx512_available();
+#else
+            return 0;
+#endif
+        case REB_WHFAST512_KERNEL_C_AVX512: return reb_whfast512c_avx512_compiled() && reb_avx512_available() && whfast512_avx2_fma_available();
+        case REB_WHFAST512_KERNEL_C_AVX2: return reb_whfast512c_avx2_compiled() && whfast512_avx2_fma_available();
+        case REB_WHFAST512_KERNEL_C_GENERIC: return 1;
+        default: return 0;
+    }
+}
+
+// Picks the kernel: the requested one, or the fastest available one for REB_WHFAST512_KERNEL_AUTO.
+// Returns 0 (and prints an error) if the requested kernel is not available.
+static unsigned int whfast512_select_kernel(struct reb_simulation* r, unsigned int requested){
+    if (requested == REB_WHFAST512_KERNEL_AUTO){
+        static const unsigned int order[] = {REB_WHFAST512_KERNEL_ASM, REB_WHFAST512_KERNEL_C_AVX2, REB_WHFAST512_KERNEL_C_GENERIC};
+        for (unsigned int i=0; i<sizeof(order)/sizeof(order[0]); i++){
+            if (whfast512_kernel_available(order[i])) return order[i];
+        }
+        return REB_WHFAST512_KERNEL_C_GENERIC;
+    }
+    if (requested > REB_WHFAST512_KERNEL_C_GENERIC){
+        reb_simulation_error(r, "WHFast512: unknown kernel. Use 0 (auto), 1 (assembly), 2 (C AVX-512), 3 (C AVX2), or 4 (C generic).");
+        return 0;
+    }
+    if (!whfast512_kernel_available(requested)){
+        char msg[256];
+        snprintf(msg, sizeof(msg), "WHFast512: the kernel '%s' is not available on this machine or in this build.", whfast512_kernel_name(requested));
+        reb_simulation_error(r, msg);
+        return 0;
+    }
+    return requested;
+}
 
 
 // Hepler function to load particle data into avx512 registers
@@ -213,9 +258,9 @@ static void load_into_m512d(void* destination, struct reb_simulation* r, size_t 
                 tmp2[i] += tmp[j]*transformation[8*j+i];
             }
         }
-        reb_whfast512_movu_pd(destination, tmp2);
+        w512_movu_pd(destination, tmp2);
     }else{
-        reb_whfast512_movu_pd(destination, tmp);
+        w512_movu_pd(destination, tmp);
     }
 }
 
@@ -225,7 +270,7 @@ static void load_from_m512d(struct reb_simulation* r, size_t offset, const doubl
     const unsigned int p_per_system = 8/N_systems;
     const unsigned int N_per_system = r->N/N_systems;
     double tmp[8];
-    reb_whfast512_movu_pd(tmp, vector);
+    w512_movu_pd(tmp, vector);
     double tmp2[8] = {0}; 
     for (int i=0; i<8; i++) {
         for (int j=0; j<8; j++) {
@@ -284,7 +329,20 @@ static void jacobi_to_inertial_posvel_and_com(struct reb_simulation* r, struct s
 
 static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb_integrator_whfast512_state* whfast512, uint64_t* N_steps, int skip){
     struct simd_data* data = whfast512->data;
-    // Similar to above, all the 24 possible options are implemented as macros.
+    const int encounter = r->exit_min_distance ? 1 : 0;
+    const int escape = r->exit_max_distance ? 1 : 0;
+    switch (whfast512->kernel_used){
+        case REB_WHFAST512_KERNEL_C_AVX512:
+            return reb_whfast512c_full_steps_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+        case REB_WHFAST512_KERNEL_C_AVX2:
+            return reb_whfast512c_full_steps_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+        case REB_WHFAST512_KERNEL_C_GENERIC:
+            return reb_whfast512c_full_steps_generic(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+        default:
+            break;
+    }
+#ifdef REB_WHFAST512_HAVE_ASM
+    // Assembly: all the 24 possible options are separate functions.
 #define MACRO_5(encounter,escape) \
     if (whfast512->gr_potential){\
         switch (whfast512->N_systems){\
@@ -299,23 +357,39 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
             default: return reb_whfast512_full_steps_gr0_n1_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
         }\
     }
-    if (r->exit_min_distance){
-        if (r->exit_max_distance){
+    if (encounter){
+        if (escape){
             MACRO_5(1,1)
         }else{
             MACRO_5(1,0)
         }
     }else{
-        if (r->exit_max_distance){
+        if (escape){
             MACRO_5(0,1)
         }else{
             MACRO_5(0,0)
         }
     }
+#undef MACRO_5
+#endif // REB_WHFAST512_HAVE_ASM
+    reb_simulation_error(r, "WHFast512: no kernel selected.");
+    return REB_STATUS_GENERIC_ERROR;
 }
 
 static void whfast512_corrector_step(struct reb_integrator_whfast512_state* whfast512, double inv){
     struct simd_data* data = whfast512->data;
+    switch (whfast512->kernel_used){
+        case REB_WHFAST512_KERNEL_C_AVX512:
+            reb_whfast512c_corrector_step_avx512(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
+        case REB_WHFAST512_KERNEL_C_AVX2:
+            reb_whfast512c_corrector_step_avx2(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
+        case REB_WHFAST512_KERNEL_C_GENERIC:
+            reb_whfast512c_corrector_step_generic(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
+        default:
+            break;
+    }
+#ifdef REB_WHFAST512_HAVE_ASM
+
     if (whfast512->gr_potential){
         switch (whfast512->N_systems){
             case 2: reb_whfast512_corrector_step_gr1_n2(data, inv); break;
@@ -329,6 +403,21 @@ static void whfast512_corrector_step(struct reb_integrator_whfast512_state* whfa
             default: reb_whfast512_corrector_step_gr0_n1(data, inv); break;
         }
     }
+#endif // REB_WHFAST512_HAVE_ASM
+}
+
+// One Kepler step (drift) with the timestep stored in data->dt.
+static void whfast512_kepler_step(struct reb_integrator_whfast512_state* whfast512){
+    struct simd_data* data = whfast512->data;
+    switch (whfast512->kernel_used){
+        case REB_WHFAST512_KERNEL_C_AVX512: reb_whfast512c_kepler_step_avx512(data); return;
+        case REB_WHFAST512_KERNEL_C_AVX2: reb_whfast512c_kepler_step_avx2(data); return;
+        case REB_WHFAST512_KERNEL_C_GENERIC: reb_whfast512c_kepler_step_generic(data); return;
+        default: break;
+    }
+#ifdef REB_WHFAST512_HAVE_ASM
+    reb_whfast512_kepler_step(data);
+#endif // REB_WHFAST512_HAVE_ASM
 }
 
 static void inertial_to_jacobi_posvel(struct reb_simulation* r, struct simd_data* data, unsigned int N_systems){
@@ -451,8 +540,8 @@ static void recalculate_constants(struct reb_simulation* r, unsigned int N_syste
         }
     }
 
-    reb_whfast512_movu_pd(&data->M, &M);
-    reb_whfast512_movu_pd(&data->M0, &M0); //  = particles[0].m 
+    w512_movu_pd(&data->M, &M);
+    w512_movu_pd(&data->M0, &M0); //  = particles[0].m 
 
     // GR prefactors. Note: assumes units of AU, year/2pi.
     double c = 10065.32;
@@ -466,11 +555,11 @@ static void recalculate_constants(struct reb_simulation* r, unsigned int N_syste
             _gr_prefac[s*p_per_system+(p-1)] = -6.*m0*m0/(c*c);
         }
     }
-    reb_whfast512_movu_pd(&data->gr_prefac, &_gr_prefac);
-    reb_whfast512_set1_pd(&data->dt,r->dt); 
-    reb_whfast512_set1_pd(&data->exit_max_distance, r->exit_max_distance);
-    reb_whfast512_set1_pd(&data->exit_min_distance, r->exit_min_distance);
-    reb_whfast512_set1_pd(&data->exit_min_distance_r, 1.0/r->exit_min_distance);
+    w512_movu_pd(&data->gr_prefac, &_gr_prefac);
+    w512_set1_pd(&data->dt,r->dt); 
+    w512_set1_pd(&data->exit_max_distance, r->exit_max_distance);
+    w512_set1_pd(&data->exit_min_distance, r->exit_min_distance);
+    w512_set1_pd(&data->exit_min_distance_r, 1.0/r->exit_min_distance);
 #define X(name) printf(".set P512_" #name ", %zu\n", offsetof(struct simd_data, name));
     //    SIMD_DATA_MEMBERS
 #undef X
@@ -482,8 +571,8 @@ static int reb_integrator_whfast512_verify_setup(struct reb_simulation* const r)
     // Check if all assumptions are satisfied.
     // Note: These are not checked every timestep. 
     // So it is possible for the user to screw things up.
-    if (!reb_avx512_available()){
-        reb_simulation_error(r, "AVX512 is not supported by your CPU.");
+    whfast512->kernel_used = whfast512_select_kernel(r, whfast512->kernel);
+    if (!whfast512->kernel_used){
         return 1;
     }
     if (r->N_var!=0){
@@ -549,9 +638,9 @@ void reb_integrator_whfast512_step(struct reb_simulation* const r, void* state){
         }
         // First half DRIFT step.
         skip_first_kepler_step = 1;
-        reb_whfast512_set1_pd(&data->dt, dt/2.0); 
-        reb_whfast512_kepler_step(data);    
-        reb_whfast512_set1_pd(&data->dt, dt); // Reset
+        w512_set1_pd(&data->dt, dt/2.0); 
+        whfast512_kepler_step(whfast512);
+        w512_set1_pd(&data->dt, dt); // Reset
     }
     r->status = whfast512_full_steps(r, whfast512, &N_steps, skip_first_kepler_step);
 
@@ -562,22 +651,23 @@ void reb_integrator_whfast512_step(struct reb_simulation* const r, void* state){
 
 // Synchronization routine. Called every time an output is needed.
 void reb_integrator_whfast512_synchronize(struct reb_simulation* const r, void* state){
-    if (!reb_avx512_available()){
-        reb_simulation_error(r, "AVX512 is not supported by your CPU.");
-        r->status = REB_STATUS_GENERIC_ERROR;
-        return;
-    }
     struct reb_integrator_whfast512_state* const whfast512 = state;
     if (!r->is_synchronized){
         struct simd_data * data = whfast512->data;
         if (!data){
-            reb_simulation_error(r, "ASM512 is unable to synchronize. data is NULL.");
+            reb_simulation_error(r, "WHFast512 is unable to synchronize. data is NULL.");
             r->status = REB_STATUS_GENERIC_ERROR;
             return;
         }
-        reb_whfast512_set1_pd(&data->dt, r->dt/2.0); 
-        reb_whfast512_kepler_step(data);    
-        reb_whfast512_set1_pd(&data->dt, r->dt); // Reset
+        // Select again: the state may come from a Simulationarchive written on another machine.
+        whfast512->kernel_used = whfast512_select_kernel(r, whfast512->kernel);
+        if (!whfast512->kernel_used){
+            r->status = REB_STATUS_GENERIC_ERROR;
+            return;
+        }
+        w512_set1_pd(&data->dt, r->dt/2.0); 
+        whfast512_kepler_step(whfast512);
+        w512_set1_pd(&data->dt, r->dt); // Reset
         if (whfast512->corrector){
             whfast512_corrector_step(whfast512, -1.0);
         }
@@ -590,25 +680,13 @@ void reb_integrator_whfast512_synchronize(struct reb_simulation* const r, void* 
     }
 }
 
-#else // Not 64 bit, Windows + cl
-void reb_integrator_whfast512_step(struct reb_simulation* r, void* state){
-    (void)state;
-    reb_simulation_error(r, "AVX512 is not supported on your platform.");
-    r->status = REB_STATUS_GENERIC_ERROR;
-}
-void reb_integrator_whfast512_synchronize(struct reb_simulation* r, void* state){
-    (void)state;
-    reb_simulation_error(r, "AVX512 is not supported on your platform.");
-    r->status = REB_STATUS_GENERIC_ERROR;
-}
-#endif
 
 #ifdef DEBUG_AVX512
 uint64_t reb_integrator_whfast512_debug_counter(struct reb_simulation* r, int test_p){
     struct reb_integrator_whfast512_state* whfast512 = r->integrator.state;
     struct simd_data* data = whfast512->data;
     uint64_t i[8];
-    reb_whfast512_movu_pd(&i[0], &data->counter);
+    w512_movu_pd(&i[0], &data->counter);
     return i[test_p];
 }
 
@@ -618,7 +696,7 @@ void reb_integrator_whfast512_debug_kepler_step(struct reb_simulation* r, long N
     struct simd_data* data = whfast512->data;
     inertial_to_jacobi_posvel(r, data, 1);
     for(long i=0;i<N_steps;i++){
-        reb_whfast512_kepler_step(data);    
+        whfast512_kepler_step(whfast512);
     }
     jacobi_to_inertial_posvel_and_com(r, data,0.0, 1);
 }
@@ -626,7 +704,7 @@ void reb_integrator_whfast512_debug_kepler_step(struct reb_simulation* r, long N
 // Debug function to print vectors
 static inline void printavx512(void* a) {
     double _nax[8];
-    reb_whfast512_movu_pd(&_nax[0], a);
+    w512_movu_pd(&_nax[0], a);
     printf("avx = {%.17g, %.17g, %.17g, %.17g, %.17g, %.17g, %.17g, %.17g}\n", _nax[0], _nax[1], _nax[2], _nax[3], _nax[4], _nax[5], _nax[6], _nax[7]);
 }
 

@@ -258,8 +258,32 @@ int reb_avx512_available(void) {
     int avx512dq = (cpu_info[1] & (1 << 17)) != 0;
     return avx512f && avx512dq;
 }
+// Returns 1 if this CPU and OS support AVX2 and FMA (used by the WHFast512 C kernels).
+int reb_avx2_fma_available(void) {
+    int32_t cpu_info[4];
+    run_cpuid(0, 0, cpu_info);
+    if (cpu_info[0] < 7) {
+        return 0;
+    }
+    run_cpuid(1, 0, cpu_info);
+    int osxsave = (cpu_info[2] & (1 << 27)) != 0;
+    int avx_hardware = (cpu_info[2] & (1 << 28)) != 0;
+    int fma = (cpu_info[2] & (1 << 12)) != 0;
+    if (!osxsave || !avx_hardware || !fma) {
+        return 0;
+    }
+    uint64_t xcr0 = run_xgetbv(0);
+    if ((xcr0 & 0x6) != 0x6) {
+        return 0;
+    }
+    run_cpuid(7, 0, cpu_info);
+    return (cpu_info[1] & (1 << 5)) != 0; // AVX2
+}
 #else // #if defined(_M_X64) || defined(_M_IX86)
 int reb_avx512_available(void) {
+    return 0; // None x86
+}
+int reb_avx2_fma_available(void) {
     return 0; // None x86
 }
 #endif // #if defined(_M_X64) || defined(_M_IX86)

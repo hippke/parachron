@@ -103,6 +103,9 @@ void reb_message(char*** messages, int save_messages, enum REB_MESSAGE_TYPE type
 REB_API int reb_check_fp_contract(); 
 // Returns 1 if the CPU supports the AVX512.
 REB_API int reb_avx512_available();
+#ifdef _WIN32
+int reb_avx2_fma_available(void); // Windows only; elsewhere the compiler builtins are used
+#endif
 // Wrapper method to set number of OpenMP threads from python.
 REB_API void reb_omp_set_num_threads(int num_threads);
 // Helper function for comparing strings

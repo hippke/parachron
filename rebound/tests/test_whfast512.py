@@ -19,12 +19,17 @@ def gr_potential(sim):
     return H
     
 class TestIntegratorWHFast512(unittest.TestCase):
-    def avx512_available(self):
-        if not rebound.avx512_available: return False
+    # Kernel under test: 0 picks the fastest one available. The subclasses at the end of this
+    # file repeat all tests for each kernel (1: AVX-512 assembly, 2: C AVX-512, 3: C AVX2, 4: C generic).
+    kernel = 0
+
+    def kernel_available(self):
         try:
             sim = rebound.Simulation()
             sim.add("solar system")
             sim.integrator = "whfast512"
+            sim.integrator.kernel = self.kernel
+            sim.integrator.kernel = self.kernel
             sim.dt = 6/365.25*2*math.pi
             sim.exact_finish_time = 0
             sim.integrator.concatenate_steps = 1
@@ -33,21 +38,33 @@ class TestIntegratorWHFast512(unittest.TestCase):
             return False
         return True
 
+    def require_kernel(self):
+        if not self.kernel_available():
+            self.skipTest("WHFast512 kernel %d is not available on this machine" % self.kernel)
 
     def test_whfast512_avx512_available(self):
         if not rebound.avx512_available:
-            print("\n::error:: AVX512 is not supported by this CPU. Cannot run WHFast512 unit tests.")
+            print("\n::notice:: AVX512 is not supported by this CPU. WHFast512 runs with its C kernels.")
         else:
-            if not self.avx512_available():
-                print("\n::notice:: AVX512 should be available according to the C functio reb_avx512_available(), but a test simulation returns an error.")
-            else:
-                print("\n::notice:: AVX512 is supported by this CPU. Running WHFast512 units tests.")
-
-    def test_whfast512_basic(self):
-        if not self.avx512_available(): return
+            print("\n::notice:: AVX512 is supported by this CPU.")
+        # The generic C kernel runs everywhere.
         sim = rebound.Simulation()
         sim.add("solar system")
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
+        sim.integrator.kernel = 4
+        sim.dt = 6/365.25*2*math.pi
+        sim.exact_finish_time = 0
+        sim.integrator.concatenate_steps = 10
+        sim.steps(1)
+        self.assertEqual(sim.integrator.kernel_used, 4)
+
+    def test_whfast512_basic(self):
+        self.require_kernel()
+        sim = rebound.Simulation()
+        sim.add("solar system")
+        sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.dt = 6/365.25*2*math.pi
         sim.exact_finish_time = 0
         e0 = sim.energy()
@@ -63,10 +80,11 @@ class TestIntegratorWHFast512(unittest.TestCase):
         self.assertLess(math.fabs((e0-e1)/e0),2e-9)
 
     def test_whfast512_corrector(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add("solar system")
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.corrector = 17
         sim.dt = 6/365.25*2*math.pi
         sim.exact_finish_time = 0
@@ -81,10 +99,11 @@ class TestIntegratorWHFast512(unittest.TestCase):
         self.assertLess(math.fabs((e0-e1)/e0),2e-12)
 
     def test_whfast512_gr(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add("solar system")
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.corrector = 17
         sim.integrator.gr_potential = 1
         sim.dt = 6/365.25*2*math.pi
@@ -101,10 +120,11 @@ class TestIntegratorWHFast512(unittest.TestCase):
 
     
     def test_whfast512_fewer_than_8_particles(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add("outer solar system")
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.corrector = 17
         sim.integrator.gr_potential = 1
         sim.dt = 20.0/365.25*2*math.pi
@@ -120,13 +140,14 @@ class TestIntegratorWHFast512(unittest.TestCase):
         self.assertLess(math.fabs((e0-e1)/e0),1e-11)
 
     def test_whfast512_independent_kepler_solvers(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         def getSim(innera):
             sim = rebound.Simulation()
             sim.add(m=1)
             sim.add(a=innera, e=0.8)
             sim.add(a=1.2, e=0.01)
             sim.integrator = "whfast512"
+            sim.integrator.kernel = self.kernel
             sim.dt = 6.0/365.25*2*math.pi
             sim.exact_finish_time = 0
             sim.steps(1)
@@ -145,7 +166,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
 
 
     def test_whfast512_high_e_kepler_solver(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         def getSim(e, integrator, f):
             sim = rebound.Simulation()
             sim.add(m=1)
@@ -154,6 +175,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
             sim.dt = 6/365.25*2*math.pi
             sim.exact_finish_time = 0
             if sim.integrator=="whfast512":
+                sim.integrator.kernel = self.kernel
                 sim.integrator.concatenate_steps = 1
             sim.steps(1)
             return sim
@@ -165,7 +187,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
                 self.assertAlmostEqual(sim.particles[1].x, sim512.particles[1].x, 15)
 
     def test_whfast512_Nsystems_2(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         for Nplanets in [1,2,3,4]:
             def getSim(Nplanets):
                 sim = rebound.Simulation()
@@ -181,6 +203,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
             
             sim = getSim(Nplanets)
             sim.integrator = "whfast512"
+            sim.integrator.kernel = self.kernel
             sim.integrator.corrector = 1
             sim.integrator.gr_potential = 1
             sim.integrator.concatenate_steps = 1
@@ -204,7 +227,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
                 self.assertEqual(sim.particles[1+i].vx, sim2.particles[2+Nplanets+i].vx)
 
     def test_whfast512_Nsystems_4(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         for Nplanets in [1,2]:
             def getSim(Nplanets):
                 sim = rebound.Simulation()
@@ -216,6 +239,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
             
             sim = getSim(Nplanets)
             sim.integrator = "whfast512"
+            sim.integrator.kernel = self.kernel
             sim.integrator.corrector = 1
             sim.integrator.gr_potential = 1
             sim.integrator.concatenate_steps = 1
@@ -246,12 +270,13 @@ class TestIntegratorWHFast512(unittest.TestCase):
                 self.assertEqual(sim.particles[1+i].vx, sim2.particles[4+3*Nplanets+i].vx)
 
     def test_whfast512_com(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add("solar system")
         for p in sim.particles:
             p.vx += 0.1
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.corrector = 17
         sim.integrator.gr_potential = 1
         sim.dt = 6/365.25*2*math.pi
@@ -267,10 +292,11 @@ class TestIntegratorWHFast512(unittest.TestCase):
 
 
     def test_whfast512_restart(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add("solar system")
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.concatenate_steps = 5
         sim.integrator.gr_potential = True
         sim.integrator.corrector = 17
@@ -290,12 +316,13 @@ class TestIntegratorWHFast512(unittest.TestCase):
             self.assertEqual(sim.particles[i].vx, sim2.particles[i].vx)
     
     def test_whfast512_exit_min_distance(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add(m=1)
         sim.add(m=1e-8,a=1)
         sim.add(m=1e-8,a=1.2,f=math.pi)
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.concatenate_steps = 1000
         sim.dt = 6/365.25*2*math.pi
         sim.exact_finish_time = 0
@@ -305,11 +332,12 @@ class TestIntegratorWHFast512(unittest.TestCase):
         self.assertAlmostEqual(sim.t,11.456, 2)
     
     def test_whfast512_exit_min_distance_star(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add(m=1)
         sim.add(m=1e-8,a=1, e=0.9, f=math.pi)
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.concatenate_steps = 1000
         sim.dt = 6/365.25*2*math.pi
         sim.exact_finish_time = 0
@@ -319,11 +347,12 @@ class TestIntegratorWHFast512(unittest.TestCase):
         self.assertAlmostEqual(sim.t,2.99322, 2)
 
     def test_whfast512_exit_max_distance(self):
-        if not self.avx512_available(): return
+        self.require_kernel()
         sim = rebound.Simulation()
         sim.add(m=1)
         sim.add(m=1e-8,a=1, e=0.9, f=0)
         sim.integrator = "whfast512"
+        sim.integrator.kernel = self.kernel
         sim.integrator.concatenate_steps = 1000
         sim.dt = 6/365.25*2*math.pi
         sim.exact_finish_time = 0
@@ -332,6 +361,69 @@ class TestIntegratorWHFast512(unittest.TestCase):
             sim.steps(1)
         self.assertAlmostEqual(sim.t,0.722502, 2)
        
+class TestIntegratorWHFast512Kernels(unittest.TestCase):
+    def run_kernel(self, kernel, setup, N_systems):
+        sim = setup()
+        sim.integrator = "whfast512"
+        sim.integrator.N_systems = N_systems
+        sim.integrator.kernel = kernel
+        sim.integrator.gr_potential = 1
+        sim.integrator.corrector = 17
+        sim.dt = 6/365.25*2*math.pi
+        sim.exact_finish_time = 0
+        sim.integrator.concatenate_steps = 1000
+        try:
+            sim.steps(3)
+        except RuntimeError:
+            return None
+        return [(p.x, p.y, p.z, p.vx, p.vy, p.vz) for p in sim.particles]
+
+    def test_c_kernels_bitwise_identical(self):
+        # The C kernels use the same operations (with explicit fused multiply-adds) on every
+        # instruction set, so they agree bit for bit. The assembly agrees to round-off.
+        def ss():
+            sim = rebound.Simulation()
+            sim.add("solar system")
+            return sim
+        def two_systems():
+            sim = rebound.Simulation()
+            for s in range(2):
+                sim.add(m=1)
+                sim.add(m=1e-3, a=1, e=0.1+0.05*s, f=0.5, omega=0.53, inc=0.3, primary=sim.particles[-1])
+                sim.add(m=1e-4, a=2.3, e=0.1, f=0.15, omega=1.53, inc=0.12, primary=sim.particles[-2])
+            return sim
+        for setup, N_systems in [(ss, 1), (two_systems, 2)]:
+            results = {k: self.run_kernel(k, setup, N_systems) for k in [1, 2, 3, 4]}
+            self.assertTrue(all(math.isfinite(u) for p in results[4] for u in p))
+            ref = results[4]
+            self.assertIsNotNone(ref)
+            for k in [2, 3]:
+                if results[k] is not None:
+                    self.assertEqual(results[k], ref)
+            if results[1] is not None:
+                for a, b in zip(results[1], ref):
+                    for u, v in zip(a, b):
+                        self.assertAlmostEqual(u, v, delta=1e-9*max(1., abs(v)))
+
+    def test_unavailable_kernel_raises(self):
+        sim = rebound.Simulation()
+        sim.add("solar system")
+        sim.integrator = "whfast512"
+        sim.integrator.kernel = 99
+        sim.dt = 6/365.25*2*math.pi
+        sim.exact_finish_time = 0
+        with self.assertRaises(RuntimeError):
+            sim.steps(1)
+
+class TestIntegratorWHFast512KernelASM(TestIntegratorWHFast512):
+    kernel = 1
+class TestIntegratorWHFast512KernelCAVX512(TestIntegratorWHFast512):
+    kernel = 2
+class TestIntegratorWHFast512KernelCAVX2(TestIntegratorWHFast512):
+    kernel = 3
+class TestIntegratorWHFast512KernelCGeneric(TestIntegratorWHFast512):
+    kernel = 4
+
 
 if __name__ == "__main__":
     unittest.main()
