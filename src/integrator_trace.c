@@ -125,6 +125,7 @@ void reb_integrator_trace_free(void* state){
     free(trace->sap_lo);
     free(trace->sap_order);
     free(trace->sap_pairs);
+    free(trace->ks_any);
     free(trace);
 }
 
@@ -339,6 +340,30 @@ void reb_integrator_trace_dh_to_inertial(struct reb_simulation* r){
     particles[0].vz = trace->com_vel.z - temp.vz;
 }
 
+
+// Makes trace->ks_any valid for the current current_Ks (only entries read by the interaction step:
+// rows j < N_active, columns i > j).
+static void reb_integrator_trace_update_ks_any(struct reb_simulation* const r, struct reb_integrator_trace_state* const trace){
+    const size_t N = r->N;
+    const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
+    if (trace->N_allocated_ks_any < N){
+        trace->ks_any = realloc(trace->ks_any, N);
+        trace->N_allocated_ks_any = N;
+        trace->ks_any_valid = 0;
+    }
+    if (trace->ks_any_valid) return;
+    memset(trace->ks_any, 0, N);
+    for (size_t j=0; j<N_active && j<N; j++){
+        for (size_t i=j+1; i<N; i++){
+            if (trace->current_Ks[j*N+i]){
+                trace->ks_any[j] = 1;
+                trace->ks_any[i] = 1;
+            }
+        }
+    }
+    trace->ks_any_valid = 1;
+}
+#define REB_TRACE_BLOCK 32
 static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct reb_simulation* r){
     struct reb_particle* const particles = r->particles;
     struct reb_integrator_trace_state* const trace = r->integrator.state;
@@ -353,10 +378,50 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
         particles[i].ay = 0;
         particles[i].az = 0;
     }
+    // Pairs with current_Ks set are skipped. A particle without any such pair (ks_any = 0, the
+    // usual case) takes the blocked two-pass loop: separations and 1/r^3 factors first
+    // (vectorisable), then the accumulation in the original order. Same operations as the plain
+    // loop, so the results are identical.
+    reb_integrator_trace_update_ks_any(r, trace);
+    const unsigned char* const ks_any = trace->ks_any;
     for (size_t i=2; i<N_active; i++){
         if (reb_sigint > 1) return;
+        if (!ks_any[i] && i-1 >= 16){
+            const double xi = particles[i].x, yi = particles[i].y, zi = particles[i].z, mi = particles[i].m;
+            double axi = particles[i].ax, ayi = particles[i].ay, azi = particles[i].az;
+            for (size_t j0=1; j0<i; j0+=REB_TRACE_BLOCK){
+                const size_t nb = (i-j0) < REB_TRACE_BLOCK ? (i-j0) : REB_TRACE_BLOCK;
+                double bdx[REB_TRACE_BLOCK], bdy[REB_TRACE_BLOCK], bdz[REB_TRACE_BLOCK], bpf[REB_TRACE_BLOCK];
+                for (size_t k=0; k<nb; k++){
+                    bdx[k] = xi - particles[j0+k].x;
+                    bdy[k] = yi - particles[j0+k].y;
+                    bdz[k] = zi - particles[j0+k].z;
+                }
+                for (size_t k=0; k<nb; k++){
+                    const double _r = sqrt(bdx[k]*bdx[k] + bdy[k]*bdy[k] + bdz[k]*bdz[k] + softening2);
+                    bpf[k] = G / (_r*_r*_r);
+                }
+                for (size_t k=0; k<nb; k++){
+                    struct reb_particle* const pj = &particles[j0+k];
+                    const double prefact = bpf[k];
+                    const double prefactj = -prefact*pj->m;
+                    const double prefacti = prefact*mi;
+                    axi    += prefactj*bdx[k];
+                    ayi    += prefactj*bdy[k];
+                    azi    += prefactj*bdz[k];
+                    pj->ax += prefacti*bdx[k];
+                    pj->ay += prefacti*bdy[k];
+                    pj->az += prefacti*bdz[k];
+                }
+            }
+            particles[i].ax = axi;
+            particles[i].ay = ayi;
+            particles[i].az = azi;
+            continue;
+        }
+        const int ksi = ks_any[i];
         for (size_t j=1; j<i; j++){
-            if (trace->current_Ks[j*N+i]) continue;
+            if (ksi && ks_any[j] && trace->current_Ks[j*N+i]) continue;
             const double dx = particles[i].x - particles[j].x;
             const double dy = particles[i].y - particles[j].y;
             const double dz = particles[i].z - particles[j].z;
@@ -375,8 +440,9 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     const size_t startitestp = MAX(N_active,2);
     for (size_t i=startitestp; i<N; i++){
         if (reb_sigint > 1) return;
+        const int ksi = ks_any[i];
         for (size_t j=1; j<N_active; j++){
-            if (trace->current_Ks[j*N+i]) continue;
+            if (ksi && ks_any[j] && trace->current_Ks[j*N+i]) continue;
             const double dx = particles[i].x - particles[j].x;
             const double dy = particles[i].y - particles[j].y;
             const double dz = particles[i].z - particles[j].z;
@@ -1036,6 +1102,12 @@ void reb_integrator_trace_pre_ts_check(struct reb_simulation* const r){
     for (size_t i = 0; i < Nactive; i++){
         memset(&trace->current_Ks[i*N+i+1], 0, (N-i-1)*sizeof(int));
     }
+    if (trace->N_allocated_ks_any < N){
+        trace->ks_any = realloc(trace->ks_any, N);
+        trace->N_allocated_ks_any = N;
+    }
+    memset(trace->ks_any, 0, N);
+    trace->ks_any_valid = 1;
 
     if (r->testparticle_type == 1){
         trace->tponly_encounter = 0; // testparticles affect massive particles
@@ -1077,6 +1149,7 @@ void reb_integrator_trace_pre_ts_check(struct reb_simulation* const r){
 #define REB_TRACE_PRE_PAIR(i, j) \
             if (fast_switch ? reb_integrator_trace_switch_default_fast(r->particles, trace->dcrit6, i, j, h2, rch6) : _switch(r, i, j)){ \
                 trace->current_Ks[i*N+j] = 1; \
+                if (trace->ks_any_valid){ trace->ks_any[i] = 1; trace->ks_any[j] = 1; } \
                 if (trace->encounter_map[i] == 0){ \
                     trace->encounter_map[i] = 1; /* trigger encounter */ \
                     trace->encounter_N++; \
@@ -1159,6 +1232,7 @@ double reb_integrator_trace_post_ts_check(struct reb_simulation* const r){
                     new_close_encounter = 1; \
                 } \
                 trace->current_Ks[i*N+j] = 1; \
+                if (trace->ks_any_valid){ trace->ks_any[i] = 1; trace->ks_any[j] = 1; } \
                 if (trace->encounter_map[i] == 0){ \
                     trace->encounter_map[i] = 1; /* trigger encounter */ \
                     trace->encounter_N++; \
@@ -1297,6 +1371,7 @@ void reb_integrator_trace_did_add_particle(struct reb_simulation* r){
             trace->N_allocated   = r->N;
         }
 
+        trace->ks_any_valid = 0;
         // First reshuffle existing Ks
         size_t i = old_N;
         while (i --> 0){
@@ -1347,6 +1422,7 @@ void reb_integrator_trace_will_remove_particle(struct reb_simulation* r, size_t 
             return;
         }
 
+        trace->ks_any_valid = 0;
         // reshuffle current_Ks
         size_t counter = 0;
         const size_t new_N = r->N-1;

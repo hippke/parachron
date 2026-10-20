@@ -75,6 +75,10 @@ struct reb_integrator_trace_state {
     size_t N_allocated_sap;
     size_t N_sap_order;        // Number of particles in sap_order (0: needs initialisation)
     size_t N_allocated_sap_pairs;
+    // ks_any[k] = 1 if particle k is in any pair with current_Ks set (rows < N_active, upper triangle).
+    unsigned char* ks_any;
+    size_t N_allocated_ks_any;
+    int ks_any_valid;          // 0: must be recomputed from current_Ks (e.g. after adding/removing particles)
 };
 
 // Built in trace switching functions
