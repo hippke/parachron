@@ -31,6 +31,16 @@
 #include "boundary.h"
 #include <string.h>
 #include "tree.h"
+
+// Cell size in the opening criterion: the cell width (default), or with -DREB_TREE_BMAX the largest
+// distance from the cell's centre of mass to one of its particles (Salmon & Warren 1994). See
+// reports/03_literature_review.md: about 1.7x faster at equal 99th-percentile force error for
+// discs, but less efficient for flat shearing sheets.
+#ifdef REB_TREE_BMAX
+#define REB_TREE_CELL_SIZE(node) ((node)->bmax)
+#else
+#define REB_TREE_CELL_SIZE(node) ((node)->w)
+#endif
 #ifdef MPI
 #include "communication_mpi.h"
 #endif // MPI
@@ -186,6 +196,24 @@ static void reb_tree_calculate_gravity_data_in_cell(const struct reb_simulation*
             node->my /= m_tot;
             node->mz /= m_tot;
         }
+#ifdef REB_TREE_BMAX
+        // Upper bound on the distance from the centre of mass to any particle in the cell
+        // (Salmon & Warren 1994; Dehnen 2000): from the children, and at most the farthest corner.
+        node->bmax = 0;
+        for (int o=0; o<8; o++) {
+            struct reb_treecell* d = node->oct[o];
+            if (d!=NULL){
+                const double qx = d->mx - node->mx, qy = d->my - node->my, qz = d->mz - node->mz;
+                const double b = sqrt(qx*qx+qy*qy+qz*qz) + d->bmax;
+                if (b > node->bmax) node->bmax = b;
+            }
+        }
+        {
+            const double cx = fabs(node->mx - node->x) + 0.5*node->w, cy = fabs(node->my - node->y) + 0.5*node->w, cz = fabs(node->mz - node->z) + 0.5*node->w;
+            const double bc = sqrt(cx*cx+cy*cy+cz*cz);
+            if (bc < node->bmax) node->bmax = bc;
+        }
+#endif // REB_TREE_BMAX
 #ifdef QUADRUPOLE
         for (int o=0; o<8; o++) {
             struct reb_treecell* d = node->oct[o];
@@ -212,6 +240,9 @@ static void reb_tree_calculate_gravity_data_in_cell(const struct reb_simulation*
         node->mx = p.x;
         node->my = p.y;
         node->mz = p.z;
+#ifdef REB_TREE_BMAX
+        node->bmax = 0;
+#endif // REB_TREE_BMAX
     }
 }
 
@@ -302,7 +333,7 @@ static void reb_tree_calculate_acceleration_for_particle_from_cell(const struct 
     const double dz = gb.z - node->mz;
     const double r2 = dx*dx + dy*dy + dz*dz;
     if ( node->pt < 0 ) { // Not a leaf
-        if ( node->w*node->w > r->opening_angle2*r2 ){
+        if ( REB_TREE_CELL_SIZE(node)*REB_TREE_CELL_SIZE(node) > r->opening_angle2*r2 ){
             for (int o=0; o<8; o++) {
                 if (node->oct[o] != NULL) {
                     reb_tree_calculate_acceleration_for_particle_from_cell(r, pt, node->oct[o], gb);
@@ -364,7 +395,7 @@ void reb_tree_calculate_acceleration_for_particle(const struct reb_simulation* c
             const double dz = gb.z - node->mz;
             const double r2 = dx*dx + dy*dy + dz*dz;
             if ( node->pt < 0 ) { // Not a leaf
-                if ( node->w*node->w > opening_angle2*r2 ){
+                if ( REB_TREE_CELL_SIZE(node)*REB_TREE_CELL_SIZE(node) > opening_angle2*r2 ){
                     if (sp + 8 > REB_TREE_WALK_STACK){
                         // Extremely deep tree: walk this subtree recursively (same order).
                         particles[pt].ax = ax; particles[pt].ay = ay; particles[pt].az = az;
