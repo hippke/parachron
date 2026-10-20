@@ -34,6 +34,7 @@ DEFAULT_SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
 CORES = None   # None: auto (all cores for N_active >= 1024 on hybrid CPUs), "all", "performance"
 CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n2048", "ias15_tp2000",
          "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages", "ias15_tp2000+stages",
+         "ias15_n512+blocks", "ias15_n2048+blocks", "ias15_tp2000+blocks", "whfast_n256+blocks",
          "whfast_ss", "whfast_tp10k", "whfast_n256",
          "tree_selfgrav", "tree_selfgrav_group", "tree_rings", "mercurius_plts", "mercurius_disc", "trace_disc", "trace_tp",
          "ensemble_ss512", "ensemble_3p512", "ensemble_ss"]
@@ -133,10 +134,10 @@ def report_ab(results, threads):
 
 
 def report_stages(results, threads):
-    """For CASE+stages also compare to the default IAS15 mode of the serial build."""
+    """For CASE+stages and CASE+blocks also compare to the default mode of the serial build."""
     lines = []
     for case, rows in results.items():
-        base = case.replace("+stages", "")
+        base = case.replace("+stages", "").replace("+blocks", "")
         if case == base or base not in results:
             continue
         ser = results[base]["serial:1"]
@@ -148,7 +149,7 @@ def report_stages(results, threads):
                                  relerr(sigs[0], ser["signature"]))
         lines.append(line)
     if lines:
-        print("\nparallel_stages=1 vs the default IAS15 mode of the serial build (speedup at T threads;")
+        print("\nparallel_stages=1 / gravity_block_order=1 vs the default mode of the serial build (speedup at T threads;")
         print("'identical': serial build and all thread counts agree bitwise; last column: difference to default mode):")
         print("\n".join(lines))
 

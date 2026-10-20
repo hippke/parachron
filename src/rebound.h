@@ -288,6 +288,11 @@ struct reb_simulation {
     unsigned int tree_group_size;   // Tree gravity: 0 (default): one tree walk per particle. G > 0: one walk per group of
                                     // up to G nearby particles (opening criterion against the group's bounding sphere),
                                     // e.g. 32. Faster at equal accuracy, but different (not bitwise identical) results.
+    unsigned int gravity_block_order; // Basic gravity: 0 (default): pairs summed in the order of the serial loop
+                                    // (results identical to the serial build at any thread count). 1: pairs summed
+                                    // in fixed row blocks, which splits well across OpenMP threads (no extra work);
+                                    // results identical between serial and OpenMP builds and for any thread count,
+                                    // but differ from mode 0 at the round-off level. Saved in Simulationarchives.
     enum REB_STATUS status;         // Current simulation status
     int     exact_finish_time;      // 1 (default): integrate exactly to the time requested and adjust timestep if needed, 0: may overshoot by one timestep
 

@@ -894,8 +894,159 @@ static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size
 #endif // OPENMP
 
 // AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h); identical results.
+// Basic gravity in block order (r->gravity_block_order = 1; all builds). The active particles are
+// split into about N_active/64 row blocks (at most 64; boundaries at equal work), the test
+// particles into blocks of about 8,192 pair interactions. Each block is one task: its rows of the
+// half-pair loop (partners j < i; test-particle rows: active partners, back-reaction only for
+// testparticle_type 1), over all ghost boxes in the serial order, into its own zeroed arrays; the
+// acceleration of particle k is then the sum over the blocks that touch k in ascending order.
+// Blocks that are the only ones touching their particles write in place. The plan depends on N,
+// N_active and the settings only, so the result is the same in serial and OpenMP builds and for
+// any number of threads; the work is that of the serial loop plus the sums.
+#define REB_GRAVITY_BO_ROWS 64
+#define REB_GRAVITY_BO_MAX 64
+#define REB_GRAVITY_BO_TP_PAIRS 8192
+#define REB_GRAVITY_BO_SCRATCH_MAX ((size_t)1<<23)
+static void reb_gravity_basic_block_order(struct reb_simulation* const r){
+    struct reb_particle* const particles = r->particles;
+    const size_t N = r->N;
+    if (N==0) return;
+    const size_t Na = (r->N_active==SIZE_MAX || r->N_active>N) ? N : r->N_active;
+    const size_t Nt = N-Na;
+    if (Na==0){ // no massive particles: no forces
+        for (size_t i=0; i<N; i++){ particles[i].ax = 0.; particles[i].ay = 0.; particles[i].az = 0.; }
+        return;
+    }
+    const double G = r->G;
+    const double softening = r->softening;
+    const int tptype = r->testparticle_type;
+    const unsigned int ign = r->gravity_ignore_terms;
+    const size_t starti = (ign==REB_GRAVITY_IGNORE_TERMS_NONE)?1:2;
+    const size_t startj = (ign==REB_GRAVITY_IGNORE_TERMS_INVOLVING_0)?1:0;
+    // Plan (a function of N, N_active and the settings only)
+    size_t Ka = Na/REB_GRAVITY_BO_ROWS;
+    if (Ka>REB_GRAVITY_BO_MAX) Ka = REB_GRAVITY_BO_MAX;
+    if (Ka<1) Ka = 1;
+    size_t Kt = 0;
+    if (Nt && Na){
+        Kt = (Nt*Na)/REB_GRAVITY_BO_TP_PAIRS;
+        if (Kt>REB_GRAVITY_BO_MAX) Kt = REB_GRAVITY_BO_MAX;
+        if (Kt>Nt) Kt = Nt;
+        if (Kt<1) Kt = 1;
+    }
+    while (Ka+Kt>1 && 3*(Ka+Kt)*N > REB_GRAVITY_BO_SCRATCH_MAX){
+        if (Kt>1) Kt--; else if (Ka>1) Ka--; else break;
+    }
+    size_t rb[REB_GRAVITY_BO_MAX+1], tr[REB_GRAVITY_BO_MAX+1];
+    for (size_t q=0; q<=Ka; q++) rb[q] = q==Ka ? Na : (size_t)((double)Na*sqrt((double)q/(double)Ka));
+    for (size_t q=1; q<=Ka; q++){ if (rb[q]<rb[q-1]+1 && rb[q-1]<Na) rb[q] = rb[q-1]+1; }
+    rb[Ka] = Na;
+    for (size_t u=0; u<=Kt; u++) tr[u] = Na + u*Nt/(Kt?Kt:1);
+    const size_t K = Ka+Kt;
+    const int active_inplace = Ka==1 && (Kt==0 || !tptype);
+    const int tp_inplace = !tptype;
+    const int inplace_all = active_inplace && tp_inplace;
+    // Scratch: positions, masses and accelerations (7N) and, unless all blocks write in place,
+    // 3N per block.
+    const size_t need = 7*N + (inplace_all ? 0 : 3*K*N);
+    if (r->N_allocated_gravity_pair_table<need){
+        free(r->gravity_pair_table);
+        r->gravity_pair_table = malloc(sizeof(double)*need);
+        r->N_allocated_gravity_pair_table = r->gravity_pair_table ? need : 0;
+        if (!r->gravity_pair_table){ reb_simulation_error(r, "Out of memory in block-order gravity."); return; }
+    }
+    double* const x = r->gravity_pair_table;
+    double* const y = x + N;
+    double* const z = y + N;
+    double* const m = z + N;
+    double* const sa = m + N;           // accelerations: sa (x), sa+N (y), sa+2N (z)
+    double* const tb = sa + 3*N;        // block arrays
+    // Ghost boxes in the serial order
+    const int ngx = r->N_ghost_x, ngy = r->N_ghost_y, ngz = r->N_ghost_z;
+    const size_t ngb = (size_t)(2*ngx+1)*(size_t)(2*ngy+1)*(size_t)(2*ngz+1);
+    struct reb_vec6d gb_buf[27];
+    struct reb_vec6d* const gbs = ngb<=27 ? gb_buf : malloc(sizeof(struct reb_vec6d)*ngb);
+    {
+        size_t c = 0;
+        for (int gx=-ngx; gx<=ngx; gx++) for (int gy=-ngy; gy<=ngy; gy++) for (int gz=-ngz; gz<=ngz; gz++){
+            gbs[c++] = reb_boundary_get_ghostbox(r, gx, gy, gz);
+        }
+    }
+    const size_t RCHUNK = 256;
+    const size_t nrchunk = (N+RCHUNK-1)/RCHUNK;
+#ifdef OPENMP
+    const int par = reb_omp_parallel((double)N*(double)(Na?Na:1));
+#endif // OPENMP
+#pragma omp parallel if(par) num_threads(reb_omp_threads())
+    {
+#pragma omp for schedule(static)
+    for (size_t i=0; i<N; i++){
+        x[i] = particles[i].x; y[i] = particles[i].y; z[i] = particles[i].z; m[i] = particles[i].m;
+    }
+#pragma omp for schedule(dynamic, 1)
+    for (size_t q=0; q<K; q++){
+        const int inplace = q<Ka ? active_inplace : tp_inplace;
+        double* const ax = inplace ? sa : tb + q*3*N;
+        double* const ay = ax + N;
+        double* const az = ay + N;
+        if (q<Ka){
+            const size_t hi = rb[q+1];
+            for (size_t i=0; i<hi; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
+            for (size_t g=0; g<ngb; g++){
+                reb_gravity_basic_rows_arrays_ex(x, y, z, m, ax, ay, az, rb[q], hi, starti, startj, SIZE_MAX, 1, gbs[g], G, softening);
+            }
+        }else{
+            const size_t u = q-Ka;
+            const size_t r0 = tr[u], r1 = tr[u+1];
+            for (size_t i=r0; i<r1; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
+            if (tptype){ for (size_t i=0; i<Na; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; } }
+            for (size_t g=0; g<ngb; g++){
+                reb_gravity_basic_tp_rows_arrays(x, y, z, m, ax, ay, az, r0, r1, starti, startj, Na, tptype, gbs[g], G, softening);
+            }
+        }
+    }
+    if (!inplace_all){
+#pragma omp for schedule(static)
+        for (size_t c=0; c<nrchunk; c++){
+            const size_t k0 = c*RCHUNK;
+            const size_t k1 = k0+RCHUNK<N ? k0+RCHUNK : N;
+            size_t q0 = 0;
+            for (size_t k=k0; k<k1; k++){
+                if (k<Na){
+                    if (active_inplace) continue;          // already final
+                    while (rb[q0+1]<=k) q0++;              // block of particle k
+                    for (int d=0; d<3; d++){
+                        double a = tb[q0*3*N + d*N + k];
+                        for (size_t q=q0+1; q<Ka; q++) a += tb[q*3*N + d*N + k];
+                        if (tptype){
+                            for (size_t q=Ka; q<K; q++) a += tb[q*3*N + d*N + k];
+                        }
+                        sa[d*N + k] = a;
+                    }
+                }else{
+                    if (tp_inplace) continue;              // already final
+                    size_t u = 0;
+                    while (tr[u+1]<=k) u++;                // test-particle block of k
+                    for (int d=0; d<3; d++) sa[d*N + k] = tb[(Ka+u)*3*N + d*N + k];
+                }
+            }
+        }
+    }
+#pragma omp for schedule(static)
+    for (size_t i=0; i<N; i++){
+        particles[i].ax = sa[i]; particles[i].ay = sa[N+i]; particles[i].az = sa[2*N+i];
+    }
+    }
+    if (gbs!=gb_buf) free(gbs);
+}
+
 REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
     PROFILING_START();
+    if (r->gravity_block_order){
+        reb_gravity_basic_block_order(r);
+        PROFILING_STOP(PROFILING_CAT_GRAVITY);
+        return;
+    }
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
     const double G = r->G;

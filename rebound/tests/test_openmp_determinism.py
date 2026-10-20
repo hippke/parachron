@@ -66,6 +66,23 @@ class TestOpenMPDeterminism(unittest.TestCase):
             return sim
         self.run_threads(make, 3)
 
+    def test_block_order_gravity(self):
+        def make():
+            random.seed(8)
+            sim = rebound.Simulation()
+            sim.integrator = "whfast"
+            sim.dt = 0.01
+            sim.gravity_block_order = 1
+            sim.testparticle_hidewarnings = 1
+            sim.add(m=1.)
+            for _ in range(599):
+                sim.add(m=1e-8, a=1.+2.*random.random(), e=0.02*random.random(), f=6.28*random.random(), primary=sim.particles[0])
+            sim.N_active = 300
+            sim.testparticle_type = 1
+            sim.move_to_com()
+            return sim
+        self.run_threads(make, 5)
+
     def test_parallel_basic_gravity(self):
         def make():
             random.seed(6)

@@ -56,6 +56,7 @@ nav:
       - c_outputfunctions.md
       - miscellaneous.md
       - mpi.md
+      - openmp.md
   - "Examples":
     - examples.md
     - "Planetary systems":

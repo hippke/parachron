@@ -1,6 +1,7 @@
 // Bitwise check of the gravity routines: prints one hash of the exact acceleration bits per
 // configuration. Run it against the serial library and against the OpenMP library with several
-// OMP_NUM_THREADS values; all outputs must be identical.
+// OMP_NUM_THREADS values; all outputs must be identical. "gravity_check blocks" does the same for
+// basic gravity with gravity_block_order = 1.
 //
 //   cc -O2 -I src gravity_check.c -L src -lrebound -Wl,-rpath,$PWD/src -lm -o gravity_check
 #include <stdio.h>
@@ -23,10 +24,12 @@ static uint64_t hash_acc(struct reb_simulation* r){
     return h;
 }
 
-int main(void){
+int main(int argc, char** argv){
+    // With an argument "blocks": basic gravity with gravity_block_order = 1 (compensated skipped).
+    const int blocks = argc>1 && !strcmp(argv[1], "blocks");
     const size_t Ns[] = {3, 17, 40, 200, 700, 1100, 1600};
     const char* gravities[] = {"basic", "compensated"};
-    for (int g=0; g<2; g++){
+    for (int g=0; g<(blocks?1:2); g++){
     for (int in=0; in<7; in++){
     for (int tp=0; tp<3; tp++){          // 0: no test particles, 1: type 0, 2: type 1
     for (int ign=0; ign<3; ign++){       // gravity_ignore_terms
@@ -36,6 +39,7 @@ int main(void){
         struct reb_simulation* r = reb_simulation_create();
         reb_simulation_set_integrator(r, "leapfrog");
         r->gravity = g==0 ? REB_GRAVITY_BASIC : REB_GRAVITY_COMPENSATED;
+        r->gravity_block_order = blocks;
         r->softening = ghost ? 0.01 : 0.;
         const size_t N = Ns[in];
         for (size_t i=0; i<N; i++){

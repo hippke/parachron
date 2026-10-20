@@ -5,7 +5,7 @@
 
 The basic gravity routine works is the default. It works in most cases. 
 It uses direct summation to calculate gravitational forces between all particle pairs.
-OpenMP parallelization is implemented. If OpenMP is turned on, the scaling is $O(N^2)$, otherwise, it is $O(\frac12 N^2)$, where $N$ is the number of particles. 
+It scales as $O(\frac12 N^2)$, where $N$ is the number of particles. OpenMP parallelization is implemented: from about 256 particles, the force calculation is split across threads, with results bitwise identical to the serial loop. The opt-in setting `gravity_block_order = 1` sums in fixed blocks instead, which is faster on several cores and still independent of the number of threads. See [Multicore (OpenMP)](openmp.md).
 
 ## Compensated
 `REB_GRAVITY_COMPENSATED`

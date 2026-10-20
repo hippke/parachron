@@ -401,13 +401,17 @@ int main(int argc, char** argv){
     }
     const double scale = argc>2 ? atof(argv[2]) : 1.;
     if (!strncmp(argv[1], "ensemble_", 9)) return run_ensemble(argv[1], scale);
-    // A case name ending in "+stages" runs the IAS15 case with ias15.parallel_stages = 1.
+    // A case name ending in "+stages" runs the IAS15 case with ias15.parallel_stages = 1;
+    // "+blocks" (any case) uses basic gravity in block order (gravity_block_order = 1).
     char name[64];
     snprintf(name, sizeof(name), "%s", argv[1]);
+    char* blocks = strstr(name, "+blocks");      // any case: gravity_block_order = 1
+    if (blocks) *blocks = 0;
     char* plus = strstr(name, "+stages");
     if (plus) *plus = 0;
     struct work w = make_case(name, scale);
     struct reb_simulation* r = w.r;
+    if (blocks) r->gravity_block_order = 1;
     if (plus){
         if (strncmp(name, "ias15", 5)){ fprintf(stderr, "+stages needs an ias15 case\n"); return 1; }
         ((struct reb_integrator_ias15_state*)r->integrator.state)->parallel_stages = 1;
