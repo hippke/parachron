@@ -147,6 +147,7 @@ void reb_integrator_ias15_free(void* p){
     free(ias15->csx);
     free(ias15->csv);
     free(ias15->csa0);
+    free(ias15->dg6);
     free(ias15);
 }
 
@@ -285,6 +286,12 @@ static void reb_integrator_ias15_alloc(struct reb_simulation* r, struct reb_inte
             csv[i] = 0;
         }
         ias15->N_allocated = N3;
+    }
+    if (N3 > ias15->N_allocated_dg6){
+        // Scratch array, not part of the saved state: also allocated after the state was restored
+        // from a Simulationarchive or copied (where N_allocated comes from the file).
+        ias15->dg6 = realloc(ias15->dg6, sizeof(double)*N3);
+        ias15->N_allocated_dg6 = N3;
     }
 }
 
@@ -577,6 +584,10 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                     {
                         double maxak = 0.0;
                         double maxb6ktmp = 0.0;
+                        double* REB_RESTRICT const dg6 = ias15->dg6;
+                        // Element-wise update (vectorisable); the convergence measure below needs the
+                        // change of g.p6, which is kept in dg6.
+                        REB_IAS15_IVDEP
                         for(size_t k=0;k<N3;++k) {
                             double tmp = g.p6[k];
                             double gk = at[k];
@@ -592,8 +603,11 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                             add_cs(&(b.p4[k]), &(csb.p4[k]), tmp * c[19]);
                             add_cs(&(b.p5[k]), &(csb.p5[k]), tmp * c[20]);
                             add_cs(&(b.p6[k]), &(csb.p6[k]), tmp);
-
-                            // Monitor change in b.p6[k] relative to at[k]. The predictor corrector scheme is converged if it is close to 0.
+                            dg6[k] = tmp;
+                        }
+                        // Monitor change in b.p6[k] relative to at[k]. The predictor corrector scheme is converged if it is close to 0.
+                        for(size_t k=0;k<N3;++k) {
+                            const double tmp = dg6[k];
                             if (ias15->adaptive_mode!=REB_IAS15_ADAPTIVEMODE_INDIVIDUAL){
                                 const double ak  = fabs(at[k]);
                                 if (isnormal(ak) && ak>maxak){
