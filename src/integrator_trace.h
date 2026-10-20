@@ -53,7 +53,8 @@ struct reb_integrator_trace_state {
     unsigned int tponly_encounter;      // 0 if any encounters are between two massive bodies. 1 if encounters only involve test particles
 
     struct reb_particle* REB_RESTRICT particles_backup; //  Contains coordinates before the entire step
-    struct reb_particle* REB_RESTRICT particles_backup_kepler; //  Contains coordinates before kepler step
+    struct reb_particle* REB_RESTRICT particles_backup_kepler; //  Particles after the kepler step (only for test-particle-only encounters)
+    struct reb_vec6d* REB_RESTRICT particles_backup_kepler_xv; //  Positions and velocities before kepler step
     struct reb_particle* REB_RESTRICT particles_backup_additional_forces; // For additional forces
 
     size_t* encounter_map;              // Map to represent which particles are integrated with BS

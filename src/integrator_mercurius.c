@@ -101,6 +101,7 @@ void* reb_integrator_mercurius_create(){
 void reb_integrator_mercurius_free(void* p){
     struct reb_integrator_mercurius_state* mercurius = p;
     free(mercurius->particles_backup);
+    free(mercurius->particles_backup_xv);
     free(mercurius->particles_backup_additional_forces);
     free(mercurius->encounter_map);
     free(mercurius->dcrit);
@@ -249,7 +250,7 @@ static void reb_mercurius_encounter_predict(struct reb_simulation* const r, stru
     // It makes use of the old and new position and velocities obtained
     // after the Kepler step.
     struct reb_particle* const particles = r->particles;
-    struct reb_particle* const particles_backup = mercurius->particles_backup;
+    const struct reb_vec6d* const particles_backup = mercurius->particles_backup_xv;
     const double* const dcrit = mercurius->dcrit;
     const size_t N = r->N;
     const size_t N_active = r->N_active==SIZE_MAX?r->N:r->N_active;
@@ -383,7 +384,9 @@ static void reb_mercurius_encounter_step(struct reb_simulation* const r, struct 
     for (size_t i=0; i<r->N; i++){
         if(mercurius->encounter_map[i]){  
             struct reb_particle tmp = r->particles[i];      // Copy for potential use for tponly_encounter
-            r->particles[i] = mercurius->particles_backup[i];     // Use coordinates before whfast step
+            const struct reb_vec6d xv = mercurius->particles_backup_xv[i]; // Use coordinates before whfast step
+            r->particles[i].x = xv.x; r->particles[i].y = xv.y; r->particles[i].z = xv.z;
+            r->particles[i].vx = xv.vx; r->particles[i].vy = xv.vy; r->particles[i].vz = xv.vz;
             mercurius->encounter_map[i_enc] = i;
             i_enc++;
             if (i<N_active){
@@ -776,6 +779,7 @@ void reb_integrator_mercurius_did_add_particle(struct reb_simulation* r){
             mercurius->dcrit[r->N-1] = reb_integrator_mercurius_calculate_dcrit_for_particle(r, mercurius, r->N-1);
             if (mercurius->N_allocated<r->N){
                 mercurius->particles_backup   = realloc(mercurius->particles_backup,sizeof(struct reb_particle)*r->N);
+                mercurius->particles_backup_xv = realloc(mercurius->particles_backup_xv,sizeof(struct reb_vec6d)*r->N);
                 mercurius->encounter_map      = realloc(mercurius->encounter_map,sizeof(size_t)*r->N);
                 r->map = mercurius->encounter_map;
                 mercurius->N_allocated = r->N;
@@ -845,6 +849,7 @@ void reb_integrator_mercurius_step(struct reb_simulation* r, void* state){
         // These arrays are only used within one timestep. 
         // Can be recreated without loosing bit-wise reproducibility
         mercurius->particles_backup   = realloc(mercurius->particles_backup,sizeof(struct reb_particle)*N);
+        mercurius->particles_backup_xv = realloc(mercurius->particles_backup_xv,sizeof(struct reb_vec6d)*N);
         mercurius->encounter_map      = realloc(mercurius->encounter_map,sizeof(size_t)*N);
         mercurius->N_allocated = N;
     }
@@ -898,7 +903,16 @@ void reb_integrator_mercurius_step(struct reb_simulation* r, void* state){
     // Result will be used in encounter prediction.
     // Particles having a close encounter will be overwritten 
     // later by encounter step.
-    memcpy(mercurius->particles_backup,r->particles,N*sizeof(struct reb_particle)); 
+    // Only positions and velocities are copied: the Kepler step and the encounter
+    // prediction do not change any other field.
+    {
+        const struct reb_particle* const p = r->particles;
+        struct reb_vec6d* const b = mercurius->particles_backup_xv;
+        for (size_t i=0; i<N; i++){
+            b[i].x = p[i].x; b[i].y = p[i].y; b[i].z = p[i].z;
+            b[i].vx = p[i].vx; b[i].vy = p[i].vy; b[i].vz = p[i].vz;
+        }
+    }
     reb_integrator_mercurius_kepler_step(r, r->dt);
 
     reb_mercurius_encounter_predict(r, mercurius);

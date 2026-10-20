@@ -42,6 +42,7 @@ struct reb_integrator_mercurius_state {
     size_t N_allocated_dcrit;       // Current size of dcrit arrays
     double* dcrit;                  // Precalculated switching radii for particles
     struct reb_particle* REB_RESTRICT particles_backup; //  contains coordinates before Kepler step for encounter prediction
+    struct reb_vec6d* REB_RESTRICT particles_backup_xv; // positions and velocities before Kepler step (the Kepler step changes nothing else)
     struct reb_particle* REB_RESTRICT particles_backup_additional_forces; // contains coordinates before Kepler step for encounter prediction
     size_t* encounter_map;          // Map to represent which particles are integrated with ias15
     struct reb_vec3d com_pos;       // Used to keep track of the center of mass during the timestep

@@ -116,6 +116,7 @@ void reb_integrator_trace_free(void* state){
     struct reb_integrator_trace_state* trace = state;
     free(trace->particles_backup);
     free(trace->particles_backup_kepler);
+    free(trace->particles_backup_kepler_xv);
     free(trace->particles_backup_additional_forces);
     free(trace->encounter_map);
     free(trace->encounter_map_backup);
@@ -730,7 +731,9 @@ void reb_integrator_trace_bs_step(struct reb_simulation* const r, double dt){
     for (size_t i=0; i<r->N; i++){
         if(trace->encounter_map[i]){
             struct reb_particle tmp = r->particles[i];      // Copy for potential use for tponly_encounter
-            r->particles[i] = trace->particles_backup_kepler[i]; // Coordinates before WHFast step, overwrite particles with close encounters
+            const struct reb_vec6d xv = trace->particles_backup_kepler_xv[i]; // Coordinates before WHFast step, overwrite particles with close encounters
+            r->particles[i].x = xv.x; r->particles[i].y = xv.y; r->particles[i].z = xv.z;
+            r->particles[i].vx = xv.vx; r->particles[i].vy = xv.vy; r->particles[i].vz = xv.vz;
             trace->encounter_map[i_enc] = i;
             i_enc++;
             if (i<N_active){
@@ -867,7 +870,17 @@ void reb_integrator_trace_bs_step(struct reb_simulation* const r, double dt){
 
 void reb_integrator_trace_kepler_step(struct reb_simulation* const r, const double _dt){
     struct reb_integrator_trace_state* const trace = r->integrator.state;
-    memcpy(trace->particles_backup_kepler,r->particles,r->N*sizeof(struct reb_particle));
+    // Only positions and velocities are copied: the WHFast part of the Kepler step does not
+    // change any other field.
+    {
+        const struct reb_particle* const p = r->particles;
+        struct reb_vec6d* const b = trace->particles_backup_kepler_xv;
+        const size_t N = r->N;
+        for (size_t i=0; i<N; i++){
+            b[i].x = p[i].x; b[i].y = p[i].y; b[i].z = p[i].z;
+            b[i].vx = p[i].vx; b[i].vy = p[i].vy; b[i].vz = p[i].vz;
+        }
+    }
     reb_integrator_trace_whfast_step(r, _dt);
     reb_integrator_trace_bs_step(r, _dt);
 }
@@ -1181,6 +1194,7 @@ void reb_integrator_trace_did_add_particle(struct reb_simulation* r){
             trace->current_Ks    = realloc(trace->current_Ks, sizeof(int)*r->N*r->N);
             trace->particles_backup = realloc(trace->particles_backup, sizeof(struct reb_particle)*r->N);
             trace->particles_backup_kepler = realloc(trace->particles_backup_kepler, sizeof(struct reb_particle)*r->N);
+            trace->particles_backup_kepler_xv = realloc(trace->particles_backup_kepler_xv, sizeof(struct reb_vec6d)*r->N);
             trace->current_Ks    = realloc(trace->current_Ks, sizeof(int)*r->N*r->N);
             trace->encounter_map = realloc(trace->encounter_map, sizeof(size_t)*r->N);
             r->map = trace->encounter_map;
@@ -1271,6 +1285,7 @@ void reb_integrator_trace_step(struct reb_simulation* r, void* state){
         // Can be recreated without loosing bit-wise reproducibility.
         trace->particles_backup       = realloc(trace->particles_backup,sizeof(struct reb_particle)*N);
         trace->particles_backup_kepler   = realloc(trace->particles_backup_kepler,sizeof(struct reb_particle)*N);
+        trace->particles_backup_kepler_xv = realloc(trace->particles_backup_kepler_xv,sizeof(struct reb_vec6d)*N);
         trace->current_Ks             = realloc(trace->current_Ks,sizeof(int)*N*N);
         trace->encounter_map          = realloc(trace->encounter_map,sizeof(size_t)*N);
         trace->encounter_map_backup   = realloc(trace->encounter_map_backup,sizeof(size_t)*N);
