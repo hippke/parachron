@@ -5,6 +5,23 @@ single-core `perf-bench` work). Goal: make IAS15 and/or WHFast(X) finish sooner 
 i.e. the wall time of the OpenMP build at T threads must be **below the wall time of the stock serial build**
 (not merely below the OpenMP build at 1 thread).
 
+## Summary (end of this round, commit `f0fe887`, measured on an Intel i5-13500)
+
+| | stock OpenMP build (2 threads) | this branch, best thread count (P-cores only) |
+|---|---|---|
+| small systems (ias15_hltau N = 6, whfast_ss 8 planets, embryos N = 61) | 0.08–0.23x | 1.00x (never slower than serial) |
+| IAS15 N = 128 / 512 / 2048, default mode | 0.45 / 0.47 / 0.70x | 1.01 / 3.15 / 3.85x |
+| IAS15 `parallel_stages = 1` (vs default serial IAS15), N = 61 / 128 / 512 / 2048 | – | 1.89 / 2.89 / 4.51 / 5.69x |
+| WHFast, 2 planets + 10,000 test particles | 0.89x | 2.28x |
+| WHFast, 256 massive bodies | 0.42x | 1.93x (T = 4) |
+| results | differ from serial (up to 5e-2 relative in whfast_ss) | bitwise identical to the serial build at every thread count |
+
+Also fixed on the way: the OpenMP WHFast Jacobi μ bug, TRACE's OpenMP encounter-matrix indexing,
+a data race (EOS jerk loop), thread-count-dependent reductions; the OpenMP test suite went from > 15
+minutes (stopped) to 57 s, 956 tests passing. Not tested in parallel: WHFast512 (no OpenMP code paths,
+~150 ns per step for 8 planets: expected 1.00x), MERCURIUS/TRACE performance (tests only), compensated
+gravity performance.
+
 ## Process
 
 Same loop as `PERF_LOG.md` of the single-core work, adapted to threads:
@@ -223,7 +240,7 @@ All bitwise identical to the serial build at every thread count. Readings:
 - T = 20 is slower than 16 for gravity: P- and E-cores mixed, and the static row-block split makes the
   P-cores wait at the barrier for the E-cores. More, smaller blocks with dynamic scheduling (item P11).
 
-## Iteration 7 — gravity threshold from workstation data (commit `b301823`) — kept
+## Iteration 7 — gravity threshold from workstation data (commit `b301823`) — kept (side effect found in iteration 10: mixed team sizes, item P14)
 
 Second i5-13500 run (stage cases included, and with `--cflags="-DREB_OMP_MIN_WORK_GRAVITY=65536."`):
 
@@ -242,7 +259,7 @@ New rule: parallel when N_active² ≥ 2^16, independent of T, with at most max(
 (all threads when test-particle rows dominate, e.g. whfast_tp10k). Bitwise results unchanged
 (gravity_check 189/189 at T = 1, 2, 3, 5; OpenMP suite 956 passed at T = 3).
 
-## Iteration 8 — IAS15 stage mode in row blocks (commit `921e2cc`) — kept, to be confirmed on a workstation
+## Iteration 8 — IAS15 stage mode in row blocks (commit `921e2cc`) — kept (confirmed on the i5-13500 in iteration 10: 1.14–1.62x at T = 6)
 
 Second i5-13500 run, stage mode vs the default serial IAS15:
 
@@ -282,6 +299,58 @@ For the threads to land on the P-cores, bind them (`OMP_PROC_BIND=close OMP_PLAC
 `run_parallel.py` does; Linux usually prefers P-cores for busy threads without binding too).
 `run_parallel.py --all-cores` measures the old behaviour for comparison.
 
+## Iteration 10 — workstation measurement of iterations 7–9 (user, i5-13500, commit `f0fe887`) — measurement only
+
+Raw output: `i5-13500_run3_commitf0fe887.txt` (work directory, `bench_results/parallel/`).
+
+Default (P-cores only; T > 6 runs as 6), speedup vs the serial build:
+
+| case | omp1 | omp2 | omp4 | omp8 | omp16 | omp20 |
+|---|---|---|---|---|---|---|
+| ias15_hltau | 0.97x | 0.96x | 0.99x | 0.99x | 0.99x | 0.98x |
+| ias15_embryos | 1.01x | 1.01x | 1.00x | 1.01x | 1.01x | 0.99x |
+| ias15_n128 | 1.01x | 1.01x | 1.01x | 1.01x | 1.01x | 1.01x |
+| ias15_n512 | 0.99x | 1.62x | 2.65x | 3.15x | 3.11x | 3.13x |
+| ias15_n2048 | 0.98x | 1.57x | 2.75x | 3.83x | 3.85x | 3.83x |
+| ias15_embryos+stages (vs default serial) | 0.87x | 1.27x | 1.87x | 1.89x | 1.89x | 1.89x |
+| ias15_n128+stages (vs default serial) | 0.94x | 1.62x | 2.45x | 2.88x | 2.89x | 2.86x |
+| ias15_n512+stages (vs default serial) | 0.95x | 1.82x | 3.37x | 4.49x | 4.51x | 4.50x |
+| ias15_n2048+stages (vs default serial) | 1.08x | 2.09x | 3.97x | 5.69x | 5.69x | 5.68x |
+| whfast_ss | 1.00x | 0.99x | 1.00x | 1.00x | 1.00x | 0.99x |
+| whfast_tp10k | 1.00x | 1.48x | 2.07x | 2.28x | 2.28x | 2.28x |
+| whfast_n256 | 0.99x | 1.24x | 1.93x | 1.27x | 1.36x | 1.36x |
+
+`--all-cores` (efficiency cores too), selected rows:
+
+| case | omp4 | omp8 | omp16 | omp20 |
+|---|---|---|---|---|
+| ias15_n2048 | 2.85x | 3.95x | 4.42x | 4.30x |
+| ias15_n512+stages (vs default serial) | 3.36x | 4.24x | 3.26x | 1.95x |
+| ias15_n2048+stages (vs default serial) | 3.94x | 6.28x | 7.44x | **8.55x** |
+| whfast_tp10k | 1.96x | 2.00x | 2.27x | 1.54x |
+| whfast_n256 | 2.00x | 1.08x | **0.04x** | **0.03x** |
+
+A/B at T = 6, iteration 9 tree vs iteration 6 tree (`--compare-src`, stage cases): n128 1.14x, n512
+1.46x, n2048 1.62x faster. At T = 6 the P-core limit does not act and the gravity threshold does not
+enter the stage mode, so this is the effect of the row blocks (iteration 8): **confirmed, kept.**
+
+Readings:
+- Iteration 9 (P-cores only) does what it should: no case gets slower from 6 to 20 threads; all results
+  bitwise identical. Stage mode reaches 4.5x (N = 512) and 5.7x (N = 2048) vs serial IAS15, up from 3.2x
+  and 3.6x at the best T before.
+- Cost: large, well-balanced work loses the efficiency cores. ias15_n2048 default 3.85x (P-cores) vs
+  4.42x (all cores), stage mode 5.69x vs 8.55x. Dynamic scheduling of 7×16 blocks absorbs slower cores;
+  barrier-synchronised loops with few tasks do not.
+- **Problem found: mixed team sizes.** whfast_n256 drops from 1.93x (T = 4) to 1.27x at T ≥ 8 (P-cores),
+  and to 0.04x at T = 16–20 with all cores (25x slower than serial). Since iteration 7, gravity runs with
+  N/64 = 4 threads while the other loops of the step (Kepler drift, jump) use all threads. Likely cause,
+  not yet verified: libgomp keeps idle threads spinning between regions; with teams of different size the
+  non-participating threads spin or sleep and wake in alternation, and with 16 threads on 14 places
+  (`OMP_PLACES=cores`) spinning threads share cores with working ones. Run 1 (before iteration 7, one team
+  size) had whfast_n256 1.66x at T = 16. To fix (P14): keep one team size per process and give the gravity
+  work to the first N/64 threads inside it, or set `OMP_WAIT_POLICY=passive`-like behaviour for mixed
+  regions; test also `OMP_WAIT_POLICY` on the workstation.
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
@@ -317,9 +386,14 @@ Priority = expected speedup at T > 1 vs the serial build × breadth ÷ effort/ri
 | P9 | TRACE/MERCURIUS OpenMP correctness | trace_*, mercurius_* | tests pass | low | **done (it. 3)** |
 | P10 | Use the structure-of-arrays tile kernel in the serial build too (it is bitwise identical and faster on one core for 256 ≤ N ≤ 1024) | ias15_embryos(?), ias15_n*, whfast_n256 | 1.1–1.4x single-core | low | new idea (single-core, outside this round's goal) |
 | L1 | IAS15 stage-parallel (Jacobi over the 7 substeps, PIRK) | ias15_* N ≳ 100 | up to 7x on the force part | medium | **done (it. 6): 1.6–2.1x on 2 cores, opt-in `parallel_stages`** |
-| P11 | Hybrid CPUs: balance stage tasks; P-cores only | stage mode, gravity at T > 6 | no loss beyond 6 threads | low | **done (it. 8, 9); to be measured** |
+| P11 | Hybrid CPUs: balance stage tasks; P-cores only | stage mode, gravity at T > 6 | no loss beyond 6 threads | low | **done (it. 8, 9); measured in it. 10** |
 | P12 | Lower the gravity threshold after measurements on real CPUs | ias15_n512 at T = 2, whfast_n256 | 1.5x+ where now 1.0x | trivial | **done (it. 7)** |
 | P13 | Stage mode × particle-parallel gravity (nested) for > 7 cores | ias15_n* | > 7x | medium | open |
+| P14 | One team size per step (gravity on a subset of threads inside the full team), or a persistent parallel region per step (P7) | whfast_n256 T ≥ 8 (1.27x → ≥ 1.9x), all mixed-size cases | removes the 0.04x pathology | low–medium | open (high priority) |
+| P15 | Use efficiency cores where tasks are many and dynamically scheduled (stage mode with K ≥ 8; test-particle loops) | ias15_n2048+stages | 5.7x → 8.5x | low | open |
+| P16 | Stage mode for more configurations: test particles, compensated gravity, ghost boxes | IAS15 users with test particles | same speedups | medium | open |
+| P17 | Speculative overlap of consecutive IAS15 steps (start step n+1 from the predicted b while step n converges) | IAS15 N ≲ 100 | 1.2–1.5x on top of stage mode (estimate) | high (research) | open |
+| P18 | Ensembles: run independent simulations on separate cores (Python helper), WHFast512 several systems per vector | small systems (Solar System, WHFast512) | ~linear in cores | low | open (the way to use cores for N ≲ 10) |
 
 Cases expected to stay at ~1.0x (too little work per step for thread-level parallelism: a fork/join costs
 about as much as a whole step): ias15_hltau (N = 6, ~7 µs/step), whfast_ss (8 planets, ~1 µs/step),
