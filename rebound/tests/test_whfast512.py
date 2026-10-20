@@ -392,7 +392,17 @@ class TestIntegratorWHFast512Kernels(unittest.TestCase):
                 sim.add(m=1e-3, a=1, e=0.1+0.05*s, f=0.5, omega=0.53, inc=0.3, primary=sim.particles[-1])
                 sim.add(m=1e-4, a=2.3, e=0.1, f=0.15, omega=1.53, inc=0.12, primary=sim.particles[-2])
             return sim
-        for setup, N_systems in [(ss, 1), (two_systems, 2)]:
+        def three_planets():
+            # One system with at most four planets: the AVX2 and generic kernels use their
+            # four-lane variants, which must agree bit for bit with the eight-lane kernels.
+            sim = rebound.Simulation()
+            sim.add(m=1)
+            sim.add(m=1e-5, a=1, e=0.05, inc=0.01)
+            sim.add(m=2e-5, a=1.3, e=0.02, f=1.1, inc=0.02)
+            sim.add(m=1e-5, a=1.7, e=0.08, f=2.2, inc=0.03)
+            sim.move_to_com()
+            return sim
+        for setup, N_systems in [(ss, 1), (two_systems, 2), (three_planets, 1)]:
             results = {k: self.run_kernel(k, setup, N_systems) for k in [1, 2, 3, 4]}
             self.assertTrue(all(math.isfinite(u) for p in results[4] for u in p))
             ref = results[4]

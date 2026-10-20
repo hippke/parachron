@@ -69,6 +69,8 @@ const struct reb_integrator reb_integrator_whfast512 = {
     "otherwise a C kernel compiled for AVX2+FMA (x86 CPUs since about 2013), otherwise a generic C kernel "
     "(any CPU; fast on CPUs with fused multiply-add instructions such as all 64-bit ARM CPUs, slow on old x86 CPUs without FMA). "
     "The C kernels give bitwise identical results on all machines and instruction sets. "
+    "For a single system with at most four planets the AVX2 and generic C kernels automatically use a four-lane variant "
+    "(same results, faster; on AVX-512 machines `kernel=3` is then also faster than the assembly). "
     "The assembly kernel agrees with them to round-off. "
     "`kernel_used` reports which kernel ran. "
     "\n\n"
@@ -343,8 +345,14 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
         case REB_WHFAST512_KERNEL_C_AVX512:
             return reb_whfast512c_full_steps_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         case REB_WHFAST512_KERNEL_C_AVX2:
+            if (whfast512->four_lanes){
+                return reb_whfast512c_full_steps_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+            }
             return reb_whfast512c_full_steps_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         case REB_WHFAST512_KERNEL_C_GENERIC:
+            if (whfast512->four_lanes){
+                return reb_whfast512c_full_steps_genericx4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+            }
             return reb_whfast512c_full_steps_generic(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         default:
             break;
@@ -390,8 +398,14 @@ static void whfast512_corrector_step(struct reb_integrator_whfast512_state* whfa
         case REB_WHFAST512_KERNEL_C_AVX512:
             reb_whfast512c_corrector_step_avx512(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
         case REB_WHFAST512_KERNEL_C_AVX2:
+            if (whfast512->four_lanes){
+                reb_whfast512c_corrector_step_avx2x4(data, inv, whfast512->gr_potential, 2); return;
+            }
             reb_whfast512c_corrector_step_avx2(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
         case REB_WHFAST512_KERNEL_C_GENERIC:
+            if (whfast512->four_lanes){
+                reb_whfast512c_corrector_step_genericx4(data, inv, whfast512->gr_potential, 2); return;
+            }
             reb_whfast512c_corrector_step_generic(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
         default:
             break;
@@ -419,8 +433,16 @@ static void whfast512_kepler_step(struct reb_integrator_whfast512_state* whfast5
     struct simd_data* data = whfast512->data;
     switch (whfast512->kernel_used){
         case REB_WHFAST512_KERNEL_C_AVX512: reb_whfast512c_kepler_step_avx512(data); return;
-        case REB_WHFAST512_KERNEL_C_AVX2: reb_whfast512c_kepler_step_avx2(data); return;
-        case REB_WHFAST512_KERNEL_C_GENERIC: reb_whfast512c_kepler_step_generic(data); return;
+        case REB_WHFAST512_KERNEL_C_AVX2:
+            if (whfast512->four_lanes){
+                reb_whfast512c_kepler_step_avx2x4(data); return;
+            }
+            reb_whfast512c_kepler_step_avx2(data); return;
+        case REB_WHFAST512_KERNEL_C_GENERIC:
+            if (whfast512->four_lanes){
+                reb_whfast512c_kepler_step_genericx4(data); return;
+            }
+            reb_whfast512c_kepler_step_generic(data); return;
         default: break;
     }
 #ifdef REB_WHFAST512_HAVE_ASM
@@ -583,6 +605,9 @@ static int reb_integrator_whfast512_verify_setup(struct reb_simulation* const r)
     if (!whfast512->kernel_used){
         return 1;
     }
+    // A single system with at most four planets fits into lanes 0-3: the AVX2 kernel then uses
+    // its four-lane variant (same results, about half the work).
+    whfast512->four_lanes = (whfast512->N_systems == 1 && r->N <= 5) ? 1 : 0;
     if (r->N_var!=0){
         reb_simulation_error(r, "WHFast512 does not support variational particles.");
         return 1;
@@ -673,6 +698,7 @@ void reb_integrator_whfast512_synchronize(struct reb_simulation* const r, void* 
             r->status = REB_STATUS_GENERIC_ERROR;
             return;
         }
+        whfast512->four_lanes = (whfast512->N_systems == 1 && r->N <= 5) ? 1 : 0;
         w512_set1_pd(&data->dt, r->dt/2.0); 
         whfast512_kepler_step(whfast512);
         w512_set1_pd(&data->dt, r->dt); // Reset

@@ -8,9 +8,13 @@
  *          assembly kernel (integrator_whfast512.s, WHFast512 version 2, Dagli & Rein): same
  *          operations in the same order, and the same operands in each fused multiply-add, so that
  *          results agree with the assembly to round-off. Differences to the assembly:
- *          - 1/sqrt(r^2) in the planet-planet forces is computed as 1/sqrt() (correctly rounded
- *            square root and division) instead of vrsqrt14pd plus two Newton iterations (vrsqrt14pd
- *            does not exist for AVX2, and its result is not specified bit for bit).
+ *          - In the interaction step, 1/sqrt(r^2) (planet-planet forces, Jacobi term, central body and
+ *            GR terms) is computed by w512_rsqrt(): an integer bit-trick seed, three Newton iterations
+ *            and one fused-multiply-add correction (at most 1 ulp error, mean 0.14 ulp; more accurate
+ *            than sqrt followed by a division). The assembly uses vrsqrt14pd plus Newton iterations
+ *            (vrsqrt14pd does not exist for AVX2, and its result is not specified bit for bit), and
+ *            square roots and divisions for the other terms. Distance checks for encounters and
+ *            escapes compare squared distances.
  *          - 0.5*f*f'' in the Halley step is a multiplication by 0.5 (the assembly subtracts one from
  *            the exponent, which gives the same result for normal numbers, but not for zero).
  *          - MXCSR (flush-to-zero / denormals-are-zero) is not changed.
@@ -24,6 +28,7 @@
  *            w_klt(a,b) = a<b, w_kgt(a,b) = a>b, w_kle(a,b) = a<=b  (ordered, quiet: false for NaN)
  *            w_kand(k,l), w_kandnot(k,l) = (~k)&l, w_knot(k), w_kany(k), w_kall(), w_kbits(unsigned)
  *            w_sel(k,a,b) = k ? a : b, w_maskz(k,a) = k ? a : 0
+ *            w_rsqrt_seed(a): bits 0x5FE6EB50C7B537A9 - (bits(a) >> 1) as an integer operation
  *            w_perm_3201(a), w_perm_2310(a), w_perm_3012(a)  (within each group of four lanes)
  *            w_swap_pairs(a)                                  (1032 5476)
  *            w_perm_b3(a) (45671230), w_perm_b4(a) (56742301), w_perm_b34(a) (74560123)
@@ -66,6 +71,13 @@
 // REB_W512_STEP_FUNC as a plain static function to keep code size and compile time small.
 #ifndef REB_W512_STEP_FUNC
 #define REB_W512_STEP_FUNC REB_W512_INLINE
+#endif
+// Number of lanes of V. 8 for the normal kernels. A 4-lane instantiation (W_LANES 4,
+// W_ONLY_NSYS2) integrates one system with up to four planets in lanes 0-3 with the
+// N_systems=2 code path; the pair terms it skips involve only empty lanes (zero mass), so the
+// results are the same as with 8 lanes.
+#ifndef W_LANES
+#define W_LANES 8
 #endif
 
 // 1/k! rounded to double, and the rounding error (true - rounded). Same bits as .IF0 / .IF0_err
@@ -372,6 +384,19 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
 ///////////////////////////////////////////////////////////////////////////////
 // Interaction step
 
+// 1/sqrt(a) for a > 0 (at most 1 ulp error). Deterministic: the same operations on every
+// instruction set, so all C kernels agree bit for bit.
+REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
+    const V th = w_set1(1.5);
+    V y = w_rsqrt_seed(a);
+    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
+    return w_fmadd(w_mul(w_set1(0.5), y), e, y);
+}
+#define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)))
+
 // 8x8 matrix (stored transposed: element (i,k) at mat[i+8k]) times three vectors (mat8_mul3).
 REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a, const V b, const V cc, V* oa, V* ob, V* oc){
     REB_ATTRIBUTE_ALIGNED_64 double ia[8];
@@ -388,7 +413,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a
     V t0 = w_mul(row1, w_set1(ia[1]));
     V t1 = w_mul(row1, w_set1(ib[1]));
     V t2 = w_mul(row1, w_set1(ic[1]));
-    for (int k=2; k<8; k+=2){
+    for (int k=2; k<W_LANES; k+=2){
         row0 = w_load(mat+8*k);
         row1 = w_load(mat+8*(k+1));
         o0 = w_fmadd(row0, w_set1(ia[k]), o0);
@@ -406,7 +431,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a
 // multiplier/r^3 for separations (d0, d1, d2); with_mult=0 means multiplier 1.
 REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, const V d0, const V d1, const V d2, const int with_mult, const V mult, const int encounter, int* status){
     const V r2 = w_fmadd(d2, d2, w_fmadd(d1, d1, w_mul(d0, d0)));
-    const V y = w_div(c->ONE, w_sqrt(r2));
+    const V y = W512_RSQRT(r2);
     if (encounter){
         if (w_kany(w_kand(w_kgt(y, w_load(c->data->exit_min_distance_r.lanes)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
     }
@@ -423,8 +448,8 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS*
     // Jacobi term in Jacobi coordinates (undoes the Kepler-step force of the interior mass).
     {
         const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
-        const V r3 = w_mul(r2, w_sqrt(r2));
-        const V a = w_div(w_mul(c->DT, c->M), r3);
+        const V y = W512_RSQRT(r2);
+        const V a = w_mul(w_mul(c->DT, c->M), w_mul(w_mul(y, y), y));    // dt*M/r^3
         s->VX = w_maskz(c->k1, w_fmadd(a, s->X, s->VX));
         s->VY = w_maskz(c->k1, w_fmadd(a, s->Y, s->VY));
         s->VZ = w_maskz(c->k1, w_fmadd(a, s->Z, s->VZ));
@@ -433,21 +458,24 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS*
     REB_W512_NAME(w512_mat8_mul3_)(data->mat8_jacobi_to_heliocentric, s->X, s->Y, s->Z, &HX, &HY, &HZ);
 
     const V hr2 = w_fmadd(HZ, HZ, w_fmadd(HY, HY, w_mul(HX, HX)));
-    const V hr = w_sqrt(hr2);
     if (escape){
-        if (w_kany(w_kand(w_kgt(hr, w_load(data->exit_max_distance.lanes)), c->k1))) *status = 4; // REB_STATUS_ESCAPE
+        const V dmax = w_load(data->exit_max_distance.lanes);
+        if (w_kany(w_kand(w_kgt(hr2, w_mul(dmax, dmax)), c->k1))) *status = 4; // REB_STATUS_ESCAPE
     }
     if (encounter){
-        if (w_kany(w_kand(w_klt(hr, w_load(data->exit_min_distance.lanes)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
+        const V dmin = w_load(data->exit_min_distance.lanes);
+        if (w_kany(w_kand(w_klt(hr2, w_mul(dmin, dmin)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
     }
     // Central-body term in heliocentric coordinates.
-    const V j = w_maskz(c->k1, w_div(c->MM0_DT, w_mul(hr, hr2)));
+    const V yh = W512_RSQRT(hr2);
+    const V yh2 = w_mul(yh, yh);
+    const V j = w_maskz(c->k1, w_mul(c->MM0_DT, w_mul(yh2, yh)));   // -m0*dt/r^3
     V HVX = w_mul(HX, j);
     V HVY = w_mul(HY, j);
     V HVZ = w_mul(HZ, j);
     if (gr){
         const V g = w_mul(c->DT, w_load(data->gr_prefac.lanes));
-        const V gg = w_maskz(c->k1, w_div(g, w_mul(hr2, hr2)));
+        const V gg = w_maskz(c->k1, w_mul(g, w_mul(yh2, yh2)));     // g/r^4
         HVX = w_maskz(c->k1, w_fmadd(HX, gg, HVX));
         HVY = w_maskz(c->k1, w_fmadd(HY, gg, HVY));
         HVZ = w_maskz(c->k1, w_fmadd(HZ, gg, HVZ));
@@ -605,12 +633,18 @@ REB_W512_TARGET int REB_W512_CAT(reb_whfast512c_full_steps_, REB_W512_SUFFIX)(st
     encounter = encounter ? 1 : 0;
     escape = escape ? 1 : 0;
     if (nsys != 2 && nsys != 4) nsys = 1;
+#ifdef W_ONLY_NSYS2
+    nsys = 2;
+    W512_FULL_STEPS_CASES_NSYS(0, 2)
+    W512_FULL_STEPS_CASES_NSYS(1, 2)
+#else
     W512_FULL_STEPS_CASES_NSYS(0, 1)
     W512_FULL_STEPS_CASES_NSYS(0, 2)
     W512_FULL_STEPS_CASES_NSYS(0, 4)
     W512_FULL_STEPS_CASES_NSYS(1, 1)
     W512_FULL_STEPS_CASES_NSYS(1, 2)
     W512_FULL_STEPS_CASES_NSYS(1, 4)
+#endif
     return -1;
 }
 
@@ -649,6 +683,15 @@ REB_W512_INLINE void REB_W512_NAME(w512_corrector_)(struct simd_data* data, cons
 REB_W512_TARGET void REB_W512_CAT(reb_whfast512c_corrector_step_, REB_W512_SUFFIX)(struct simd_data* data, double inv, int gr, int nsys){
     gr = gr ? 1 : 0;
     if (nsys != 2 && nsys != 4) nsys = 1;
+#ifdef W_ONLY_NSYS2
+    nsys = 2;
+    if (gr){
+        REB_W512_NAME(w512_corrector_)(data, inv, 1, 2);
+    }else{
+        REB_W512_NAME(w512_corrector_)(data, inv, 0, 2);
+    }
+    return;
+#endif
     if (gr){
         if (nsys==1) REB_W512_NAME(w512_corrector_)(data, inv, 1, 1);
         if (nsys==2) REB_W512_NAME(w512_corrector_)(data, inv, 1, 2);

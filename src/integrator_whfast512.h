@@ -37,6 +37,7 @@ struct reb_integrator_whfast512_state {
     double last_synchronization;
     void* data;
     unsigned int kernel_used;           // Kernel used by the last step (set by the integrator, for information).
+    unsigned int four_lanes;            // Internal: 1 if the AVX2 kernel runs its four-lane variant (one system, at most four planets).
 };
 
 #endif

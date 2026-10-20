@@ -2,7 +2,7 @@ include Makefile.defs
 
 SOURCES=rebound.c tree.c particle.c gravity.c integrator_whfast.c integrator_whfast512.c integrator_saba.c integrator_ias15.c integrator_sei.c integrator_bs.c integrator_leapfrog.c integrator_mercurius.c integrator_trace.c integrator_eos.c boundary.c binarydata.c output.c collision.c communication_mpi.c display.c tools.c rotations.c simulation.c derivatives.c simulationarchive.c glad.c integrator_janus.c transformations.c fmemopen.c server.c frequency_analysis.c
 # WHFast512 C kernels (one source, integrator_whfast512_kernel.h, instantiated per instruction set)
-SOURCES_W512C=integrator_whfast512_c_avx512.c integrator_whfast512_c_avx2.c integrator_whfast512_c_generic.c
+SOURCES_W512C=integrator_whfast512_c_avx512.c integrator_whfast512_c_avx2.c integrator_whfast512_c_avx2x4.c integrator_whfast512_c_generic.c integrator_whfast512_c_genericx4.c
 OBJECTS=$(SOURCES:.c=.$(OBJFILEEXT)) $(SOURCES_W512C:.c=.$(OBJFILEEXT))
 HEADERS=$(SOURCES:.c=.h) rebound_internal.h integrator_whfast512_data.h integrator_whfast512_kernel.h
 

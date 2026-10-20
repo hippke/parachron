@@ -81,6 +81,8 @@ W_INL K w_kall(void){ return (K)0xFF; }
 W_INL K w_kbits(unsigned int bits){ return (K)bits; }
 W_INL V w_sel(K k, V a, V b){ return _mm512_mask_blend_pd(k, b, a); }
 W_INL V w_maskz(K k, V a){ return _mm512_maskz_mov_pd(k, a); }
+// Bit-trick seed for 1/sqrt(a): integer 0x5FE6EB50C7B537A9 - (bits(a) >> 1) (deterministic, same on every machine).
+W_INL V w_rsqrt_seed(V a){ return _mm512_castsi512_pd(_mm512_sub_epi64(_mm512_set1_epi64(0x5FE6EB50C7B537A9LL), _mm512_srli_epi64(_mm512_castpd_si512(a), 1))); }
 W_INL V w_perm_3201(V a){ return _mm512_permutex_pd(a, 0x4B); }
 W_INL V w_perm_2310(V a){ return _mm512_permutex_pd(a, 0x1E); }
 W_INL V w_perm_3012(V a){ return _mm512_permutex_pd(a, 0x93); }

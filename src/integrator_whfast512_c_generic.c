@@ -79,6 +79,8 @@ W_INL K w_kall(void){ K k; k.b = 0xFF; return k; }
 W_INL K w_kbits(unsigned int bits){ K k; k.b = (unsigned char)bits; return k; }
 W_INL V w_sel(K k, V a, V b){ V r; W_LOOP r.v[i] = ((k.b >> i) & 1) ? a.v[i] : b.v[i]; return r; }
 W_INL V w_maskz(K k, V a){ V r; W_LOOP r.v[i] = ((k.b >> i) & 1) ? a.v[i] : 0.0; return r; }
+// Bit-trick seed for 1/sqrt(a): integer 0x5FE6EB50C7B537A9 - (bits(a) >> 1) (deterministic, same on every machine).
+W_INL V w_rsqrt_seed(V a){ V r; W_LOOP { uint64_t b; memcpy(&b, &a.v[i], 8); b = 0x5FE6EB50C7B537A9ULL - (b >> 1); memcpy(&r.v[i], &b, 8); } return r; }
 W_INL V w_permute(V a, const int* idx){ V r; W_LOOP r.v[i] = a.v[idx[i]]; return r; }
 static const int w_idx_3201[8] = {3,2,0,1, 7,6,4,5};
 static const int w_idx_2310[8] = {2,3,1,0, 6,7,5,4};

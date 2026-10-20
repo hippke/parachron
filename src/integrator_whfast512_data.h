@@ -89,7 +89,9 @@ enum REB_WHFAST512_KERNEL {
     void reb_whfast512c_corrector_step_##suffix(struct simd_data* data, double inv, int gr, int nsys);
 REB_WHFAST512_C_KERNEL_DECLARE(avx512)
 REB_WHFAST512_C_KERNEL_DECLARE(avx2)
+REB_WHFAST512_C_KERNEL_DECLARE(avx2x4)   // AVX2, four lanes: one system with at most four planets
 REB_WHFAST512_C_KERNEL_DECLARE(generic)
+REB_WHFAST512_C_KERNEL_DECLARE(genericx4) // generic, four lanes: one system with at most four planets
 
 // 1 if the C kernel for this instruction set was compiled in (x86 compilers that support the target).
 int reb_whfast512c_avx512_compiled(void);

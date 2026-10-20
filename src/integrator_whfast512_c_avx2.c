@@ -91,6 +91,9 @@ W_INL K w_kbits(unsigned int bits){
 }
 W_INL V w_sel(K k, V a, V b){ return w_make(_mm256_blendv_pd(b.l, a.l, k.l), _mm256_blendv_pd(b.h, a.h, k.h)); }
 W_INL V w_maskz(K k, V a){ return w_make(_mm256_and_pd(a.l, k.l), _mm256_and_pd(a.h, k.h)); }
+// Bit-trick seed for 1/sqrt(a): integer 0x5FE6EB50C7B537A9 - (bits(a) >> 1) (deterministic, same on every machine).
+W_INL __m256d w_rsqrt_seed4(__m256d a){ return _mm256_castsi256_pd(_mm256_sub_epi64(_mm256_set1_epi64x(0x5FE6EB50C7B537A9LL), _mm256_srli_epi64(_mm256_castpd_si256(a), 1))); }
+W_INL V w_rsqrt_seed(V a){ return w_make(w_rsqrt_seed4(a.l), w_rsqrt_seed4(a.h)); }
 // Within each group of four lanes (same immediates as vpermpd in the assembly).
 W_INL V w_perm_3201(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x4B), _mm256_permute4x64_pd(a.h, 0x4B)); }
 W_INL V w_perm_2310(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x1E), _mm256_permute4x64_pd(a.h, 0x1E)); }
