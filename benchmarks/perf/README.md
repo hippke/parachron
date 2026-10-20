@@ -135,6 +135,19 @@ check, not necessarily an error.
 
 ## Running many simulations in parallel (Python)
 
+**Threads (recommended for ensembles):** the C library releases the Python interpreter lock while it integrates, so independent simulations can run in threads without pickling or process start-up:
+
+```python
+import rebound
+sims = [make_sim(i) for i in range(1000)]
+statuses = rebound.integrate_simulations(sims, tmax=1e4)      # one C call, thread pool, all CPUs
+rebound.steps_simulations(sims, 100, n_threads=8)            # same with a fixed number of steps
+```
+
+The results are bitwise identical to integrating the simulations one after another (tests in `rebound/tests/test_ensemble.py`). Measured on this 2-vCPU VM: 8 five-planet WHFast runs 1.97x. Plain `threading.Thread(target=sim.integrate, ...)` works too. Python callbacks (heartbeat, additional forces) take the interpreter lock on every call and serialise the threads. Ctrl-C stops all running integrations. In C: `reb_simulations_integrate(sims, N, tmax, N_threads)` and `reb_simulations_steps(...)`.
+
+**Processes:**
+
 Many workloads (MEGNO grids, posterior sampling, stability ensembles) run thousands of
 short simulations with `multiprocessing`. Measured on the benchmark machine (4 workers,
 2,000 three-body WHFast jobs, `integrate(50)` each):

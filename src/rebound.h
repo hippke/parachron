@@ -489,6 +489,12 @@ REB_API int reb_simulation_output_screenshot(struct reb_simulation* r, const cha
 
 // Advance simulation by N_steps timesteps.
 REB_API enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_steps);
+// Integrate N independent simulations, sims[k] up to time tmax[k], using N_threads threads
+// (N_threads <= 0: number of CPUs). Same results as calling reb_simulation_integrate for each.
+// Callbacks (heartbeat etc.) must be thread safe. Ctrl-C stops all simulations.
+REB_API void reb_simulations_integrate(struct reb_simulation** sims, size_t N, const double* tmax, int N_threads);
+// Same, but advances each simulation by N_steps steps (as reb_simulation_steps).
+REB_API void reb_simulations_steps(struct reb_simulation** sims, size_t N, size_t N_steps, int N_threads);
 // WHFast512 only: advances two simulations by N_steps time steps each in one interleaved kernel
 // call (about 1.3x faster per simulation with the C AVX-512 kernel and 1.5x with the four-lane
 // AVX2 kernel, see integrator.kernel). The results are bitwise identical to setting

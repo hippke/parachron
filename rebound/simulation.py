@@ -1,4 +1,4 @@
-from ctypes import Structure, c_double, POINTER, c_uint32, c_int, c_uint, c_int64, c_uint64, c_void_p, c_char_p, CFUNCTYPE, byref, create_string_buffer, addressof, c_char, c_size_t, string_at, sizeof, cast 
+from ctypes import pointer, Structure, c_double, POINTER, c_uint32, c_int, c_uint, c_int64, c_uint64, c_void_p, c_char_p, CFUNCTYPE, byref, create_string_buffer, addressof, c_char, c_size_t, string_at, sizeof, cast 
 from . import clibrebound, Escape, NoParticles, Encounter, Collision, GenericError, string_size_max 
 from .citations import cite
 from .integrator import IntegratorConfiguration
@@ -1534,3 +1534,65 @@ if simulation_size_c != sizeof(Simulation):
 # Import at the end to avoid circular dependence
 from . import horizons
 from .simulationarchive import Simulationarchive
+
+def integrate_simulations(sims, tmax, n_threads=None, exact_finish_time=1):
+    """
+    Integrate several independent simulations in parallel threads (one C call).
+
+    Each simulation is integrated by one thread from start to end, exactly as
+    ``sim.integrate(tmax)`` would do it, so the results are bitwise identical to integrating
+    the simulations one after another. The Python interpreter lock is released during the
+    call. Python callbacks (heartbeat, additional forces, ...) still work but take the
+    interpreter lock on every call, which serialises the threads; prefer C callbacks or none.
+
+    Parameters
+    ----------
+    sims : list of Simulation
+    tmax : float or list of float
+        Final time, one for all simulations or one per simulation.
+    n_threads : int, optional
+        Number of threads. Default: number of CPUs.
+    exact_finish_time : int, optional
+        As in ``Simulation.integrate``.
+
+    Returns
+    -------
+    list of int
+        The status of each simulation after the integration (see ``Simulation.status``).
+        Exceptions are not raised; check the statuses (3: encounter, 4: escape, ...).
+    """
+    sims = list(sims)
+    n = len(sims)
+    if n == 0:
+        return []
+    try:
+        tmaxs = [float(t) for t in tmax]
+    except TypeError:
+        tmaxs = [float(tmax)]*n
+    if len(tmaxs) != n:
+        raise ValueError("tmax must be a number or have one entry per simulation.")
+    for s in sims:
+        s.exact_finish_time = exact_finish_time
+    arr = (POINTER(Simulation)*n)(*[pointer(s) for s in sims])
+    tm = (c_double*n)(*tmaxs)
+    clibrebound.reb_simulations_integrate(arr, c_size_t(n), tm, c_int(0 if n_threads is None else int(n_threads)))
+    for s in sims:
+        s.process_messages()
+    return [s._status for s in sims]
+
+
+def steps_simulations(sims, N_steps, n_threads=None):
+    """
+    Advance several independent simulations by N_steps steps each, in parallel threads.
+    Same results as calling ``sim.steps(N_steps)`` for each simulation. Returns the statuses.
+    """
+    sims = list(sims)
+    n = len(sims)
+    if n == 0:
+        return []
+    arr = (POINTER(Simulation)*n)(*[pointer(s) for s in sims])
+    clibrebound.reb_simulations_steps(arr, c_size_t(n), c_size_t(int(N_steps)), c_int(0 if n_threads is None else int(n_threads)))
+    for s in sims:
+        s.process_messages()
+    return [s._status for s in sims]
+
