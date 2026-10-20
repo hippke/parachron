@@ -46,6 +46,7 @@ i.e. the same flags users get from `make`.
 | `megno_grid` | points/s | MEGNO stability map, 2 planets × 500 yr per point (Hadden & Lithwick 2018; `ipython_examples/Megno.ipynb`) | Variational equations, per-simulation setup |
 | `short_posterior` | sims/s | Many 300-step WHFast runs of posterior draws (Wang et al. 2018, HR 8799) | Simulation create/add/free overhead |
 | `rings_sei_tree` | steps/s | Saturn's rings, SEI + tree collisions, 200×5×20 root boxes (Rein & Latter 2013; `examples/overstability`) | Collision tree search, shear boundary |
+| `rings_poly_tree` | steps/s | Shearing sheet as in `examples/shearing_sheet`: power-law radii 1–4 m (slope −3), tree gravity + tree collisions, Bridges et al. restitution, ~5,000 particles | Tree gravity and collision search with a size distribution |
 | `selfgrav_tree` | steps/s | Self-gravitating disc, N = 10,000, tree gravity (`examples/selfgravity_disc`) | Tree build and walk |
 | `mercurius_plts` | steps/s | MERCURIUS, 2 planets + 2,500 planetesimals (`examples/planetesimal_disk_migration`) | Hybrid encounters, IAS15 sub-steps, merging |
 | `trace_tp` | steps/s | TRACE, 2 planets + 2,000 test particles | TRACE encounter checks (N×N bookkeeping) |

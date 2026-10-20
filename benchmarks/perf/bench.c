@@ -550,6 +550,58 @@ static struct reb_simulation* make_rings(int variant){
 }
 static void* create_rings(void){ return simctx_create(make_rings, 1, 0); }
 
+// 10b) Shearing sheet as in examples/shearing_sheet: power-law size distribution (1-4 m, slope -3),
+//      tree gravity and tree collisions, Bridges et al. coefficient of restitution (~5,000 particles).
+static double cor_bridges(const struct reb_simulation* r, double v){
+    (void)r;
+    double eps = 0.32*pow(fabs(v)*100.,-0.234);
+    if (eps>1) eps=1;
+    if (eps<0) eps=0;
+    return eps;
+}
+static double rng_powerlaw(double min, double max, double slope){
+    double y = rng_uniform(0., 1.);
+    if (slope == -1) return exp(y*log(max/min) + log(min));
+    return pow((pow(max,slope+1.)-pow(min,slope+1.))*y+pow(min,slope+1.), 1./(slope+1.));
+}
+static struct reb_simulation* make_rings_poly(int variant){
+    struct reb_simulation* r = new_sim();
+    r->opening_angle2 = .5;
+    reb_simulation_set_integrator(r, "sei");
+    r->boundary = REB_BOUNDARY_SHEAR;
+    r->gravity = REB_GRAVITY_TREE;
+    r->collision = REB_COLLISION_TREE;
+    r->collision_resolve = reb_collision_resolve_hardsphere;
+    r->OMEGA = 0.00013143527;
+    r->G = 6.67428e-11;
+    r->softening = 0.1;
+    r->dt = 1e-3*2.*M_PI/r->OMEGA;
+    r->root_size = 100.;
+    r->N_root_x = 2; r->N_root_y = 2; r->N_root_z = 1;
+    r->N_ghost_x = 2; r->N_ghost_y = 2; r->N_ghost_z = 0;
+    r->coefficient_of_restitution = cor_bridges;
+    r->minimum_collision_velocity = 1.*r->OMEGA*0.001;
+    const double bx = 200., by = 200.;
+    const double total_mass = 400.*bx*by;
+    rng_seed(11 + (uint64_t)variant);
+    double mass = 0;
+    while (mass < total_mass){
+        struct reb_particle p = {0};
+        p.x = rng_uniform(-bx/2., bx/2.);
+        p.y = rng_uniform(-by/2., by/2.);
+        // Box-Muller normal with sigma 1 m
+        double u1 = rng_uniform(1e-300, 1.), u2 = rng_uniform(0., 1.);
+        p.z = sqrt(-2.*log(u1))*cos(2.*M_PI*u2);
+        p.vy = -1.5*p.x*r->OMEGA;
+        p.r = rng_powerlaw(1., 4., -3.);
+        p.m = 400.*4./3.*M_PI*p.r*p.r*p.r;
+        reb_simulation_add(r, p);
+        mass += p.m;
+    }
+    return r;
+}
+static void* create_rings_poly(void){ return simctx_create(make_rings_poly, 1, 0); }
+
 // 11) Self-gravitating disc with tree gravity (examples/selfgravity_disc), N=10,000
 static struct reb_simulation* make_selfgrav(int variant){
     struct reb_simulation* r = new_sim();
@@ -693,6 +745,7 @@ static const struct bench benches[] = {
     {"megno_grid",      "points/s", "MEGNO stability map, 2 planets x 500 yr (Hadden & Lithwick 2018)",  create_megno,        work_megno,  sig_grid,         destroy_free,   always,  100, 1200},
     {"short_posterior", "sims/s",   "Many short WHFast runs of posterior draws (Wang et al. 2018)",      create_posterior,    work_posterior, sig_grid,      destroy_free,   always,  200, 2500},
     {"rings_sei_tree",  "steps/s",  "Saturn's rings, SEI + tree collisions (Rein & Latter 2013)",        create_rings,        simctx_work, simctx_signature, simctx_destroy, always,    3,  400},
+    {"rings_poly_tree", "steps/s",  "Shearing sheet with size distribution, tree gravity + collisions (examples/shearing_sheet)", create_rings_poly, simctx_work, simctx_signature, simctx_destroy, always,    2,   20},
     {"selfgrav_tree",   "steps/s",  "Self-gravitating disc, tree gravity, N=10k",                        create_selfgrav,     simctx_work, simctx_signature, simctx_destroy, always,    3,   18},
     {"mercurius_plts",  "steps/s",  "MERCURIUS, 2 planets + 2,500 planetesimals (planetesimal migration)", create_mercurius,  simctx_work, simctx_signature, simctx_destroy, always,   10,   50},
     {"trace_tp",        "steps/s",  "TRACE, 2 planets + 2,000 test particles",                           create_trace,        simctx_work, simctx_signature, simctx_destroy, always,   20,  135},
