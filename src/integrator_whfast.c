@@ -162,6 +162,13 @@ static const double invfactorial[35] = {1., 1., 1./2., 1./6., 1./24., 1./120., 1
 #else
 #define REB_WHFAST_INLINE inline
 #endif
+#if defined(_MSC_VER)
+#define REB_WHFAST_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define REB_WHFAST_NOINLINE __attribute__((noinline))
+#else
+#define REB_WHFAST_NOINLINE
+#endif
 
 static inline double fastabs(double x){
     return (x > 0.) ? x : -x;
@@ -245,8 +252,9 @@ static REB_WHFAST_INLINE void stiefel_Gs3(double *restrict Gs, double beta, doub
 
 // Kepler drift of the variational particles belonging to particle p (first order). p1 is p's
 // state before the drift; the other arguments are the converged quantities of p's Kepler solve.
-// Shared by the scalar and the batched solver.
-static REB_WHFAST_INLINE void reb_whfast_kepler_variations(const struct reb_simulation* const r, const struct reb_particle* const p, const struct reb_particle p1, const double mu, const double beta, const double X, const double eta0, const double zeta0, const double r0, const double r0i, const double ri, const double f, const double g, const double fd, const double gd){
+// Shared by the scalar and the batched solver; kept out of line so it does not bloat the hot
+// loops of simulations without variational particles.
+static REB_WHFAST_NOINLINE void reb_whfast_kepler_variations(const struct reb_simulation* const r, const struct reb_particle* const p, const struct reb_particle p1, const double mu, const double beta, const double X, const double eta0, const double zeta0, const double r0, const double r0i, const double ri, const double f, const double g, const double fd, const double gd){
     double Gs[6];
     for (size_t v=0;r && v<r->N_var_config;v++){
         struct reb_variational_configuration const vc = r->var_config[v];
@@ -523,6 +531,7 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
     double X_per_period[WHFAST_KEPLER_BATCH], ri[WHFAST_KEPLER_BATCH];
     double Gs[WHFAST_KEPLER_BATCH][4];
     int state[WHFAST_KEPLER_BATCH]; // 0: Newton iterating, 1: converged, 2: use scalar solver
+    double fl[WHFAST_KEPLER_BATCH], gl[WHFAST_KEPLER_BATCH], fdl[WHFAST_KEPLER_BATCH], gdl[WHFAST_KEPLER_BATCH]; // for variations
     for (int l=0; l<n; l++){
         const struct reb_particle* const p = ps[l];
         const double mu = mus[l];
@@ -663,11 +672,15 @@ static void reb_integrator_whfast_kepler_solver_batch(struct reb_particle* const
         p->vx += fd*x[l] + gd*vx[l];
         p->vy += fd*y[l] + gd*vy[l];
         p->vz += fd*z[l] + gd*vz[l];
-        if (r && r->N_var_config){
+        fl[l] = f; gl[l] = g; fdl[l] = fd; gdl[l] = gd;
+    }
+    if (r && r->N_var_config){
+        for (int l=0; l<n; l++){
+            if (state[l]!=1) continue; // drifted (with variations) by the scalar solver above
             struct reb_particle p1 = {0};
             p1.x = x[l]; p1.y = y[l]; p1.z = z[l];
             p1.vx = vx[l]; p1.vy = vy[l]; p1.vz = vz[l];
-            reb_whfast_kepler_variations(r, p, p1, mu, beta[l], X[l], eta0[l], zeta0[l], r0[l], r0i[l], ri[l], f, g, fd, gd);
+            reb_whfast_kepler_variations(r, ps[l], p1, mus[l], beta[l], X[l], eta0[l], zeta0[l], r0[l], r0i[l], ri[l], fl[l], gl[l], fdl[l], gdl[l]);
         }
     }
 }
