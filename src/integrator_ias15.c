@@ -586,7 +586,6 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                     {
                         double maxak = 0.0;
                         double maxb6ktmp = 0.0;
-                        REB_IAS15_IVDEP
                         for(size_t k=0;k<N3;++k) {
                             double tmp = g.p6[k];
                             double gk = at[k];
