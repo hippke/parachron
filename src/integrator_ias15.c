@@ -171,6 +171,17 @@ struct reb_dpconst7 {
     double* const REB_RESTRICT p6;
 };
 
+// The corrector loops below access about a dozen distinct arrays; without a hint the compiler
+// would need too many run-time alias checks and does not vectorise them. The arrays never
+// overlap. Vectorising these element-wise loops does not change any result.
+#if defined(__clang__)
+#define REB_IAS15_IVDEP _Pragma("clang loop vectorize(assume_safety)")
+#elif defined(__GNUC__)
+#define REB_IAS15_IVDEP _Pragma("GCC ivdep")
+#else
+#define REB_IAS15_IVDEP
+#endif
+
 // Helper functions for resetting the b and e coefficients
 static void copybuffers(const struct reb_dpconst7 _a, const struct reb_dpconst7 _b, size_t N3);
 static void predict_next_step(double ratio, size_t N3,  const struct reb_dpconst7 _e, const struct reb_dpconst7 _b, const struct reb_dpconst7 e, const struct reb_dpconst7 b);
@@ -486,6 +497,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
             }
             switch (n) {                            // Improve b and g values
                 case 1: 
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p0[k];
                         double gk = at[k];
@@ -496,6 +508,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                         add_cs(&(b.p0[k]), &(csb.p0[k]), g.p0[k]-tmp);
                     } break;
                 case 2: 
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p1[k];
                         double gk = at[k];
@@ -508,6 +521,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                         add_cs(&(b.p1[k]), &(csb.p1[k]), tmp);
                     } break;
                 case 3: 
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p2[k];
                         double gk = at[k];
@@ -521,6 +535,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                         add_cs(&(b.p2[k]), &(csb.p2[k]), tmp);
                     } break;
                 case 4:
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p3[k];
                         double gk = at[k];
@@ -535,6 +550,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                         add_cs(&(b.p3[k]), &(csb.p3[k]), tmp);
                     } break;
                 case 5:
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p4[k];
                         double gk = at[k];
@@ -550,6 +566,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                         add_cs(&(b.p4[k]), &(csb.p4[k]), tmp);
                     } break;
                 case 6:
+                    REB_IAS15_IVDEP
                     for(size_t k=0;k<N3;++k) {
                         double tmp = g.p5[k];
                         double gk = at[k];
@@ -569,6 +586,7 @@ static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_in
                     {
                         double maxak = 0.0;
                         double maxb6ktmp = 0.0;
+                        REB_IAS15_IVDEP
                         for(size_t k=0;k<N3;++k) {
                             double tmp = g.p6[k];
                             double gk = at[k];
