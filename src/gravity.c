@@ -87,16 +87,6 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     if (reb_tree_particle_order(r, order) != N){
         for (size_t i=0; i<N; i++) order[i] = i; // e.g. particles missing from the tree (MPI): original order
     }
-#ifndef MPI
-    // Walk a depth-first copy of the tree stored in one block (better cache locality than the
-    // individually allocated cells). Same cells and values, so results are identical.
-    struct reb_treecell** const tree_root_orig = r->tree_root;
-    struct reb_treecell** tree_root_copy = NULL;
-    struct reb_treecell* tree_cells_copy = NULL;
-    if (reb_tree_copy_depth_first(r, &tree_root_copy, &tree_cells_copy)){
-        r->tree_root = tree_root_copy;
-    }
-#endif // MPI
     // Summing over all Ghost Boxes
     for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
         for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
@@ -106,14 +96,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
                 for (size_t k=0; k<N; k++){
                     const size_t i = order[k];
 #ifndef OPENMP
-                    if (reb_sigint > 1){
-                        free(order);
-                        r->tree_root = tree_root_orig;
-                        free(tree_root_copy);
-                        free(tree_cells_copy);
-                        reb_tree_delete(r);
-                        return;
-                    }
+                    if (reb_sigint > 1){ free(order); return; }
 #endif // OPENMP
                     struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
                     // Precalculated shifted position
@@ -126,11 +109,6 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
         }
     }
     free(order);
-#ifndef MPI
-    r->tree_root = tree_root_orig;
-    free(tree_root_copy);
-    free(tree_cells_copy);
-#endif // MPI
     // Delete tree (if it exists)    
     reb_tree_delete(r);
     PROFILING_STOP(PROFILING_CAT_GRAVITY);

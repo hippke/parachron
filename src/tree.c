@@ -356,48 +356,6 @@ size_t reb_tree_particle_order(const struct reb_simulation* const r, size_t* ord
     return n;
 }
 
-#ifndef MPI
-static size_t reb_tree_count_cells(const struct reb_treecell* const node){
-    size_t n = 1;
-    for (int o=0; o<8; o++){
-        if (node->oct[o] != NULL) n += reb_tree_count_cells(node->oct[o]);
-    }
-    return n;
-}
-
-static struct reb_treecell* reb_tree_copy_cells(const struct reb_treecell* const node, struct reb_treecell* const cells, size_t* k){
-    struct reb_treecell* const c = &cells[(*k)++];
-    *c = *node;
-    for (int o=0; o<8; o++){
-        if (node->oct[o] != NULL) c->oct[o] = reb_tree_copy_cells(node->oct[o], cells, k);
-    }
-    return c;
-}
-
-int reb_tree_copy_depth_first(const struct reb_simulation* const r, struct reb_treecell*** roots, struct reb_treecell** cells){
-    *roots = NULL;
-    *cells = NULL;
-    if (!r->tree_root) return 0;
-    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
-    size_t N_cells = 0;
-    for (size_t i=0; i<N_root; i++){
-        if (r->tree_root[i] != NULL) N_cells += reb_tree_count_cells(r->tree_root[i]);
-    }
-    *roots = calloc(N_root, sizeof(struct reb_treecell*));
-    *cells = malloc(sizeof(struct reb_treecell)*(N_cells>0?N_cells:1));
-    if (!*roots || !*cells){
-        free(*roots); free(*cells);
-        *roots = NULL; *cells = NULL;
-        return 0;
-    }
-    size_t k = 0;
-    for (size_t i=0; i<N_root; i++){
-        if (r->tree_root[i] != NULL) (*roots)[i] = reb_tree_copy_cells(r->tree_root[i], *cells, &k);
-    }
-    return 1;
-}
-#endif // MPI
-
 // Print the tree structure. Used only for debugging
 void reb_tree_print(const struct reb_treecell *node, int indent){
     for (int o=0; o<8; o++) {

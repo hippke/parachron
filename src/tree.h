@@ -62,16 +62,6 @@ struct reb_treecell {
  */
 size_t reb_tree_particle_order(const struct reb_simulation* const r, size_t* order);
 
-#ifndef MPI
-/**
- * @brief Copies the tree of r into one contiguous block of cells in depth-first order.
- * @details Walking the copy touches memory mostly sequentially. The copy has the same structure
- * and values. On success, *roots is an array of N_root root pointers into *cells; free both with free().
- * @return 1 on success, 0 if there is no tree or allocation failed.
- */
-int reb_tree_copy_depth_first(const struct reb_simulation* const r, struct reb_treecell*** roots, struct reb_treecell** cells);
-#endif // MPI
-
 void reb_tree_calculate_acceleration_for_particle(const struct reb_simulation* const r, const int pt, const struct reb_vec6d gb);
 
 /**
