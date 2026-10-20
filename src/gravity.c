@@ -114,7 +114,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     PROFILING_STOP(PROFILING_CAT_GRAVITY);
 }
 
-void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){
+REB_TARGET_CLONES void reb_gravity_jacobi_calculate_acceleration(struct reb_simulation* r){ // AVX2 clone, results identical
     PROFILING_START();
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
