@@ -530,6 +530,36 @@ converges more slowly than IAS15's Gauss-Seidel sweep. Next diagnostic (cheap): 
 step in both modes for these cases. If confirmed, options are a Gauss-Seidel first iteration or
 stopping on the stage-mode convergence history.
 
+## Iteration 21 — why stage mode is slower on one thread; sequential sweeps (diagnostic) — reverted
+
+Instrumented copy of the library (iteration counter in `reb_integrator_ias15_step_try`; counts are
+deterministic, so they hold for the i5 too). Predictor-corrector iterations per step attempt:
+
+| case | default IAS15 (Gauss-Seidel over substeps) | stage mode (Jacobi) | 2 groups | 3 groups | 7 groups (sequential) |
+|---|---|---|---|---|---|
+| ias15_embryos, short / long run | 3.22 / 3.13 | 4.12 / 4.02 (+28 %) | 4.08 | 4.03 | 3.22 / 3.13 |
+| ias15_n128 | 3.28 / 3.42 | 3.95 / 4.16 (+21 %) | 3.95 | 3.88 | 3.22 / 3.39 |
+| ias15_tp2000 | 5.11 / 4.51 | 6.05 / 5.29 (+17 %) | 5.84 | 5.68 | 5.11 / 4.51 |
+| ias15_n512 | 4.50 / 5.25 | 5.17 / 6.18 (+18 %) | 5.33 | 5.17 | 4.67 / 5.21 |
+| ias15_n2048 | 4.67 / 3.43 | 5.33 / 4.11 (+20 %) | 5.00 | 5.00 | 4.67 |
+
+This is the cause of the one-thread gap seen on the i5 (stage mode 0.81–0.94x). The force kernels
+execute about the same number of instructions; the VM did not show the gap because its stage kernel
+happens to run faster than the default kernel there. Jacobi iterations over the substeps converge
+more slowly than IAS15's substep-by-substep sweep, as expected from the PIRK literature.
+
+Tried (in the source, results independent of the thread count):
+- substeps in 2 or 3 consecutive groups (each group from the b values updated by the earlier
+  groups): saves almost nothing (0–7 %) and divides the parallel width;
+- the first iteration of each step sequential (Gauss-Seidel), then Jacobi; used only with ≥ 32
+  row blocks per substep, so a sequential iteration still has 32 parallel tasks. Iterations at
+  N = 2048: 4.11 → 3.69 per step (long run). But wall time did not improve (VM, 107 steps, 3 runs
+  each: one thread 23.2–23.9 s vs 23.3–24.5 s; two threads 12.8–13.0 s vs 12.7–13.6 s): a
+  sequential iteration costs about 1.5x a Jacobi iteration there.
+Reverted. Conclusion: the extra 17–28 % iterations are the price of evaluating the substeps in
+parallel; stage mode pays off from about 2 threads (N ≥ 128) or 4 threads (N ≈ 60), and on 1–2
+threads the default mode should be used (documented in the setting's description).
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
