@@ -112,6 +112,7 @@ static inline void reb_integrator_eos_interaction_shell0(struct reb_simulation* 
     }
 }
 
+#define REB_EOS_BLOCK 32
 static inline void reb_integrator_eos_interaction_shell1(struct reb_simulation* r, double y, double v){
     const size_t N = r->N;
     const size_t N_active = r->N_active==SIZE_MAX?N:r->N_active;
@@ -221,32 +222,55 @@ static inline void reb_integrator_eos_interaction_shell1(struct reb_simulation* 
             // Massless test particles do not act on particle 0, whose acceleration is therefore
             // final here. Force and jerk of each test particle in one pass: the same operations as
             // the separate loops, with one square root instead of two.
-            for (size_t i=N_active; i<N; i++){
-                const double dx = particles[0].x - particles[i].x; 
-                const double dy = particles[0].y - particles[i].y; 
-                const double dz = particles[0].z - particles[i].z; 
-                const double dr = sqrt(dx*dx + dy*dy + dz*dz);
+            // In blocks: gather the separations, compute force and jerk terms in a vectorisable
+            // loop (square roots and divisions two at a time), then update the particles. Same
+            // operations per test particle as in the scalar loop.
+            const double x0 = particles[0].x, y0 = particles[0].y, z0 = particles[0].z;
+            const double ax0 = particles[0].ax, ay0 = particles[0].ay, az0 = particles[0].az;
+            const double m0 = particles[0].m;
+            for (size_t i0=N_active; i0<N; i0+=REB_EOS_BLOCK){
+                const size_t nb = (N-i0) < REB_EOS_BLOCK ? (N-i0) : REB_EOS_BLOCK;
+                double bdx[REB_EOS_BLOCK], bdy[REB_EOS_BLOCK], bdz[REB_EOS_BLOCK];
+                double bax[REB_EOS_BLOCK], bay[REB_EOS_BLOCK], baz[REB_EOS_BLOCK];
+                double bvx[REB_EOS_BLOCK], bvy[REB_EOS_BLOCK], bvz[REB_EOS_BLOCK];
+                for (size_t k=0; k<nb; k++){
+                    const struct reb_particle* const p = &particles[i0+k];
+                    bdx[k] = x0 - p->x; 
+                    bdy[k] = y0 - p->y; 
+                    bdz[k] = z0 - p->z; 
+                }
+                for (size_t k=0; k<nb; k++){
+                    const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
+                    const double dr = sqrt(dx*dx + dy*dy + dz*dz);
 
-                const double prefact = G/(dr*dr*dr);
-                const double prefacti = prefact*particles[0].m;
-                const double axi = prefacti*dx;
-                const double ayi = prefacti*dy;
-                const double azi = prefacti*dz;
-                particles[i].ax = axi;
-                particles[i].ay = ayi;
-                particles[i].az = azi;
+                    const double prefact = G/(dr*dr*dr);
+                    const double prefacti = prefact*m0;
+                    const double axi = prefacti*dx;
+                    const double ayi = prefacti*dy;
+                    const double azi = prefacti*dz;
+                    bax[k] = axi; bay[k] = ayi; baz[k] = azi;
 
-                const double dax = particles[0].ax - axi; 
-                const double day = particles[0].ay - ayi; 
-                const double daz = particles[0].az - azi; 
-                const double alphasum = dax*dx+day*dy+daz*dz;
-                const double prefact2 = 2.*v*G /(dr*dr*dr);
-                const double prefact2j = prefact2*particles[0].m;
-                const double prefact1 = alphasum*prefact2/dr *3./dr;
-                const double prefact1j = prefact1*particles[0].m;
-                particles[i].vx    += y*axi + dax*prefact2j - dx*prefact1j;
-                particles[i].vy    += y*ayi + day*prefact2j - dy*prefact1j;
-                particles[i].vz    += y*azi + daz*prefact2j - dz*prefact1j;
+                    const double dax = ax0 - axi; 
+                    const double day = ay0 - ayi; 
+                    const double daz = az0 - azi; 
+                    const double alphasum = dax*dx+day*dy+daz*dz;
+                    const double prefact2 = 2.*v*G /(dr*dr*dr);
+                    const double prefact2j = prefact2*m0;
+                    const double prefact1 = alphasum*prefact2/dr *3./dr;
+                    const double prefact1j = prefact1*m0;
+                    bvx[k] = y*axi + dax*prefact2j - dx*prefact1j;
+                    bvy[k] = y*ayi + day*prefact2j - dy*prefact1j;
+                    bvz[k] = y*azi + daz*prefact2j - dz*prefact1j;
+                }
+                for (size_t k=0; k<nb; k++){
+                    struct reb_particle* const p = &particles[i0+k];
+                    p->ax = bax[k];
+                    p->ay = bay[k];
+                    p->az = baz[k];
+                    p->vx += bvx[k];
+                    p->vy += bvy[k];
+                    p->vz += bvz[k];
+                }
             }
         }
         particles[0].vx += y*particles[0].ax;
