@@ -44,6 +44,189 @@
 
 // Main Gravity Routine
 
+
+// Group walk (opt-in, r->tree_group_size = G > 0; Barnes 1990, as in PKDGRAV and Bonsai).
+// The tree is cut into groups: the largest cells with at most G particles. For each group one
+// walk collects an interaction list: a cell is accepted if w < theta*(d - R), with d the distance
+// from the group centre to the cell's centre of mass and R the group radius (so the usual
+// criterion w < theta*d holds for every particle in the group), otherwise it is opened; leaves
+// are taken as particles. Every particle of the group then sums over the same list. One walk
+// per group instead of per particle, and the inner loop over the group's particles vectorises.
+// The results differ from the per-particle walk (deterministic, but not bitwise identical).
+static void reb_tree_group_collect(const struct reb_treecell* node, size_t* idx, size_t* n){
+    if (node->pt >= 0){ idx[(*n)++] = (size_t)node->pt; return; }
+    for (int o=0; o<8; o++) if (node->oct[o]) reb_tree_group_collect(node->oct[o], idx, n);
+}
+static void reb_tree_group_find(const struct reb_treecell* node, const size_t G, const struct reb_treecell** gl, size_t* ng){
+    const size_t cnt = node->pt >= 0 ? 1 : (size_t)(-node->pt);
+    if (cnt <= G){ gl[(*ng)++] = node; return; }
+    for (int o=0; o<8; o++) if (node->oct[o]) reb_tree_group_find(node->oct[o], G, gl, ng);
+}
+#define REB_TREE_GROUP_MAX 256
+#define REB_TREE_GROUP_STACK 1024
+static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
+    struct reb_particle* const particles = r->particles;
+    const size_t N = r->N;
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const double theta = sqrt(r->opening_angle2);
+    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    size_t Gs = r->tree_group_size > REB_TREE_GROUP_MAX ? REB_TREE_GROUP_MAX : r->tree_group_size;
+    // Groups and their particles (in depth-first order), once per force evaluation.
+    const struct reb_treecell** gl = malloc(sizeof(*gl)*(N+1));
+    size_t ng = 0;
+    for (size_t i=0; i<N_root; i++) if (r->tree_root[i]) reb_tree_group_find(r->tree_root[i], Gs, gl, &ng);
+    size_t* gidx = malloc(sizeof(size_t)*(N+1));
+    size_t* goff = malloc(sizeof(size_t)*(ng+1));
+    size_t n = 0;
+    for (size_t g=0; g<ng; g++){ goff[g] = n; reb_tree_group_collect(gl[g], gidx, &n); }
+    goff[ng] = n;
+    unsigned char* ingroup = calloc(N>0?N:1, 1);
+    size_t capc = 1024, capp = 1024;
+    double* cl = malloc(sizeof(double)*4*capc);   // accepted cells: mx, my, mz, m
+#ifdef QUADRUPOLE
+    double* cq = malloc(sizeof(double)*6*capc);   // and their quadrupole moments
+#endif
+    size_t* pl = malloc(sizeof(size_t)*capp);     // particles (leaves) outside the group
+    size_t* plg = malloc(sizeof(size_t)*(REB_TREE_GROUP_MAX+1)); // leaves inside the group
+    double gx[REB_TREE_GROUP_MAX], gy[REB_TREE_GROUP_MAX], gz[REB_TREE_GROUP_MAX];
+    double gax[REB_TREE_GROUP_MAX], gay[REB_TREE_GROUP_MAX], gaz[REB_TREE_GROUP_MAX];
+    const struct reb_treecell* stack[REB_TREE_GROUP_STACK];
+    for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
+    for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
+    for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
+        const struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+        for (size_t g=0; g<ng; g++){
+            if (reb_sigint > 1) goto done;
+            const size_t* const idx = &gidx[goff[g]];
+            const size_t k = goff[g+1]-goff[g];
+            double c0=0, c1=0, c2=0;
+            for (size_t a=0; a<k; a++){
+                const struct reb_particle* const p = &particles[idx[a]];
+                gx[a] = p->x + gb.x; gy[a] = p->y + gb.y; gz[a] = p->z + gb.z;
+                gax[a] = 0; gay[a] = 0; gaz[a] = 0;
+                c0 += gx[a]; c1 += gy[a]; c2 += gz[a];
+                ingroup[idx[a]] = 1;
+            }
+            c0 /= (double)k; c1 /= (double)k; c2 /= (double)k;
+            double R = 0;
+            for (size_t a=0; a<k; a++){
+                const double dx = gx[a]-c0, dy = gy[a]-c1, dz = gz[a]-c2;
+                const double d = sqrt(dx*dx+dy*dy+dz*dz);
+                if (d > R) R = d;
+            }
+            size_t nc = 0, np = 0, npg = 0;
+            for (size_t i=0; i<N_root; i++){
+                if (!r->tree_root[i]) continue;
+                int sp = 0;
+                stack[sp++] = r->tree_root[i];
+                while (sp > 0){
+                    const struct reb_treecell* const node = stack[--sp];
+                    if (node->pt >= 0){
+                        const size_t j = (size_t)node->pt;
+                        if (ingroup[j]){ // (also in ghost boxes: like the per-particle walk, no interaction with the own image)
+                            plg[npg++] = j;
+                        }else{
+                            if (np == capp){ capp *= 2; pl = realloc(pl, sizeof(size_t)*capp); }
+                            pl[np++] = j;
+                        }
+                        continue;
+                    }
+                    const double dx = c0-node->mx, dy = c1-node->my, dz = c2-node->mz;
+                    const double d = sqrt(dx*dx+dy*dy+dz*dz);
+                    if (d > R && node->w < theta*(d-R)){
+                        if (nc == capc){
+                            capc *= 2;
+                            cl = realloc(cl, sizeof(double)*4*capc);
+#ifdef QUADRUPOLE
+                            cq = realloc(cq, sizeof(double)*6*capc);
+#endif
+                        }
+                        cl[4*nc] = node->mx; cl[4*nc+1] = node->my; cl[4*nc+2] = node->mz; cl[4*nc+3] = node->m;
+#ifdef QUADRUPOLE
+                        cq[6*nc] = node->mxx; cq[6*nc+1] = node->mxy; cq[6*nc+2] = node->mxz;
+                        cq[6*nc+3] = node->myy; cq[6*nc+4] = node->myz; cq[6*nc+5] = node->mzz;
+#endif
+                        nc++;
+                    }else{
+                        if (sp + 8 > REB_TREE_GROUP_STACK){
+                            reb_simulation_error(r, "Tree too deep for the group walk.");
+                            goto done;
+                        }
+                        for (int o=7; o>=0; o--) if (node->oct[o]) stack[sp++] = node->oct[o];
+                    }
+                }
+            }
+            // Cells (vectorised over the group's particles).
+            for (size_t b=0; b<nc; b++){
+                const double mx = cl[4*b], my = cl[4*b+1], mz = cl[4*b+2], m = cl[4*b+3];
+#ifdef QUADRUPOLE
+                const double qxx = cq[6*b], qxy = cq[6*b+1], qxz = cq[6*b+2], qyy = cq[6*b+3], qyz = cq[6*b+4], qzz = cq[6*b+5];
+#endif
+                for (size_t a=0; a<k; a++){
+                    const double dx = gx[a]-mx, dy = gy[a]-my, dz = gz[a]-mz;
+                    const double r2 = dx*dx + dy*dy + dz*dz;
+                    const double _r = sqrt(r2 + softening2);
+                    const double prefact = -G/(_r*_r*_r)*m;
+#ifdef QUADRUPOLE
+                    double qprefact = G/(_r*_r*_r*_r*_r);
+                    gax[a] += qprefact*(dx*qxx + dy*qxy + dz*qxz);
+                    gay[a] += qprefact*(dx*qxy + dy*qyy + dz*qyz);
+                    gaz[a] += qprefact*(dx*qxz + dy*qyz + dz*qzz);
+                    const double mrr = dx*dx*qxx + dy*dy*qyy + dz*dz*qzz + 2.*dx*dy*qxy + 2.*dx*dz*qxz + 2.*dy*dz*qyz;
+                    qprefact *= -5.0/(2.0*_r*_r)*mrr;
+                    gax[a] += (qprefact + prefact)*dx;
+                    gay[a] += (qprefact + prefact)*dy;
+                    gaz[a] += (qprefact + prefact)*dz;
+#else
+                    gax[a] += prefact*dx;
+                    gay[a] += prefact*dy;
+                    gaz[a] += prefact*dz;
+#endif
+                }
+            }
+            // Particles outside the group (vectorised over the group's particles).
+            for (size_t b=0; b<np; b++){
+                const struct reb_particle* const pj = &particles[pl[b]];
+                const double px = pj->x, py = pj->y, pz = pj->z, m = pj->m;
+                for (size_t a=0; a<k; a++){
+                    const double dx = gx[a]-px, dy = gy[a]-py, dz = gz[a]-pz;
+                    const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+                    const double prefact = -G/(_r*_r*_r)*m;
+                    gax[a] += prefact*dx;
+                    gay[a] += prefact*dy;
+                    gaz[a] += prefact*dz;
+                }
+            }
+            // Particles of the group itself (no self-interaction).
+            for (size_t b=0; b<npg; b++){
+                const struct reb_particle* const pj = &particles[plg[b]];
+                for (size_t a=0; a<k; a++){
+                    if (idx[a] == plg[b]) continue;
+                    const double dx = gx[a]-pj->x, dy = gy[a]-pj->y, dz = gz[a]-pj->z;
+                    const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+                    const double prefact = -G/(_r*_r*_r)*pj->m;
+                    gax[a] += prefact*dx;
+                    gay[a] += prefact*dy;
+                    gaz[a] += prefact*dz;
+                }
+            }
+            for (size_t a=0; a<k; a++){
+                struct reb_particle* const p = &particles[idx[a]];
+                p->ax += gax[a];
+                p->ay += gay[a];
+                p->az += gaz[a];
+                ingroup[idx[a]] = 0;
+            }
+        }
+    }}}
+done:
+    free(gl); free(gidx); free(goff); free(ingroup); free(cl); free(pl); free(plg);
+#ifdef QUADRUPOLE
+    free(cq);
+#endif
+}
+
 void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     PROFILING_START();
     // Construct tree first.
@@ -80,6 +263,14 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
         particles[i].ay = 0; 
         particles[i].az = 0; 
     }
+#ifndef MPI
+    if (r->tree_group_size > 0){
+        reb_gravity_tree_group_walk(r);
+        reb_tree_delete(r);
+        PROFILING_STOP(PROFILING_CAT_GRAVITY);
+        return;
+    }
+#endif // MPI
     // Visit particles in the depth-first leaf order of the tree: consecutive particles are
     // spatially close and walk mostly the same nodes, which keeps those nodes in cache.
     // Each particle's own walk is unchanged, so the results are identical.

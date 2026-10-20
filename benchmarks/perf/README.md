@@ -48,6 +48,7 @@ i.e. the same flags users get from `make`.
 | `rings_sei_tree` | steps/s | Saturn's rings, SEI + tree collisions, 200×5×20 root boxes (Rein & Latter 2013; `examples/overstability`) | Collision tree search, shear boundary |
 | `rings_poly_tree` | steps/s | Shearing sheet as in `examples/shearing_sheet`: power-law radii 1–4 m (slope −3), tree gravity + tree collisions, Bridges et al. restitution, ~5,000 particles | Tree gravity and collision search with a size distribution |
 | `selfgrav_tree` | steps/s | Self-gravitating disc, N = 10,000, tree gravity (`examples/selfgravity_disc`) | Tree build and walk |
+| `selfgrav_group` | steps/s | Same disc with the opt-in group walk (`tree_group_size = 32`); more accurate at the same opening angle, ~3x faster at equal trajectory accuracy (`tools/treeint.c`) | Group tree walk |
 | `mercurius_plts` | steps/s | MERCURIUS, 2 planets + 2,500 planetesimals (`examples/planetesimal_disk_migration`) | Hybrid encounters, IAS15 sub-steps, merging |
 | `trace_tp` | steps/s | TRACE, 2 planets + 2,000 test particles | TRACE encounter checks (N×N bookkeeping) |
 | `mercurius_disc` | steps/s | MERCURIUS, 2 planets + 500 fully active planetesimals with merging | Encounter-mode forces, encounter prediction (O(N²)) |

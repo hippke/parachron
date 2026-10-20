@@ -1449,6 +1449,7 @@ Simulation._fields_ = [
                 ("_tree_root", c_void_p),
                 ("_tree_free_cells", c_void_p),
                 ("opening_angle2", c_double),
+                ("tree_group_size", c_uint),
                 ("_status", c_int),
                 ("exact_finish_time", c_int),
                 ("force_is_velocity_dependent", c_int),
