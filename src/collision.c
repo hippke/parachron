@@ -66,7 +66,8 @@ static void reb_collision_root_range(const double x, const double reach, const d
     *hi = (int)b;
 }
 
-void reb_collision_search(struct reb_simulation* const r){
+// AVX2 clone selected at load time (REB_TARGET_CLONES, rebound_internal.h); results identical.
+REB_TARGET_CLONES void reb_collision_search(struct reb_simulation* const r){
     r->N_collisions = 0;
     size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
     (void)N_root; // only used in MPI builds
