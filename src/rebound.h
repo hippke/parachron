@@ -516,6 +516,10 @@ REB_API void reb_simulations_steps(struct reb_simulation** sims, size_t N, size_
 // kernel). Both simulations are synchronized at the end; r->status reports each result. No
 // heartbeat or Simulationarchive output happens during the call.
 REB_API void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps);
+// Ensemble runner internals: 1 if two WHFast512 simulations can use the paired kernel; one paired
+// integrator step of each (bitwise identical to one separate step of each).
+int reb_integrator_whfast512_can_pair(struct reb_simulation* const r1, struct reb_simulation* const r2);
+void reb_integrator_whfast512_step_pair(struct reb_simulation* const r1, struct reb_simulation* const r2);
 // Integrate simulation to at least time tmax (see exact_finish_time).
 REB_API enum REB_STATUS reb_simulation_integrate(struct reb_simulation* const r, double tmax);
 // Synchronize simulation if safe_mode is turned off by integrator to get physical coordinates.

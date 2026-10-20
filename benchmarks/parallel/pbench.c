@@ -349,8 +349,14 @@ static struct work make_case(const char* name, double scale){
 // ensemble pool uses plain threads). ensemble_ss512: WHFast512 + GR (1000 time steps per REBOUND
 // step); ensemble_ss: WHFast. The signature is the sum over all clones.
 static int run_ensemble(const char* name, double scale){
-    const int is512 = !strcmp(name, "ensemble_ss512");
+    // ensemble_3p512: 3 inner planets (Mercury, Venus, Earth) per system, WHFast512 (the four-lane
+    // AVX2 kernel and the AVX-512 kernels can pair two simulations per kernel call). The kernel can
+    // be set with PBENCH_W512_KERNEL (0 auto, 1 asm, 2 C AVX-512, 3 C AVX2, 4 C generic).
+    const int is3p = !strcmp(name, "ensemble_3p512");
+    const int is512 = !strcmp(name, "ensemble_ss512") || is3p;
     if (!is512 && strcmp(name, "ensemble_ss")){ fprintf(stderr, "unknown case %s\n", name); return 1; }
+    const char* ek = getenv("PBENCH_W512_KERNEL");
+    const unsigned int kernel = ek ? (unsigned int)atoi(ek) : 0;
     const char* e = getenv("OMP_NUM_THREADS");
     const int nthreads = e ? atoi(e) : 1;
     const int K = 32;
@@ -363,6 +369,7 @@ static int run_ensemble(const char* name, double scale){
             struct reb_integrator_whfast512_state* w512 = r->integrator.state;
             w512->gr_potential = 1;
             w512->concatenate_steps = 1000;
+            w512->kernel = kernel;
             r->dt = 5.0/365.25*2.*M_PI;
             r->exact_finish_time = 0;
         }else{
@@ -370,6 +377,7 @@ static int run_ensemble(const char* name, double scale){
             r->dt = 5./365.25*2.*M_PI;
         }
         add_solar_system(r);
+        if (is3p){ while (r->N > 4) reb_simulation_remove_particle(r, r->N-1); }
         r->particles[1].x += 1e-12*k;
         if (!is512) ((struct reb_integrator_whfast_state*)r->integrator.state)->safe_mode = 0;
         reb_simulation_steps(r, 1); // warm-up
@@ -388,7 +396,7 @@ static int run_ensemble(const char* name, double scale){
 
 int main(int argc, char** argv){
     if (argc<2){
-        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 ias15_tp2000 tree_selfgrav tree_selfgrav_group tree_rings mercurius_plts mercurius_disc trace_disc trace_tp ensemble_ss512 ensemble_ss whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
+        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 ias15_tp2000 tree_selfgrav tree_selfgrav_group tree_rings mercurius_plts mercurius_disc trace_disc trace_tp ensemble_ss512 ensemble_3p512 ensemble_ss whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
         return 1;
     }
     const double scale = argc>2 ? atof(argv[2]) : 1.;

@@ -36,7 +36,7 @@ CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n204
          "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages", "ias15_tp2000+stages",
          "whfast_ss", "whfast_tp10k", "whfast_n256",
          "tree_selfgrav", "tree_selfgrav_group", "tree_rings", "mercurius_plts", "mercurius_disc", "trace_disc", "trace_tp",
-         "ensemble_ss512", "ensemble_ss"]
+         "ensemble_ss512", "ensemble_3p512", "ensemble_ss"]
 
 
 def sh(cmd, cwd=None, env=None):

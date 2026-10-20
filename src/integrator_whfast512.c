@@ -785,6 +785,81 @@ static void whfast512_steps_single(struct reb_simulation* const r, uint64_t N_st
     whfast512->concatenate_steps = saved;
 }
 
+// Paired kernel for two simulations, or NULL if they cannot be stepped together.
+static whfast512_pair_kernel whfast512_pair_kernel_for(struct reb_simulation* const r1, struct reb_simulation* const r2){
+    struct reb_integrator_whfast512_state* w1 = r1->integrator.state;
+    struct reb_integrator_whfast512_state* w2 = r2->integrator.state;
+    const int enc1 = r1->exit_min_distance ? 1 : 0, esc1 = r1->exit_max_distance ? 1 : 0;
+    const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
+    if (r1 == r2 || w1->kernel_used != w2->kernel_used || w1->four_lanes != w2->four_lanes
+            || w1->gr_potential != w2->gr_potential || w1->N_systems != w2->N_systems
+            || enc1 != enc2 || esc1 != esc2) return NULL;
+    switch (w1->kernel_used){
+        case REB_WHFAST512_KERNEL_C_AVX512: return reb_whfast512c_full_steps_pair_avx512;
+        // Eight-lane AVX2: one simulation already fills the 16 registers (pairing: 0.97-1.00x).
+        case REB_WHFAST512_KERNEL_C_AVX2: return w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : NULL;
+        case REB_WHFAST512_KERNEL_C_GENERIC: return w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic;
+        default: return NULL; // the assembly kernel has no paired version
+    }
+}
+
+// 1 if two WHFast512 simulations can be advanced by reb_integrator_whfast512_step_pair with the
+// paired kernel (same kernel and options, same concatenate_steps). Used by the ensemble runner.
+int reb_integrator_whfast512_can_pair(struct reb_simulation* const r1, struct reb_simulation* const r2){
+    if (strcmp(r1->integrator.name, "whfast512") || strcmp(r2->integrator.name, "whfast512")) return 0;
+    if (reb_integrator_whfast512_verify_setup(r1) || reb_integrator_whfast512_verify_setup(r2)) return 0;
+    struct reb_integrator_whfast512_state* w1 = r1->integrator.state;
+    struct reb_integrator_whfast512_state* w2 = r2->integrator.state;
+    return w1->concatenate_steps == w2->concatenate_steps && whfast512_pair_kernel_for(r1, r2) != NULL;
+}
+
+// One integrator step (concatenate_steps time steps) of each of two simulations, in one paired
+// kernel call: bitwise identical to reb_integrator_whfast512_step(r1); ..._step(r2) (the paired
+// kernels equal two separate kernel calls; no extra synchronisation). Falls back to two separate
+// steps if the simulations cannot be paired.
+void reb_integrator_whfast512_step_pair(struct reb_simulation* const r1, struct reb_simulation* const r2){
+    struct reb_integrator_whfast512_state* w1 = r1->integrator.state;
+    struct reb_integrator_whfast512_state* w2 = r2->integrator.state;
+    whfast512_pair_kernel kernel = NULL;
+    if (!reb_integrator_whfast512_verify_setup(r1) && !reb_integrator_whfast512_verify_setup(r2)
+            && w1->concatenate_steps == w2->concatenate_steps){
+        kernel = whfast512_pair_kernel_for(r1, r2);
+    }
+    if (!kernel){
+        reb_integrator_whfast512_step(r1, w1);
+        reb_integrator_whfast512_step(r2, w2);
+        return;
+    }
+    const uint64_t C = w1->concatenate_steps;
+    const int skip1 = whfast512_prepare(r1, w1);
+    const int skip2 = whfast512_prepare(r2, w2);
+    uint64_t done = 0;
+    int st1 = 0, st2 = 0;
+    const int nsys = w1->four_lanes ? 2 : (int)w1->N_systems;
+    const int enc = r1->exit_min_distance ? 1 : 0, esc = r1->exit_max_distance ? 1 : 0;
+    const int stopped = kernel(w1->data, w2->data, C, &done, skip1, skip2, &reb_sigint, &st1, &st2, w1->gr_potential, nsys, enc, esc);
+    struct reb_simulation* rs[2] = {r1, r2};
+    struct reb_integrator_whfast512_state* ws[2] = {w1, w2};
+    const int st[2] = {st1, st2};
+    for (int i=0; i<2; i++){
+        struct reb_simulation* const r = rs[i];
+        uint64_t n = done;
+        enum REB_STATUS status = REB_STATUS_RUNNING;
+        if (stopped & (1<<i)){
+            status = st[i];
+        }else if (done < C){
+            // the other simulation stopped (encounter or escape): finish this step alone
+            uint64_t m = C - done;
+            status = whfast512_full_steps(r, ws[i], &m, 0);
+            n = done + m;
+        }
+        r->status = status;
+        r->is_synchronized = 0;
+        r->t += r->dt*n;
+        r->dt_last_done = r->dt;
+    }
+}
+
 void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps){
     struct reb_simulation* rs[2] = {r1, r2};
     for (int i=0; i<2; i++){
