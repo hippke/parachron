@@ -347,6 +347,10 @@ struct reb_ias15_stage_plan {
     size_t rb[REB_IAS15_STAGE_MAX_BLOCKS+1];   // active block boundaries
     size_t tr[REB_IAS15_STAGE_MAX_BLOCKS+1];   // test-particle block boundaries (absolute indices)
     int fused;                  // Ka == 1 and Kt == 0: one task per stage, written in place
+    int active_inplace;         // Ka == 1 and no test-particle back-reaction: the active block is the
+                                // only task touching the active particles, written in place
+    int tp_inplace;             // testparticle_type 0: each test-particle block is the only task
+                                // touching its rows, written in place
 };
 static void reb_integrator_ias15_stage_plan(const struct reb_simulation* const r, const size_t N, struct reb_ias15_stage_plan* const pl){
     const size_t Na = (r->N_active==SIZE_MAX || r->N_active>N) ? N : r->N_active;
@@ -383,9 +387,12 @@ static void reb_integrator_ias15_stage_plan(const struct reb_simulation* const r
     pl->rb[Ka] = Na;
     for (size_t u=0; u<=Kt; u++) pl->tr[u] = Na + u*Nt/(Kt?Kt:1);
     pl->fused = Ka==1 && Kt==0;
+    pl->tp_inplace = !r->testparticle_type;
+    pl->active_inplace = Ka==1 && (Kt==0 || !r->testparticle_type);
 }
 static size_t reb_integrator_ias15_stage_scratch(const struct reb_ias15_stage_plan* const pl, const size_t N){
-    return (pl->compensated || pl->fused) ? 0 : 21*(pl->Ka+pl->Kt)*N;
+    if (pl->compensated || pl->fused || (pl->active_inplace && pl->tp_inplace)) return 0;
+    return 21*(pl->Ka+pl->Kt)*N;
 }
 // Predicted positions of substep n into buf + (n-1)*6N (x, y, z): IAS15's predictor.
 static inline void reb_integrator_ias15_stage_predict(const struct reb_simulation* const r, const size_t N, const size_t n, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf){
@@ -469,7 +476,9 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
             reb_gravity_compensated_range_arrays(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, pl->rb[q], pl->rb[q+1], N, Na, tptype, ign, G, softening);
             continue;
         }
-        double* const ax = tb + t*3*N;
+        double* const sa = buf + (n-1)*6*N + 3*N;   // the stage's accelerations (written in place)
+        const int inplace = q<pl->Ka ? pl->active_inplace : pl->tp_inplace;
+        double* const ax = inplace ? sa : tb + t*3*N;
         double* const ay = ax + N;
         double* const az = ay + N;
         if (q<pl->Ka){
@@ -484,11 +493,11 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
             for (size_t i=r0; i<r1; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
             if (tptype){ for (size_t i=0; i<Na; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; } }
             for (size_t g=0; g<ngb; g++){
-                reb_gravity_basic_rows_arrays_ex(x, x+N, x+2*N, m, ax, ay, az, r0, r1, starti, startj, Na, tptype, gbs[g], G, softening);
+                reb_gravity_basic_tp_rows_arrays(x, x+N, x+2*N, m, ax, ay, az, r0, r1, starti, startj, Na, tptype, gbs[g], G, softening);
             }
         }
     }
-    if (!pl->compensated){
+    if (!pl->compensated && !(pl->active_inplace && pl->tp_inplace)){
 #pragma omp for schedule(static)
         for (size_t t=0; t<7*nrchunk; t++){
             const size_t n = 1 + t/nrchunk;
@@ -499,6 +508,7 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
             size_t q0 = 0;
             for (size_t k=k0; k<k1; k++){
                 if (k<Na){
+                    if (pl->active_inplace) continue;      // already final
                     while (pl->rb[q0+1]<=k) q0++;          // block of particle k
                     for (int c=0; c<3; c++){
                         double a = tbn[q0*3*N + c*N + k];
@@ -509,6 +519,7 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
                         sa[c*N + k] = a;
                     }
                 }else{
+                    if (pl->tp_inplace) continue;          // already final
                     size_t u = 0;
                     while (pl->tr[u+1]<=k) u++;           // test-particle block of k
                     for (int c=0; c<3; c++){

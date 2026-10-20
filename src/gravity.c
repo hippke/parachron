@@ -451,6 +451,51 @@ REB_TARGET_CLONES void reb_gravity_basic_rows_arrays_ex(const double* x, const d
         reb_gravity_rows_ex(p, ifirst, i1, startj, jhi, 0, gb, G, softening);
     }
 }
+// Test-particle rows [i0, i1) (all >= jhi) with partners [startj, jhi), ordered by partner: for each
+// partner j, all rows of a chunk of 64 at once (long vectorised loops; a row has only jhi - startj
+// partners). Every particle receives the same terms in the same order as in
+// reb_gravity_basic_rows_arrays_ex (row i: partners ascending; partner j: rows ascending), so the
+// results are bitwise identical to it.
+#define REB_GRAVITY_TP_CHUNK 64
+REB_TARGET_CLONES void reb_gravity_basic_tp_rows_arrays(const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const size_t jhi, const int partner, const struct reb_vec6d gb, const double G, const double softening){
+    double xi[REB_GRAVITY_TP_CHUNK], yi[REB_GRAVITY_TP_CHUNK], zi[REB_GRAVITY_TP_CHUNK], mi[REB_GRAVITY_TP_CHUNK];
+    double acx[REB_GRAVITY_TP_CHUNK], acy[REB_GRAVITY_TP_CHUNK], acz[REB_GRAVITY_TP_CHUNK];
+    double bdx[REB_GRAVITY_TP_CHUNK], bdy[REB_GRAVITY_TP_CHUNK], bdz[REB_GRAVITY_TP_CHUNK], bf[REB_GRAVITY_TP_CHUNK];
+    const size_t ifirst = i0>starti ? i0 : starti;
+    for (size_t c0=ifirst; c0<i1; c0+=REB_GRAVITY_TP_CHUNK){
+        const size_t n = (i1-c0) < REB_GRAVITY_TP_CHUNK ? (i1-c0) : REB_GRAVITY_TP_CHUNK;
+        for (size_t l=0; l<n; l++){
+            xi[l] = gb.x+x[c0+l]; yi[l] = gb.y+y[c0+l]; zi[l] = gb.z+z[c0+l]; mi[l] = m[c0+l];
+            acx[l] = ax[c0+l]; acy[l] = ay[c0+l]; acz[l] = az[c0+l];
+        }
+        for (size_t j=startj; j<jhi; j++){
+            const double xj = x[j], yj = y[j], zj = z[j], mj = m[j];
+            for (size_t l=0; l<n; l++){
+                bdx[l] = xi[l] - xj;
+                bdy[l] = yi[l] - yj;
+                bdz[l] = zi[l] - zj;
+            }
+            reb_gravity_rinv3(n, bdx, bdy, bdz, G, softening, bf);
+            for (size_t l=0; l<n; l++){
+                const double prefactj = -bf[l]*mj;
+                acx[l] += prefactj*bdx[l];
+                acy[l] += prefactj*bdy[l];
+                acz[l] += prefactj*bdz[l];
+            }
+            if (partner){
+                double ajx = ax[j], ajy = ay[j], ajz = az[j];
+                for (size_t l=0; l<n; l++){
+                    const double prefacti = bf[l]*mi[l];
+                    ajx += prefacti*bdx[l];
+                    ajy += prefacti*bdy[l];
+                    ajz += prefacti*bdz[l];
+                }
+                ax[j] = ajx; ay[j] = ajy; az[j] = ajz;
+            }
+        }
+        for (size_t l=0; l<n; l++){ ax[c0+l] = acx[l]; ay[c0+l] = acy[l]; az[c0+l] = acz[l]; }
+    }
+}
 // Compensated gravity for particles [k0, k1) on plain arrays: the same additions in the same order
 // (Kahan summation over partners in ascending index order, then the test-particle back-reaction)
 // as reb_gravity_compensated_calculate_acceleration, so the result is bitwise identical to it at
