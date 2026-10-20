@@ -38,6 +38,12 @@ struct reb_integrator_whfast512_state {
     void* data;
     unsigned int kernel_used;           // Kernel used by the last step (set by the integrator, for information).
     unsigned int four_lanes;            // Internal: 1 if the AVX2 kernel runs its four-lane variant (one system, at most four planets).
+    // Internal: cache of the constants in data (see recalculate_constants), not saved.
+    void* cache;
+    double* cache_m;
+    size_t cache_N, cache_N_allocated;
+    unsigned int cache_N_systems;
+    double cache_dt, cache_exit_max, cache_exit_min;
 };
 
 #endif

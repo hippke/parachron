@@ -337,6 +337,27 @@ static void pair_destroy(void* p){ struct pairctx* c = p; reb_simulation_free(c-
 static void* create_pair_ss_avx512(void){ return pair_create(make_w512c_ss, 2); }
 static void* create_pair_3p_avx2(void){ return pair_create(make_w512c_small, 3); }
 
+// 3d) Output after every step: reb_simulation_steps(r, 1) in a loop (each call synchronizes),
+// WHFast512 with the default kernel. Measures the per-call cost (item 53).
+static struct reb_simulation* make_w512_out1(int variant){
+    struct reb_simulation* r = new_sim();
+    reb_simulation_set_integrator(r, "whfast512");
+    struct reb_integrator_whfast512_state* w = r->integrator.state;
+    w->gr_potential = 1;
+    w->concatenate_steps = 1;
+    r->dt = 5.0/365.25*2.*M_PI;
+    r->exact_finish_time = 0;
+    add_solar_system(r);
+    r->particles[1].x += 1e-12*variant;
+    return r;
+}
+static void* create_w512_out1(void){ return simctx_create(make_w512_out1, 1, 0); }
+static double work_w512_out1(void* p){
+    struct simctx* c = p;
+    for (int i=0; i<2000; i++) reb_simulation_steps(c->r, 1);
+    return 2000.;
+}
+
 // 4) Five Earth-mass planets, WHFast dt=0.05 yr (Obertas et al. 2017)
 static struct reb_simulation* make_obertas(int variant){
     const int k = variant % OBERTAS_N_SYSTEMS;
@@ -662,6 +683,7 @@ static const struct bench benches[] = {
     {"w512c_ss_avx512", "steps/s",  "Solar System, WHFast512 C kernel AVX-512 + GR",                      create_w512c_ss_avx512, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx512, 5, 30},
     {"w512c_3p_avx2",   "steps/s",  "3 compact planets, WHFast512 C AVX2 (four-lane path; SPOCK-like)",   create_w512c_small_avx2, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,  5, 40},
     {"w512c_4x2_avx2",  "steps/s",  "4 systems x 2 planets per vector, WHFast512 C AVX2 (ensembles)",     create_w512c_4x2_avx2,  simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,   5, 40},
+    {"w512_out1",       "calls/s",  "Solar System, WHFast512, output after every step (steps(r,1) per call)", create_w512_out1, work_w512_out1, simctx_signature, simctx_destroy, always, 3, 30},
     {"w512c_pair_ss512", "steps/s", "2 Solar Systems per call, WHFast512 C AVX-512 (steps_pair)",          create_pair_ss_avx512, pair_work, pair_signature, pair_destroy, have_w512c_avx512, 2, 16},
     {"w512c_pair_3p_avx2", "steps/s", "2 x 3 compact planets per call, WHFast512 C AVX2 four-lane (steps_pair)", create_pair_3p_avx2, pair_work, pair_signature, pair_destroy, have_w512c_avx2, 2, 24},
     {"obertas_5p",      "steps/s",  "5 Earth-mass planets, WHFast (Obertas et al. 2017)",                create_obertas,      simctx_work, simctx_signature, simctx_destroy, always,    5,   28},
