@@ -130,6 +130,26 @@ check, not necessarily an error.
 - `OPT="-march=native -ffp-contract=fast"` adds ~7% more (FMA), but results then differ from the
   stock build at the round-off level.
 
+## Running many simulations in parallel (Python)
+
+Many workloads (MEGNO grids, posterior sampling, stability ensembles) run thousands of
+short simulations with `multiprocessing`. Measured on the benchmark machine (4 workers,
+2,000 three-body WHFast jobs, `integrate(50)` each):
+
+| | fork | forkserver | spawn |
+|---|---|---|---|
+| Pool start-up (incl. importing rebound in workers) | 18 ms | 78 ms | 61 ms |
+| 2,000 jobs, workers build the simulation from parameters | 452 ms | 457 ms | 522 ms |
+| 2,000 jobs, pickled `Simulation` objects passed in | 338 ms | 323 ms | 334 ms |
+
+- Create the pool once and reuse it; start-up costs as much as 100-200 short jobs.
+  `spawn` is the default on macOS and Windows and `forkserver` on Linux from Python 3.14.
+- Pickling a `Simulation` is cheap (about 35 us round trip and 3 KB for three particles),
+  so passing simulations is fine; there is no need to pass initial conditions instead.
+- Use `chunksize` (here 50) in `Pool.map`, so that each task message carries many jobs.
+- For WHFast512 ensembles, `sim.steps_pair()` and the packed-system mode (`N_systems`)
+  give more than extra processes do on one core.
+
 ## Files
 
 - `bench.c` — benchmark definitions and harness (public REBOUND API only, so it builds against other source trees).
