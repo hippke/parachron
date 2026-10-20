@@ -105,6 +105,7 @@ void reb_integrator_mercurius_free(void* p){
     free(mercurius->sap_box);
     free(mercurius->sap_order);
     free(mercurius->sap_pairs);
+    free(mercurius->enc_gather);
     free(mercurius->particles_backup_additional_forces);
     free(mercurius->encounter_map);
     free(mercurius->dcrit);
@@ -598,6 +599,7 @@ double reb_integrator_mercurius_calculate_dcrit_for_particle(struct reb_simulati
     return dcrit;
 }
 
+#define REB_MERCURIUS_BLOCK 32
 void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_simulation* r){
     struct reb_integrator_mercurius_state* mercurius = r->integrator.state;
     struct reb_particle* const particles = r->particles;
@@ -631,9 +633,69 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     }
     // We're in a heliocentric coordinate system.
     // The star feels no acceleration
+    // Contiguous copies of the encounter particles' positions and critical radii (same values).
+    const int gathered = L_default && encounter_N >= 16;
+    double *gx = NULL, *gy = NULL, *gz = NULL, *gdc = NULL;
+    if (gathered){
+        if (mercurius->N_allocated_enc_gather < encounter_N){
+            mercurius->enc_gather = realloc(mercurius->enc_gather, sizeof(double)*4*encounter_N);
+            mercurius->N_allocated_enc_gather = encounter_N;
+        }
+        gx = mercurius->enc_gather;
+        gy = gx + encounter_N;
+        gz = gy + encounter_N;
+        gdc = gz + encounter_N;
+        for (size_t k=0; k<encounter_N; k++){
+            const size_t mk = map[k];
+            gx[k] = particles[mk].x;
+            gy[k] = particles[mk].y;
+            gz[k] = particles[mk].z;
+            gdc[k] = dcrit[mk];
+        }
+    }
     // Interactions between active-active
     for (size_t i=2; i<encounter_N_active; i++){
         size_t mi = map[i];
+        if (gathered){
+            // Far-pair test on contiguous copies, a block at a time (vectorisable); the remaining
+            // pairs are handled as below, in the original order.
+            const double xi = gx[i], yi = gy[i], zi = gz[i], dci = gdc[i];
+            for (size_t j0=1; j0<i; j0+=REB_MERCURIUS_BLOCK){
+                const size_t nb = (i-j0) < REB_MERCURIUS_BLOCK ? (i-j0) : REB_MERCURIUS_BLOCK;
+                double bdx[REB_MERCURIUS_BLOCK], bdy[REB_MERCURIUS_BLOCK], bdz[REB_MERCURIUS_BLOCK], br2[REB_MERCURIUS_BLOCK];
+                int near[REB_MERCURIUS_BLOCK];
+                int any = 0;
+                for (size_t k=0; k<nb; k++){
+                    const double dx = xi - gx[j0+k];
+                    const double dy = yi - gy[j0+k];
+                    const double dz = zi - gz[j0+k];
+                    const double dcritmax = MAX(dci,gdc[j0+k]);
+                    const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+                    bdx[k] = dx; bdy[k] = dy; bdz[k] = dz; br2[k] = r2;
+                    near[k] = !(r2 > 1.0002000100*dcritmax*dcritmax);
+                    any |= near[k];
+                }
+                if (!any) continue;
+                for (size_t k=0; k<nb; k++){
+                    if (!near[k]) continue;
+                    const size_t mj = map[j0+k];
+                    const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
+                    const double dcritmax = MAX(dci,gdc[j0+k]);
+                    const double _r = sqrt(br2[k]);
+                    const double L = _L(r,_r,dcritmax);
+                    double prefact = G*(1.-L)/(_r*_r*_r);
+                    double prefactj = -prefact*particles[mj].m;
+                    double prefacti = prefact*particles[mi].m;
+                    particles[mi].ax    += prefactj*dx;
+                    particles[mi].ay    += prefactj*dy;
+                    particles[mi].az    += prefactj*dz;
+                    particles[mj].ax    += prefacti*dx;
+                    particles[mj].ay    += prefacti*dy;
+                    particles[mj].az    += prefacti*dz;
+                }
+            }
+            continue;
+        }
         for (size_t j=1; j<i; j++){
             size_t mj = map[j];
             const double dx = particles[mi].x - particles[mj].x;
@@ -763,6 +825,47 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     }
     for (size_t i=2; i<N_active; i++){
         if (reb_sigint > 1) return;
+        if (i-1 >= 16){
+            // Blocks of partners: separations and distances first (vectorisable square roots),
+            // then the changeover function and the accumulation in the original order.
+            // Same operations as the plain loop below, so the results are identical.
+            const double xi = particles[i].x, yi = particles[i].y, zi = particles[i].z, mi = particles[i].m, dci = dcrit[i];
+            for (size_t j0=1; j0<i; j0+=REB_MERCURIUS_BLOCK){
+                const size_t nb = (i-j0) < REB_MERCURIUS_BLOCK ? (i-j0) : REB_MERCURIUS_BLOCK;
+                double bdx[REB_MERCURIUS_BLOCK], bdy[REB_MERCURIUS_BLOCK], bdz[REB_MERCURIUS_BLOCK], br[REB_MERCURIUS_BLOCK], bpf[REB_MERCURIUS_BLOCK];
+                for (size_t k=0; k<nb; k++){
+                    bdx[k] = xi - particles[j0+k].x;
+                    bdy[k] = yi - particles[j0+k].y;
+                    bdz[k] = zi - particles[j0+k].z;
+                }
+                for (size_t k=0; k<nb; k++){
+                    const double _r = sqrt(bdx[k]*bdx[k] + bdy[k]*bdy[k] + bdz[k]*bdz[k] + softening2);
+                    br[k] = _r;
+                    bpf[k] = G/(_r*_r*_r); // = G*L/r^3 for L = 1 (G*1 is exactly G)
+                }
+                for (size_t k=0; k<nb; k++){
+                    const size_t j = j0+k;
+                    const double _r = br[k];
+                    const double dcritmax = MAX(dci,dcrit[j]);
+                    double prefact;
+                    if (L_default && _r > 1.0001*dcritmax){
+                        prefact = bpf[k];
+                    }else{
+                        const double L = _L(r,_r,dcritmax);
+                        prefact = G*L/(_r*_r*_r);
+                    }
+                    const double prefactj = -prefact*particles[j].m;
+                    const double prefacti = prefact*mi;
+                    particles[i].ax    += prefactj*bdx[k];
+                    particles[i].ay    += prefactj*bdy[k];
+                    particles[i].az    += prefactj*bdz[k];
+                    particles[j].ax    += prefacti*bdx[k];
+                    particles[j].ay    += prefacti*bdy[k];
+                    particles[j].az    += prefacti*bdz[k];
+                }
+            }
+            continue;
+        }
         for (size_t j=1; j<i; j++){
             const double dx = particles[i].x - particles[j].x;
             const double dy = particles[i].y - particles[j].y;
