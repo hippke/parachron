@@ -328,7 +328,7 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     V G0, G1, G2, G3;
     // Two Halley steps with short series.
     for (int h=0; h<2; h++){
-        REB_W512_NAME(w512_stiefel_Gs03_)(h==0 ? 9 : 11, XX, beta, &G0, &G1, &G2, &G3);
+        REB_W512_NAME(w512_stiefel_Gs03_)(h==0 ? 7 : 9, XX, beta, &G0, &G1, &G2, &G3);
         V f = w_fmsub(zeta, G3, c->DT);
         f = w_fmadd(eta, G2, f);
         f = w_fmadd(R, XX, f);
