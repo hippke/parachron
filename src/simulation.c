@@ -702,6 +702,7 @@ enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_st
     return r->status;
 }
 static void reb_simulation_step(struct reb_simulation* const r){
+    reb_omp_select_cores(r); // one OpenMP team size for the whole step
 
     // A 'DKD'-like integrator will do the first 'D' part.
     if (r->pre_timestep_modifications){
@@ -813,6 +814,7 @@ void reb_simulation_synchronize(struct reb_simulation* r){
 
 
 void reb_simulation_update_acceleration(struct reb_simulation* r){
+    reb_omp_select_cores(r);
     if (r->gravity==REB_GRAVITY_CUSTOM){
         if (!r->gravity_custom){
             reb_simulation_error(r, "REB_GRAVITY_CUSTOM selected, but r->gravity_custom function pointer not provided.");

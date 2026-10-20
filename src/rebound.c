@@ -524,12 +524,38 @@ REB_API int reb_omp_performance_cores_sysfs(const char* const root){
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 #endif
+#if defined(_MSC_VER)
+__declspec(thread) int reb_omp_all_cores_now = 0;
+#else
+__thread int reb_omp_all_cores_now = 0;
+#endif
+// Core policy from the environment: 0 auto, 1 all cores, 2 performance cores only.
+static int reb_omp_cores_policy(void){
+    static int cached = -1;
+    if (cached>=0) return cached;
+    int pol = 0;
+    const char* e = getenv("REBOUND_OMP_CORES");
+    if (e && !strcmp(e, "all")) pol = 1;
+    if (e && !strcmp(e, "performance")) pol = 2;
+    const char* a = getenv("REBOUND_OMP_ALL_CORES"); // older switch, same as REBOUND_OMP_CORES=all
+    if (a && a[0]=='1') pol = 1;
+    cached = pol;
+    return pol;
+}
+void reb_omp_select_cores(const struct reb_simulation* const r){
+    const int pol = reb_omp_cores_policy();
+    if (pol){
+        reb_omp_all_cores_now = pol==1;
+        return;
+    }
+    const size_t N_active = (r->N_active==SIZE_MAX || r->N_active>r->N) ? r->N : r->N_active;
+    reb_omp_all_cores_now = N_active >= REB_OMP_ALL_CORES_N;
+}
 int reb_omp_performance_cores(void){
     static int cached = -1;   // computed once; a race only computes the same value twice
     if (cached>=0) return cached;
     int p = 0;
-    const char* e = getenv("REBOUND_OMP_ALL_CORES");
-    if (!(e && e[0]=='1')){
+    if (reb_omp_cores_policy()!=1){
 #if defined(__linux__)
         p = reb_omp_performance_cores_sysfs("/sys/devices");
 #elif defined(__APPLE__)
@@ -547,6 +573,7 @@ int reb_omp_performance_cores(void){
 }
 #else // OPENMP
 int reb_omp_performance_cores(void){ return 0; }
+void reb_omp_select_cores(const struct reb_simulation* const r){ (void)r; }
 #endif // OPENMP
 
 void reb_omp_set_num_threads(int num_threads){

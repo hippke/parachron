@@ -145,11 +145,19 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 // Linux, Apple silicon); 0 on other CPUs, if unknown, or if the environment variable
 // REBOUND_OMP_ALL_CORES=1 is set. Determined once (rebound.c).
 REB_API int reb_omp_performance_cores(void);
+// Core policy of the current step (set by reb_omp_select_cores at the start of each step and force
+// evaluation, per calling thread): 1 = use all cores, 0 = performance cores only.
+#if defined(_MSC_VER)
+extern __declspec(thread) int reb_omp_all_cores_now;
+#else
+extern __thread int reb_omp_all_cores_now;
+#endif
 // Threads REBOUND's parallel loops use: the OpenMP thread count, limited to the performance cores
 // on hybrid CPUs. The loops wait at barriers for their slowest thread, so efficiency cores slow them
 // down (measured on an i5-13500: 16 and 20 threads slower than 4-8). Results do not depend on it.
 static inline int reb_omp_threads(void){
     const int T = omp_get_max_threads();
+    if (reb_omp_all_cores_now) return T;
     const int p = reb_omp_performance_cores();
     return (p>0 && p<T) ? p : T;
 }
@@ -190,6 +198,16 @@ static inline int reb_omp_parallel_gravity(const double work){
     return reb_omp_parallel(work);
 }
 #endif // OPENMP
+// Chooses the core policy for the next step of r (no-op without OpenMP): on CPUs with performance
+// and efficiency cores, all cores are used for large systems (N_active >= REB_OMP_ALL_CORES_N),
+// where the work is split into many dynamically scheduled pieces and slower cores still help
+// (i5-13500: IAS15 N = 2048 4.4x vs 3.85x, stage mode 8.0x vs 5.3x); otherwise only the performance
+// cores. Environment variable REBOUND_OMP_CORES = all | performance overrides (default: auto).
+#ifndef REB_OMP_ALL_CORES_N
+#define REB_OMP_ALL_CORES_N 1024
+#endif
+struct reb_simulation;
+void reb_omp_select_cores(const struct reb_simulation* const r);
 
 #if defined(REB_HAS_TARGET_CLONES_ATTR) && defined(__x86_64__) && defined(__linux__) && defined(__GLIBC__) && !defined(REB_NO_TARGET_CLONES)
 #define REB_TARGET_CLONES __attribute__((target_clones("avx2","default")))
