@@ -400,11 +400,22 @@ REB_TARGET_CLONES static void reb_gravity_tile_later(const struct reb_gravity_so
         reb_gravity_later_row(n, table + rowoff[i] + (ks-startj), p.m[i], gb.x+p.x[i], gb.y+p.y[i], gb.z+p.z[i], xk, yk, zk, pax, pay, paz);
     }
 }
+// Threads for the parallel basic-gravity kernels: about N_active/64 when the active pairs dominate
+// (more threads than that cost more in synchronisation and cross-core traffic than they save, as
+// measured on a 20-thread desktop CPU); all threads when test-particle rows dominate. Results do not
+// depend on the thread count.
+static int reb_gravity_omp_threads(const size_t N, const size_t N_active){
+    const int T = omp_get_max_threads();
+    if (N-N_active >= N_active) return T;
+    size_t c = N_active/REB_OMP_GRAVITY_ROWS_PER_THREAD;
+    if (c<2) c = 2;
+    return c<(size_t)T ? (int)c : T;
+}
 // Returns 0 if the table would be too large (the caller then uses the one-sided loop).
 static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening){
     if (starti>N_active || startj>=starti) return 0;
     // Row blocks of the active particles, boundaries at equal pass-1 work (~ s^2), at least 8 rows.
-    const int nthreads = omp_get_max_threads();
+    const int nthreads = reb_gravity_omp_threads(N, N_active);
     size_t nb = 4*(size_t)nthreads;
     if (nb>REB_GRAVITY_MAX_BLOCKS) nb = REB_GRAVITY_MAX_BLOCKS;
     if (nb>N_active/8) nb = N_active/8;
@@ -462,7 +473,7 @@ static int reb_gravity_basic_two_pass(struct reb_simulation* const r, const size
         for (size_t c=chunk_first[b]; c<chunk_first[b+1]; c++) chunk_block[c] = (unsigned short)b;
     }
     struct reb_particle* const particles = r->particles;
-#pragma omp parallel
+#pragma omp parallel num_threads(nthreads)
     {
 #pragma omp for schedule(static)
         for (size_t i=0; i<N; i++){
@@ -616,7 +627,8 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
                 // (bitwise identical to the serial loop, see reb_gravity_basic_onesided).
                 else if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening)){
                     const size_t nchunk = (N+REB_GRAVITY_ONESIDED_CHUNK-1)/REB_GRAVITY_ONESIDED_CHUNK;
-#pragma omp parallel for schedule(static)
+                    const int nthreads = reb_gravity_omp_threads(N, N_active);
+#pragma omp parallel for schedule(static) num_threads(nthreads)
                     for (size_t c=0; c<nchunk; c++){
                         const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
                         const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;

@@ -142,16 +142,21 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 static inline int reb_omp_parallel(const double work){
     return work >= REB_OMP_MIN_WORK && omp_get_max_threads() > 1 && !omp_in_parallel();
 }
-// Pair-force loops (basic and compensated gravity): the parallel kernels do about 1.5x the work of
-// the serial half-pair loop (see gravity.c), so they only pay off with more work per thread.
-// Work = N*N_active pair interactions; 2^19 is the break-even point measured on 2 cores (N ~ 700).
+// Pair-force loops (basic and compensated gravity): the parallel kernels do more work than the
+// serial half-pair loop and move data between cores (see gravity.c), so they need more work.
+// Work = N*N_active pair interactions. Measured on an Intel i5-13500 (6 P + 8 E cores): the
+// parallel kernel pays off from N ~ 256 (2^16 pairs) on, and the best thread count is about
+// N_active/64 (REB_OMP_GRAVITY_ROWS_PER_THREAD; see reb_gravity_omp_threads in gravity.c).
 #ifndef REB_OMP_MIN_WORK_GRAVITY
-#define REB_OMP_MIN_WORK_GRAVITY 524288.
+#define REB_OMP_MIN_WORK_GRAVITY 65536.
+#endif
+#ifndef REB_OMP_GRAVITY_ROWS_PER_THREAD
+#define REB_OMP_GRAVITY_ROWS_PER_THREAD 64
 #endif
 static inline int reb_omp_parallel_gravity(const double work){
     // Cheap test first: small systems never call into the OpenMP runtime here.
-    if (work < REB_OMP_MIN_WORK || work < 2.*REB_OMP_MIN_WORK_GRAVITY/256.) return 0;
-    return work*(double)omp_get_max_threads() >= 2.*REB_OMP_MIN_WORK_GRAVITY && reb_omp_parallel(work);
+    if (work < REB_OMP_MIN_WORK || work < REB_OMP_MIN_WORK_GRAVITY) return 0;
+    return reb_omp_parallel(work);
 }
 #endif // OPENMP
 
