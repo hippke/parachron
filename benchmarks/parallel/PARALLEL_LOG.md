@@ -431,6 +431,48 @@ independent of T (serial and T = 1, 2, 3, 5 identical), round-off change for N �
 VM A/B (N = 2048, K 16 → 32): neutral at T = 1, 2 (min 0.542 vs 0.552 s, 0.288 vs 0.295 s). The gain
 can only be measured on many cores. Tests 970 passed (serial and OpenMP).
 
+## Iteration 16 — workstation measurement of iterations 12–15 (user, i5-13500, commit `a110755`) — measurement only
+
+Raw output: `i5-13500_run4_commita110755.txt` (work directory, `bench_results/parallel/`). Best speedup
+vs the serial build (stage rows: vs the default IAS15 of the serial build), per core policy:
+
+| case | auto (default) | `--all-cores` | `--performance-cores` | before (it. 10, P-cores) |
+|---|---|---|---|---|
+| ias15_hltau / embryos / n128 | 0.92–1.01x | 0.96–1.00x | 0.95–1.01x | 0.96–1.01x |
+| ias15_n512 | 3.18x | 2.87x | 3.17x | 3.15x |
+| ias15_n2048 | **5.10x** (T = 20) | 5.00x | 3.94x | 3.85x |
+| ias15_tp2000 (new) | 1.85x | 1.84x | 1.84x | – |
+| embryos+stages | 1.91x | 1.80x | 1.89x | 1.89x |
+| n128+stages | 2.89x | 3.11x (T = 8) | 2.88x | 2.89x |
+| n512+stages | 4.60x | **5.79x** (T = 16) | 4.59x | 4.51x |
+| n2048+stages | **8.87x** (T = 20) | 8.61x | 5.68x | 5.69x |
+| tp2000+stages (new) | 2.45x | 2.66x (T = 16) | 2.45x | – |
+| whfast_tp10k | 2.32x | 2.34x (T = 16), 1.27x (T = 20) | 2.29x | 2.28x |
+| whfast_n256 | **1.99x, 1.94x at T ≥ 8** | 1.98x (T = 4), 1.37x (T = 20) | 2.02x, ~1.95x at T ≥ 8 | 1.93x (T = 4), 1.27x at T ≥ 8 |
+
+All results bitwise identical at every thread count and to the serial build.
+
+Readings:
+- **Iteration 12 confirmed:** whfast_n256 holds 1.94–1.99x from 4 to 20 threads (was 1.27x at T >= 8),
+  and the all-cores pathology is gone (1.37x at T = 20 instead of 0.04x).
+- **Iteration 13 confirmed for the default mode:** auto picks the better policy in every default-mode
+  case. ias15_n2048 5.10x (all cores, also better than 4.42x in it. 10 thanks to the single team size);
+  N <= 512 and test-particle cases stay on the P-cores.
+- **Stage mode wants the efficiency cores earlier:** n512+stages 5.79x with all cores at T = 16 vs
+  4.60x auto. tp2000+stages 2.66x vs 2.45x. n128+stages 3.11x at T = 8, but worse at T = 20.
+  Dynamically scheduled stage tasks absorb slower cores already at N ≈ 512. Follow-up P17b: in stage
+  mode, use all cores from N_active ≈ 512 on.
+- **Iteration 15 (64 blocks):** n2048+stages at T = 20 with all cores 8.61–8.87x vs 8.55x in
+  iteration 10. Within noise on 20 threads, as expected. The finer split is meant for larger
+  machines and stays (no cost at low T).
+- **tp2000+stages at one thread costs 1.27x the default mode** (0.79x): the test-particle rows run
+  the row kernel with only 20 partners per row (short inner loops), while the default mode's
+  test-particle loop is cheaper. Still 2.45x vs serial at 8+ threads. Follow-up P18b: a test-particle
+  kernel vectorised over test particles.
+- ias15_hltau 0.92–0.97x in all three runs (N = 6, ~7 µs per step): a few percent of fixed per-step
+  overhead in the OpenMP build. Earlier runs gave 0.95–1.00x, so this is close to noise. Item P19
+  (check): the per-step `reb_omp_select_cores` call and `omp_get_max_threads` queries.
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
@@ -473,6 +515,9 @@ Priority = expected speedup at T > 1 vs the serial build × breadth ÷ effort/ri
 | P15 | Use efficiency cores where tasks are many and dynamically scheduled (stage mode with K ≥ 8; test-particle loops) | ias15_n2048+stages | 5.7x → 8.5x | low | **done (it. 13)**; to be measured |
 | P16 | Stage mode for more configurations: test particles, compensated gravity, ghost boxes | IAS15 users with test particles | same speedups | medium | **done (it. 14)** |
 | P17 | Speculative overlap of consecutive IAS15 steps (start step n+1 from the predicted b while step n converges) | IAS15 N ≲ 100 | 1.2–1.5x on top of stage mode (estimate) | high (research) | open |
+| P17b | Stage mode: use all cores from N_active ≈ 512 (it. 16: n512+stages 5.79x vs 4.60x) | n512+stages, tp2000+stages | 1.1–1.25x at T ≥ 16 | trivial | open |
+| P18b | Stage mode: test-particle rows vectorised over test particles | tp2000+stages (0.79x on one core) | 1.2x | low | open |
+| P19 | Per-step OpenMP bookkeeping for tiny systems (hltau 0.92–0.97x) | ias15_hltau | back to 1.00x | trivial | open |
 | P18 | Ensembles: run independent simulations on separate cores (Python helper), WHFast512 several systems per vector | small systems (Solar System, WHFast512) | ~linear in cores | low | open (the way to use cores for N ≲ 10) |
 
 Cases expected to stay at ~1.0x (too little work per step for thread-level parallelism: a fork/join costs
