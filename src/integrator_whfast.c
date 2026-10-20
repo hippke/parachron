@@ -709,7 +709,7 @@ void reb_integrator_whfast_kepler_solver_range(struct reb_particle* const partic
         // Parallel: full batches of the batched solver (lane-wise path, as below), any chunking
         // gives identical results.
         const size_t nbatch = (N-first+WHFAST_KEPLER_BATCH-1)/WHFAST_KEPLER_BATCH;
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(reb_omp_threads())
         for (size_t c=0; c<nbatch; c++){
             const size_t i0 = first+c*WHFAST_KEPLER_BATCH;
             const int n = (int)((N-i0)<WHFAST_KEPLER_BATCH ? (N-i0) : WHFAST_KEPLER_BATCH);
@@ -804,7 +804,7 @@ void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, stru
             }
             break;
         case REB_INTEGRATOR_WHFAST_COORDINATES_DEMOCRATICHELIOCENTRIC:
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
             for (size_t i=1;i<N;i++){
                 p_jh[i].vx += _dt*particles[i].ax;
                 p_jh[i].vy += _dt*particles[i].ay;
@@ -812,14 +812,14 @@ void reb_integrator_whfast_interaction_step(struct reb_simulation* const r, stru
             }
             break;
         case REB_INTEGRATOR_WHFAST_COORDINATES_WHDS:
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
             for (size_t i=1;i<N_active;i++){
                 const double mi = particles[i].m;
                 p_jh[i].vx += _dt*(m0+mi)*particles[i].ax/m0;
                 p_jh[i].vy += _dt*(m0+mi)*particles[i].ay/m0;
                 p_jh[i].vz += _dt*(m0+mi)*particles[i].az/m0;
             }
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
             for (size_t i=N_active;i<N;i++){
                 p_jh[i].vx += _dt*particles[i].ax;
                 p_jh[i].vy += _dt*particles[i].ay;
@@ -855,7 +855,7 @@ void reb_integrator_whfast_jump_step(const struct reb_simulation* const r, struc
                     py += m * p_h[i].vy;
                     pz += m * p_h[i].vz;
                 }
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
                 for(size_t i=1;i<N;i++){
                     p_h[i].x += _dt * (px/m0);
                     p_h[i].y += _dt * (py/m0);
@@ -872,14 +872,14 @@ void reb_integrator_whfast_jump_step(const struct reb_simulation* const r, struc
                     py += m * p_h[i].vy / (m0+m);
                     pz += m * p_h[i].vz / (m0+m);
                 }
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
                 for(size_t i=1;i<N_active;i++){
                     const double m = r->particles[i].m;
                     p_h[i].x += _dt * (px - (m * p_h[i].vx / (m0+m)) );
                     p_h[i].y += _dt * (py - (m * p_h[i].vy / (m0+m)) );
                     p_h[i].z += _dt * (pz - (m * p_h[i].vz / (m0+m)) );
                 }
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
                 for(size_t i=N_active;i<N;i++){
                     p_h[i].x += _dt * px;
                     p_h[i].y += _dt * py;
@@ -973,7 +973,7 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
             mus[i] = eta*G;
         }
         const size_t nbatch = (N-1+WHFAST_KEPLER_BATCH-1)/WHFAST_KEPLER_BATCH;
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) num_threads(reb_omp_threads())
         for (size_t c=0; c<nbatch; c++){
             const size_t i0 = 1+c*WHFAST_KEPLER_BATCH;
             const int n = (int)((N-i0)<WHFAST_KEPLER_BATCH ? (N-i0) : WHFAST_KEPLER_BATCH);

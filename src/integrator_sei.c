@@ -99,7 +99,7 @@ void reb_integrator_sei_step(struct reb_simulation* const r, void* state){
         sei->tandtz = tan(r->OMEGAZ*(-r->dt/4.));
         sei->lastdt = r->dt;
     }
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
     for (int i=0;i<N;i++){
         operator_H012(r->dt, *sei, &(particles[i]),r->OMEGA,r->OMEGAZ);
     }
@@ -107,7 +107,7 @@ void reb_integrator_sei_step(struct reb_simulation* const r, void* state){
 
     reb_simulation_update_acceleration(r);
 
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
     for (int i=0;i<N;i++){
         operator_phi1(r->dt, &(particles[i]));
         operator_H012(r->dt, *sei, &(particles[i]),r->OMEGA,r->OMEGAZ);

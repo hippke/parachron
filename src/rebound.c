@@ -447,6 +447,84 @@ void usleep(__int64 usec){
 }
 #endif // _WIN32
 
+#ifdef OPENMP
+#if defined(__linux__)
+// Counts the CPUs in a sysfs CPU list ("0-11" or "0-5,8,10-11") that are the first hardware thread
+// of their core, i.e. physical cores. root is "/sys/devices" (a parameter for tests).
+static int reb_omp_count_cores_in_list(const char* const root, const char* const list){
+    int count = 0;
+    const char* c = list;
+    while (*c){
+        while (*c==',' || *c==' ' || *c=='\n') c++;
+        if (!*c) break;
+        char* end;
+        long a = strtol(c, &end, 10);
+        if (end==c) break;
+        long b = a;
+        c = end;
+        if (*c=='-'){ c++; b = strtol(c, &end, 10); if (end==c) break; c = end; }
+        for (long cpu=a; cpu<=b && cpu<100000; cpu++){
+            char fn[512];
+            snprintf(fn, sizeof(fn), "%s/system/cpu/cpu%ld/topology/thread_siblings_list", root, cpu);
+            FILE* f = fopen(fn, "r");
+            long first = cpu;
+            if (f){
+                if (fscanf(f, "%ld", &first)!=1) first = cpu;
+                fclose(f);
+            }
+            if (first==cpu) count++;
+        }
+    }
+    return count;
+}
+// Physical performance cores of an Intel hybrid CPU (cpu_core and cpu_atom PMUs present), else 0.
+REB_API int reb_omp_performance_cores_sysfs(const char* const root){
+    char fn[512];
+    snprintf(fn, sizeof(fn), "%s/cpu_atom/cpus", root);
+    FILE* f = fopen(fn, "r");
+    if (!f) return 0;
+    char atom[4096] = {0};
+    const size_t na = fread(atom, 1, sizeof(atom)-1, f);
+    fclose(f);
+    if (na==0 || atom[0]=='\n') return 0;           // no efficiency cores online
+    snprintf(fn, sizeof(fn), "%s/cpu_core/cpus", root);
+    f = fopen(fn, "r");
+    if (!f) return 0;
+    char core[4096] = {0};
+    const size_t nc = fread(core, 1, sizeof(core)-1, f);
+    fclose(f);
+    if (nc==0) return 0;
+    return reb_omp_count_cores_in_list(root, core);
+}
+#endif // __linux__
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+int reb_omp_performance_cores(void){
+    static int cached = -1;   // computed once; a race only computes the same value twice
+    if (cached>=0) return cached;
+    int p = 0;
+    const char* e = getenv("REBOUND_OMP_ALL_CORES");
+    if (!(e && e[0]=='1')){
+#if defined(__linux__)
+        p = reb_omp_performance_cores_sysfs("/sys/devices");
+#elif defined(__APPLE__)
+        int levels = 0;
+        size_t len = sizeof(levels);
+        if (sysctlbyname("hw.nperflevels", &levels, &len, NULL, 0)==0 && levels>1){
+            int pc = 0;
+            len = sizeof(pc);
+            if (sysctlbyname("hw.perflevel0.physicalcpu", &pc, &len, NULL, 0)==0 && pc>0) p = pc;
+        }
+#endif
+    }
+    cached = p;
+    return p;
+}
+#else // OPENMP
+int reb_omp_performance_cores(void){ return 0; }
+#endif // OPENMP
+
 void reb_omp_set_num_threads(int num_threads){
 #ifdef OPENMP
     omp_set_num_threads(num_threads);

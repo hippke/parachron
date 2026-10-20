@@ -585,7 +585,7 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     particles[0].az = 0; 
     // We're in a heliocentric coordinate system.
     // The star feels no acceleration
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active)) num_threads(reb_omp_threads())
     for (size_t i=1; i<encounter_N; i++){
         size_t mi = map[i];
         particles[mi].ax = 0; 
@@ -616,7 +616,7 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
         }
     }
     if (_testparticle_type){
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active)) num_threads(reb_omp_threads())
         for (size_t i=1; i<encounter_N_active; i++){
             size_t mi = map[i];
             const double x = particles[mi].x;
@@ -712,7 +712,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     particles[0].ax = 0; 
     particles[0].ay = 0; 
     particles[0].az = 0; 
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(32.*(double)N))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(32.*(double)N)) num_threads(reb_omp_threads())
     for (size_t i=1; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 

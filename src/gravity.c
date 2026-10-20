@@ -74,7 +74,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
 
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 
@@ -92,7 +92,7 @@ void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){
         for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
             for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
                 // Summing over all particle pairs
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(64.*(double)N))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(64.*(double)N)) num_threads(reb_omp_threads())
                 for (size_t k=0; k<N; k++){
                     const size_t i = order[k];
 #ifndef OPENMP
@@ -417,7 +417,7 @@ REB_TARGET_CLONES static void reb_gravity_tile_later(const struct reb_gravity_so
 // measured on a 20-thread desktop CPU); all threads when test-particle rows dominate. Results do not
 // depend on the thread count.
 static int reb_gravity_omp_threads(const size_t N, const size_t N_active){
-    const int T = omp_get_max_threads();
+    const int T = reb_omp_threads();
     if (N-N_active >= N_active) return T;
     size_t c = N_active/REB_OMP_GRAVITY_ROWS_PER_THREAD;
     if (c<2) c = 2;
@@ -706,7 +706,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
         r->N_allocated_gravity_cs = N;
     }
     struct reb_vec3d* restrict const cs = r->gravity_cs;
-#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(static) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0.; 
         particles[i].ay = 0.; 
@@ -720,7 +720,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
     // Work = pair interactions in the one-sided loops (each particle sums all partners in index
     // order, the same order as the serial loop below, so results are identical).
     if (reb_omp_parallel_gravity((double)N*(double)N_active)){
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(guided) num_threads(reb_omp_threads())
     for (size_t i=0; i<N_active; i++){
         for (size_t j=0; j<N_active; j++){
             if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) || (i==1 && j==0))) continue;
@@ -757,7 +757,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
     }
 
     // Testparticles
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(guided) num_threads(reb_omp_threads())
     for (size_t i=N_active; i<N; i++){
         for (size_t j=0; j<N_active; j++){
             if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) || (i==1 && j==0))) continue;
@@ -792,7 +792,7 @@ void reb_gravity_compensated_calculate_acceleration(struct reb_simulation* r){
         }
     }
     if (_testparticle_type){
-#pragma omp parallel for schedule(guided)
+#pragma omp parallel for schedule(guided) num_threads(reb_omp_threads())
         for (size_t j=0; j<N_active; j++){
             for (size_t i=N_active; i<N; i++){
                 if (gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_BETWEEN_0_AND_1 && ((j==1 && i==0) || (i==1 && j==0))) continue;
@@ -1304,7 +1304,7 @@ void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const 
         }
     }
     // Interactions between active particles and test particles
-#pragma omp parallel for schedule(static) if(!_testparticle_type && reb_omp_parallel((double)(N-N_active)*(double)N_active))
+#pragma omp parallel for schedule(static) if(!_testparticle_type && reb_omp_parallel((double)(N-N_active)*(double)N_active)) num_threads(reb_omp_threads())
     for (size_t i=N_active; i<N; i++){
 #ifndef OPENMP
         if (reb_sigint > 1) return;

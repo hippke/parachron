@@ -264,7 +264,7 @@ void reb_collision_search(struct reb_simulation* const r){
                 const double largest_radius = (l1 != SIZE_MAX) ? r->particles[l1].r : 0.;
 
                 // Loop over all particles
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(16.*(double)N_projectiles))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(16.*(double)N_projectiles)) num_threads(reb_omp_threads())
                 for (size_t i=0;i<N_projectiles;i++){
 #ifndef OPENMP
                     if (reb_sigint > 1){
@@ -360,7 +360,7 @@ void reb_collision_search(struct reb_simulation* const r){
                 }
                 const struct reb_particle* const particles = r->particles;
                 // Loop over all particles
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(16.*(double)N_projectiles))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(16.*(double)N_projectiles)) num_threads(reb_omp_threads())
                 for (size_t i=0;i<N_projectiles;i++){
 #ifndef OPENMP
                     if (reb_sigint > 1){

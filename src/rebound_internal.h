@@ -139,8 +139,20 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 #ifndef REB_OMP_MIN_WORK
 #define REB_OMP_MIN_WORK 2048
 #endif
+// Number of performance cores on CPUs with performance and efficiency cores (Intel hybrid CPUs on
+// Linux, Apple silicon); 0 on other CPUs, if unknown, or if the environment variable
+// REBOUND_OMP_ALL_CORES=1 is set. Determined once (rebound.c).
+REB_API int reb_omp_performance_cores(void);
+// Threads REBOUND's parallel loops use: the OpenMP thread count, limited to the performance cores
+// on hybrid CPUs. The loops wait at barriers for their slowest thread, so efficiency cores slow them
+// down (measured on an i5-13500: 16 and 20 threads slower than 4-8). Results do not depend on it.
+static inline int reb_omp_threads(void){
+    const int T = omp_get_max_threads();
+    const int p = reb_omp_performance_cores();
+    return (p>0 && p<T) ? p : T;
+}
 static inline int reb_omp_parallel(const double work){
-    return work >= REB_OMP_MIN_WORK && omp_get_max_threads() > 1 && !omp_in_parallel();
+    return work >= REB_OMP_MIN_WORK && reb_omp_threads() > 1 && !omp_in_parallel();
 }
 // Pair-force loops (basic and compensated gravity): the parallel kernels do more work than the
 // serial half-pair loop and move data between cores (see gravity.c), so they need more work.

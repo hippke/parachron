@@ -82,7 +82,7 @@ void reb_boundary_check(struct reb_simulation* const r){
                 const double offsetp1 = -fmod(-1.5*OMEGA*boxsize.x*r->t+boxsize.y/2.,boxsize.y)-boxsize.y/2.; 
                 const double offsetm1 = -fmod( 1.5*OMEGA*boxsize.x*r->t-boxsize.y/2.,boxsize.y)+boxsize.y/2.; 
                 struct reb_particle* const particles = r->particles;
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
                 for (int i=0;i<N;i++){
                     // Radial
                     while(particles[i].x>boxsize.x/2.){
@@ -113,7 +113,7 @@ void reb_boundary_check(struct reb_simulation* const r){
             }
             break;
         case REB_BOUNDARY_PERIODIC:
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(0.5*(double)N))
+#pragma omp parallel for schedule(guided) if(reb_omp_parallel(0.5*(double)N)) num_threads(reb_omp_threads())
             for (int i=0;i<N;i++){
                 while(particles[i].x>boxsize.x/2.){
                     particles[i].x -= boxsize.x;

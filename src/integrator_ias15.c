@@ -371,7 +371,7 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
     const size_t nrchunk = (N+RCHUNK-1)/RCHUNK;
     if (K==1){
         // One block per stage: prediction and force evaluation fused into one task per stage.
-#pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+#pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel()) num_threads(reb_omp_threads())
         for (size_t n=1; n<8; n++){
             reb_integrator_ias15_stage_predict(r, N, n, b, x0, v0, a0, csx, buf);
             double* const x = buf + (n-1)*6*N;
@@ -381,7 +381,7 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
         }
         return;
     }
-#pragma omp parallel if(!omp_in_parallel())
+#pragma omp parallel if(!omp_in_parallel()) num_threads(reb_omp_threads())
     {
 #pragma omp for schedule(static)
     for (size_t n=1; n<8; n++){

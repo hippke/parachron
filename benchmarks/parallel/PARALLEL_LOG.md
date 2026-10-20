@@ -223,6 +223,65 @@ All bitwise identical to the serial build at every thread count. Readings:
 - T = 20 is slower than 16 for gravity: P- and E-cores mixed, and the static row-block split makes the
   P-cores wait at the barrier for the E-cores. More, smaller blocks with dynamic scheduling (item P11).
 
+## Iteration 7 — gravity threshold from workstation data (commit `b301823`) — kept
+
+Second i5-13500 run (stage cases included, and with `--cflags="-DREB_OMP_MIN_WORK_GRAVITY=65536."`):
+
+| case | threshold | omp2 | omp4 | omp8 | omp16 | omp20 |
+|---|---|---|---|---|---|---|
+| ias15_n128 | 2^19·2/T (old) | 1.01x | 1.02x | 1.01x | 1.02x | 1.02x |
+| ias15_n128 | 2^16·2/T | 1.01x | 1.01x | 1.02x | 0.93x | 0.80x |
+| ias15_n512 | old | 1.02x | 2.73x | 2.82x | 2.46x | 2.57x |
+| ias15_n512 | 2^16·2/T | **1.60x** | 2.60x | 2.87x | 2.50x | 1.70x |
+| whfast_n256 | old | 1.03x | 1.02x | 0.99x | 1.59x | 1.79x |
+| whfast_n256 | 2^16·2/T | 1.27x | **1.97x** | 1.61x | 1.60x | 1.42x |
+
+The parallel kernel pays off from N ≈ 256 on, at any T ≥ 2; small N with many threads loses (n128 at
+T = 16-20), and the best thread count grows with N: about N/64 (n256: 4, n512: 8, n2048: ≥ 16).
+New rule: parallel when N_active² ≥ 2^16, independent of T, with at most max(2, N_active/64) threads
+(all threads when test-particle rows dominate, e.g. whfast_tp10k). Bitwise results unchanged
+(gravity_check 189/189 at T = 1, 2, 3, 5; OpenMP suite 956 passed at T = 3).
+
+## Iteration 8 — IAS15 stage mode in row blocks (commit `921e2cc`) — kept, to be confirmed on a workstation
+
+Second i5-13500 run, stage mode vs the default serial IAS15:
+
+| case | stages omp1 | omp2 | omp4 | omp8 | omp16 | omp20 |
+|---|---|---|---|---|---|---|
+| ias15_embryos+stages | 0.84x | 1.26x | **1.88x** | 1.62x | 1.56x | 1.45x |
+| ias15_n128+stages | 0.95x | 1.52x | **2.54x** | 2.08x | 2.23x | 2.24x |
+| ias15_n512+stages | 1.00x | 1.69x | **3.22x** | 2.44x | 2.72x | 2.34x |
+| ias15_n2048+stages | 1.10x | 1.90x | **3.60x** | 2.62x | 3.05x | 3.58x |
+
+Best at T = 4, worse at 8+. With 7 equal tasks, 4 threads need 2 rounds (≤ 3.5x, reached), 6 threads too,
+and 8+ threads (`OMP_PROC_BIND=close`, `OMP_PLACES=cores`: P-cores first) put some stages on efficiency
+cores, so every iteration waits for the slowest. Change: each stage is split into K row blocks of the
+half-pair loop (K = N/64, at most 16 and 32 MB of scratch: a function of N only), each accumulated into
+its own zeroed arrays, then summed per particle in ascending block order. 7K tasks with dynamic
+scheduling. K = 1 (N < 128) keeps the previous fused loop and identical results. Results: identical in
+the serial build and at T = 1, 2, 3, 5 (pbench signatures), round-off differences to iteration 6 for N ≥ 128.
+2-vCPU VM A/B against iteration 7 (`--repeat 7`): 0.92–1.03x, i.e. neutral within noise. Two threads
+gain little from balancing 7 tasks. The target is 6+ cores (6 P-cores: 7 tasks → 2 rounds, ≤ 3.5x;
+7K tasks → ≤ 6x), to be measured with `--compare-src` on the workstation.
+
+## Iteration 9 — use only performance cores on hybrid CPUs (user suggestion) — kept
+
+User: "if parallelization is not optimal anyways (and scaling to many cores difficult), it seems
+reasonable to restrict it to performance-cores". The data agrees: every case whose speedup drops at
+T > 6 on the i5-13500 drops when efficiency cores join (barrier-synchronised loops run at the pace of the
+slowest core). `reb_omp_threads()` = OpenMP thread count limited to the number of physical
+performance cores; used by every REBOUND parallel region (`num_threads` clause on all 38) and by
+`reb_omp_parallel`. Detection, once per process:
+- Linux, Intel hybrid: `/sys/devices/cpu_core/cpus` (P-cores; physical cores via
+  `topology/thread_siblings_list`) when `/sys/devices/cpu_atom/cpus` is non-empty.
+- macOS, Apple silicon: `hw.nperflevels > 1` → `hw.perflevel0.physicalcpu`.
+- Otherwise (and with `REBOUND_OMP_ALL_CORES=1`): no limit.
+Tested on fake sysfs trees: i5-13500 layout → 6, non-hybrid → 0; this VM → 0 (no change). Only REBOUND's
+loops are limited, not the user's own OpenMP code; results are independent of the thread count anyway.
+For the threads to land on the P-cores, bind them (`OMP_PROC_BIND=close OMP_PLACES=cores`, as
+`run_parallel.py` does; Linux usually prefers P-cores for busy threads without binding too).
+`run_parallel.py --all-cores` measures the old behaviour for comparison.
+
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 
 `run_parallel.py --repeat 5` on the 2-vCPU VM (noisy; see above):
@@ -258,8 +317,8 @@ Priority = expected speedup at T > 1 vs the serial build × breadth ÷ effort/ri
 | P9 | TRACE/MERCURIUS OpenMP correctness | trace_*, mercurius_* | tests pass | low | **done (it. 3)** |
 | P10 | Use the structure-of-arrays tile kernel in the serial build too (it is bitwise identical and faster on one core for 256 ≤ N ≤ 1024) | ias15_embryos(?), ias15_n*, whfast_n256 | 1.1–1.4x single-core | low | new idea (single-core, outside this round's goal) |
 | L1 | IAS15 stage-parallel (Jacobi over the 7 substeps, PIRK) | ias15_* N ≳ 100 | up to 7x on the force part | medium | **done (it. 6): 1.6–2.1x on 2 cores, opt-in `parallel_stages`** |
-| P11 | Gravity on hybrid CPUs: more blocks than threads, dynamic schedule | ias15_n*, whfast_n256 at T = 20 | recover T = 20 > T = 16 | low | open |
-| P12 | Lower the gravity threshold after measurements on real CPUs | ias15_n512 at T = 2, whfast_n256 | 1.5x+ where now 1.0x | trivial | open: needs `--cflags` runs on workstations |
+| P11 | Hybrid CPUs: balance stage tasks; P-cores only | stage mode, gravity at T > 6 | no loss beyond 6 threads | low | **done (it. 8, 9); to be measured** |
+| P12 | Lower the gravity threshold after measurements on real CPUs | ias15_n512 at T = 2, whfast_n256 | 1.5x+ where now 1.0x | trivial | **done (it. 7)** |
 | P13 | Stage mode × particle-parallel gravity (nested) for > 7 cores | ias15_n* | > 7x | medium | open |
 
 Cases expected to stay at ~1.0x (too little work per step for thread-level parallelism: a fork/join costs

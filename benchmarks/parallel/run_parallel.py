@@ -15,6 +15,7 @@ and checks the final-state signatures:
   python3 run_parallel.py --only ias15_n512 --threads 1,2,4,8 --repeat 5
   python3 run_parallel.py --src ../../ --json out.json
   python3 run_parallel.py --compare-src ../rebound-base   # also interleaved A/B of the OpenMP builds of two trees
+  python3 run_parallel.py --all-cores        # hybrid CPUs: also use the efficiency cores
   python3 run_parallel.py --cflags="-DREB_OMP_MIN_WORK_GRAVITY=65536."   # try another gravity threshold
 
 Run it on a quiet machine with as many physical cores as possible.
@@ -29,6 +30,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
+ALL_CORES = False
 CASES = ["ias15_hltau", "ias15_embryos", "ias15_n128", "ias15_n512", "ias15_n2048",
          "ias15_embryos+stages", "ias15_n128+stages", "ias15_n512+stages", "ias15_n2048+stages",
          "whfast_ss", "whfast_tp10k", "whfast_n256"]
@@ -78,6 +80,8 @@ def run_once(exe, case, threads, scale):
     env["OMP_NUM_THREADS"] = str(threads)
     env.setdefault("OMP_PROC_BIND", "close")
     env.setdefault("OMP_PLACES", "cores")
+    if ALL_CORES:
+        env["REBOUND_OMP_ALL_CORES"] = "1"
     res = subprocess.run([exe, case, str(scale)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
@@ -177,9 +181,17 @@ def main():
     ap.add_argument("--json", default=None)
     ap.add_argument("--cflags", default="", help="extra flags for the OpenMP build, e.g. "
                     "'-DREB_OMP_MIN_WORK_GRAVITY=65536.' (gravity threshold) or '-DREB_OMP_MIN_WORK=1024'")
+    ap.add_argument("--all-cores", action="store_true", help="on hybrid CPUs, let REBOUND also use the "
+                    "efficiency cores (sets REBOUND_OMP_ALL_CORES=1; default: performance cores only)")
     ap.add_argument("--compare-src", default=None, help="second source tree: interleaved A/B of the OpenMP builds")
     args = ap.parse_args()
 
+    global ALL_CORES
+    ALL_CORES = args.all_cores
+    hybrid = os.path.exists("/sys/devices/cpu_atom/cpus")
+    if hybrid:
+        print("Hybrid CPU (performance + efficiency cores): REBOUND uses %s." %
+              ("all cores (--all-cores)" if ALL_CORES else "only the performance cores; T beyond that runs as T = #P-cores"))
     src = os.path.abspath(args.src)
     build_root = args.build or os.path.join(os.path.dirname(src), "build_parallel", os.path.basename(src))
     if args.threads:
