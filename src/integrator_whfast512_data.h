@@ -86,7 +86,8 @@ enum REB_WHFAST512_KERNEL {
 #define REB_WHFAST512_C_KERNEL_DECLARE(suffix) \
     int reb_whfast512c_full_steps_##suffix(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape); \
     void reb_whfast512c_kepler_step_##suffix(struct simd_data* data); \
-    void reb_whfast512c_corrector_step_##suffix(struct simd_data* data, double inv, int gr, int nsys);
+    void reb_whfast512c_corrector_step_##suffix(struct simd_data* data, double inv, int gr, int nsys); \
+    int reb_whfast512c_full_steps_pair_##suffix(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape);
 REB_WHFAST512_C_KERNEL_DECLARE(avx512)
 REB_WHFAST512_C_KERNEL_DECLARE(avx2)
 REB_WHFAST512_C_KERNEL_DECLARE(avx2x4)   // AVX2, four lanes: one system with at most four planets

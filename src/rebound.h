@@ -488,6 +488,14 @@ REB_API int reb_simulation_output_screenshot(struct reb_simulation* r, const cha
 
 // Advance simulation by N_steps timesteps.
 REB_API enum REB_STATUS reb_simulation_steps(struct reb_simulation* const r, size_t N_steps);
+// WHFast512 only: advances two simulations by N_steps time steps each in one interleaved kernel
+// call (about 1.3x faster per simulation with the C AVX-512 kernel and 1.5x with the four-lane
+// AVX2 kernel, see integrator.kernel). The results are bitwise identical to setting
+// concatenate_steps = N_steps and calling reb_simulation_steps(r, 1) for each simulation, which is
+// also what happens if the two cannot be paired (different options or kernels, or the assembly
+// kernel). Both simulations are synchronized at the end; r->status reports each result. No
+// heartbeat or Simulationarchive output happens during the call.
+REB_API void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps);
 // Integrate simulation to at least time tmax (see exact_finish_time).
 REB_API enum REB_STATUS reb_simulation_integrate(struct reb_simulation* const r, double tmax);
 // Synchronize simulation if safe_mode is turned off by integrator to get physical coordinates.

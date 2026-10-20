@@ -651,6 +651,69 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
     return ret;
 }
 
+// Two independent simulations per call (item 49): the steps of A and B alternate in one loop,
+// so the out-of-order core overlaps the two dependency chains (each step is one long chain of
+// dependent operations; the vector units are idle most of the time with a single chain). Each
+// simulation gets exactly the operations of a single-simulation call, so the results are
+// bitwise identical to stepping them separately. Both must use the same options (gr, nsys,
+// encounter, escape). Returns a bit mask: bit 0 set if A stopped (status in *status_a), bit 1
+// if B stopped; *N_done is the number of steps both completed.
+REB_W512_INLINE int REB_W512_NAME(w512_full_steps_pair_)(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, const int skip_a, const int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, const int gr, const int nsys, const int encounter, const int escape){
+    W512_CONSTS ca, cb;
+    W512_STATE sa, sb;
+    REB_W512_NAME(w512_load_)(da, &ca, &sa);
+    REB_W512_NAME(w512_load_)(db, &cb, &sb);
+    int sta = 0, stb = 0;
+    uint64_t n = 0;
+    int stopped = 0;
+    int ska = skip_a, skb = skip_b;
+    while (n < N_steps){
+        if (!ska) REB_W512_NAME(w512_kepler_step_)(&ca, &sa);
+        if (!skb) REB_W512_NAME(w512_kepler_step_)(&cb, &sb);
+        ska = 0; skb = 0;
+        REB_W512_NAME(w512_interaction_step_)(&ca, &sa, gr, nsys, encounter, escape, &sta);
+        REB_W512_NAME(w512_interaction_step_)(&cb, &sb, gr, nsys, encounter, escape, &stb);
+        n++;
+        if (*sigint){ sta = 6; stb = 6; stopped = 3; break; }
+        if ((encounter || escape) && (sta || stb)){
+            stopped = (sta ? 1 : 0) | (stb ? 2 : 0);
+            break;
+        }
+    }
+    REB_W512_NAME(w512_store_)(da, &sa);
+    REB_W512_NAME(w512_store_)(db, &sb);
+    *N_done = n;
+    *status_a = sta;
+    *status_b = stb;
+    return stopped;
+}
+
+REB_W512_TARGET int REB_W512_CAT(reb_whfast512c_full_steps_pair_, REB_W512_SUFFIX)(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape){
+    gr = gr ? 1 : 0;
+    encounter = encounter ? 1 : 0;
+    escape = escape ? 1 : 0;
+#ifdef W_ONLY_NSYS2
+    nsys = 2;
+#else
+    if (nsys != 2 && nsys != 4) nsys = 1;
+#endif
+#define W512_PAIR_CASE(GR, NSYS) \
+    if (gr==GR && nsys==NSYS){ \
+        if (encounter){ if (escape) return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 1, 1); \
+                        else        return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 1, 0); } \
+        else          { if (escape) return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 0, 1); \
+                        else        return REB_W512_NAME(w512_full_steps_pair_)(da, db, N_steps, N_done, skip_a, skip_b, sigint, status_a, status_b, GR, NSYS, 0, 0); } \
+    }
+#ifdef W_ONLY_NSYS2
+    W512_PAIR_CASE(0, 2) W512_PAIR_CASE(1, 2)
+#else
+    W512_PAIR_CASE(0, 1) W512_PAIR_CASE(0, 2) W512_PAIR_CASE(0, 4)
+    W512_PAIR_CASE(1, 1) W512_PAIR_CASE(1, 2) W512_PAIR_CASE(1, 4)
+#endif
+#undef W512_PAIR_CASE
+    return -1;
+}
+
 #define W512_FULL_STEPS_CASE(GR, NSYS, ENC, ESC) \
     if (gr==GR && nsys==NSYS && encounter==ENC && escape==ESC) \
         return REB_W512_NAME(w512_full_steps_)(data, N_steps, skip_first_kepler_step, sigint, GR, NSYS, ENC, ESC);

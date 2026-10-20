@@ -425,6 +425,112 @@ class TestIntegratorWHFast512Kernels(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sim.steps(1)
 
+class TestIntegratorWHFast512StepsPair(unittest.TestCase):
+    def make(self, kind, kernel, variant=0, **kw):
+        sim = rebound.Simulation()
+        if kind == "ss":
+            sim.add("solar system")
+            sim.particles[1].x += 1e-6*variant
+        elif kind == "3p":
+            sim.add(m=1)
+            for k in range(3):
+                sim.add(m=3e-6, a=1.12**k, e=0.01, inc=0.01*k, l=1.3*k+0.1*variant)
+            sim.move_to_com()
+        elif kind == "4x2":
+            for s in range(4):
+                sim.add(m=1)
+                for k in range(2):
+                    sim.add(m=3e-6, a=1.12**k*(1+0.01*s), e=0.01, l=1.3*k+0.2*s+0.1*variant, primary=sim.particles[-1-k])
+        sim.integrator = "whfast512"
+        sim.integrator.kernel = kernel
+        if kind == "4x2":
+            sim.integrator.N_systems = 4
+        sim.integrator.gr_potential = kw.get("gr", 1)
+        sim.integrator.corrector = kw.get("corrector", 17)
+        sim.dt = kw.get("dt", 6/365.25*2*math.pi)
+        sim.exact_finish_time = 0
+        if "exit_min_distance" in kw:
+            sim.exit_min_distance = kw["exit_min_distance"]
+        return sim
+
+    def separate(self, sim, N):
+        sim.integrator.concatenate_steps = N
+        try:
+            sim.steps(1)
+        except rebound.Encounter:
+            return "encounter"
+        return "ok"
+
+    def state(self, sim):
+        return [sim.t] + [(p.x, p.y, p.z, p.vx, p.vy, p.vz) for p in sim.particles]
+
+    def check(self, kind, kernel, N=3000, **kw):
+        a, b = self.make(kind, kernel, 0, **kw), self.make(kind, kernel, 1, **kw)
+        a2, b2 = self.make(kind, kernel, 0, **kw), self.make(kind, kernel, 1, **kw)
+        try:
+            a.steps_pair(b, N)
+        except rebound.Encounter:
+            pass
+        self.separate(a2, N)
+        self.separate(b2, N)
+        self.assertEqual(self.state(a), self.state(a2))
+        self.assertEqual(self.state(b), self.state(b2))
+        self.assertEqual(a._status, a2._status)
+        self.assertEqual(b._status, b2._status)
+
+    def kernel_ok(self, kernel):
+        try:
+            s = self.make("ss", kernel)
+            s.integrator.concatenate_steps = 1
+            s.steps(1)
+        except RuntimeError:
+            return False
+        return True
+
+    def test_pair_identical_to_separate(self):
+        for kernel in [2, 3, 4, 1, 0]:   # 1 (assembly) and 0 may not be pairable: same results via the fallback
+            if not self.kernel_ok(kernel):
+                continue
+            for kind in ["ss", "3p", "4x2"]:
+                N = 300 if kernel == 4 else 3000
+                self.check(kind, kernel, N=N)
+                self.check(kind, kernel, N=N, gr=0, corrector=0)
+
+    def test_pair_different_dt(self):
+        a, b = self.make("ss", 4, 0), self.make("ss", 4, 1, dt=3/365.25*2*math.pi)
+        a2, b2 = self.make("ss", 4, 0), self.make("ss", 4, 1, dt=3/365.25*2*math.pi)
+        a.steps_pair(b, 200)
+        self.separate(a2, 200)
+        self.separate(b2, 200)
+        self.assertEqual(self.state(a), self.state(a2))
+        self.assertEqual(self.state(b), self.state(b2))
+
+    def test_pair_one_encounter(self):
+        # Only the first simulation has a close encounter; the second one continues to N_steps.
+        def mk(variant, kernel):
+            sim = rebound.Simulation()
+            sim.add(m=1)
+            sim.add(m=1e-8, a=1)
+            sim.add(m=1e-8, a=1.2 if variant == 0 else 2.5, f=math.pi)
+            sim.integrator = "whfast512"
+            sim.integrator.kernel = kernel
+            sim.dt = 6/365.25*2*math.pi
+            sim.exact_finish_time = 0
+            sim.exit_min_distance = 0.5
+            return sim
+        for kernel in [3, 4]:
+            if not self.kernel_ok(kernel):
+                continue
+            a, b, a2, b2 = mk(0, kernel), mk(1, kernel), mk(0, kernel), mk(1, kernel)
+            with self.assertRaises(rebound.Encounter):
+                a.steps_pair(b, 1000)
+            self.assertAlmostEqual(a.t, 11.456, 2)
+            self.assertEqual(b.t, 1000*b.dt)
+            self.assertEqual(self.separate(a2, 1000), "encounter")
+            self.separate(b2, 1000)
+            self.assertEqual(self.state(a), self.state(a2))
+            self.assertEqual(self.state(b), self.state(b2))
+
 class TestIntegratorWHFast512KernelASM(TestIntegratorWHFast512):
     kernel = 1
 class TestIntegratorWHFast512KernelCAVX512(TestIntegratorWHFast512):

@@ -648,6 +648,28 @@ static int reb_integrator_whfast512_verify_setup(struct reb_simulation* const r)
     return 0; // success
 }
 
+// If the simulation is synchronized: set up the data, apply the corrector and do the first half
+// drift. Returns 1 if the first Kepler step of the main loop has to be skipped.
+static int whfast512_prepare(struct reb_simulation* const r, struct reb_integrator_whfast512_state* whfast512){
+    if (!r->is_synchronized){
+        return 0;
+    }
+    const double dt = r->dt;
+    recalculate_constants(r, whfast512->N_systems);
+    struct simd_data* data = whfast512->data;
+    // Use WHFast to apply the correctors.
+    inertial_to_jacobi_posvel(r, data, whfast512->N_systems);
+    whfast512->last_synchronization = r->t;
+    if (whfast512->corrector){
+        whfast512_corrector_step(whfast512, 1.0);
+    }
+    // First half DRIFT step.
+    w512_set1_pd(&data->dt, dt/2.0); 
+    whfast512_kepler_step(whfast512);
+    w512_set1_pd(&data->dt, dt); // Reset
+    return 1;
+}
+
 // Optimized main loops allowing for concatenate_steps
 void reb_integrator_whfast512_step(struct reb_simulation* const r, void* state){
     struct reb_integrator_whfast512_state* whfast512 = state;
@@ -659,22 +681,7 @@ void reb_integrator_whfast512_step(struct reb_simulation* const r, void* state){
         return; // Error occured
     }
 
-    int skip_first_kepler_step = 0;
-    if (r->is_synchronized){
-        recalculate_constants(r, whfast512->N_systems);
-        struct simd_data* data = whfast512->data;
-        // Use WHFast to apply the correctors.
-        inertial_to_jacobi_posvel(r, data, whfast512->N_systems);
-        whfast512->last_synchronization = r->t;
-        if (whfast512->corrector){
-            whfast512_corrector_step(whfast512, 1.0);
-        }
-        // First half DRIFT step.
-        skip_first_kepler_step = 1;
-        w512_set1_pd(&data->dt, dt/2.0); 
-        whfast512_kepler_step(whfast512);
-        w512_set1_pd(&data->dt, dt); // Reset
-    }
+    const int skip_first_kepler_step = whfast512_prepare(r, whfast512);
     r->status = whfast512_full_steps(r, whfast512, &N_steps, skip_first_kepler_step);
 
     r->is_synchronized = 0;
@@ -714,6 +721,82 @@ void reb_integrator_whfast512_synchronize(struct reb_simulation* const r, void* 
     }
 }
 
+
+// Two simulations per call. See rebound.h (reb_integrator_whfast512_steps_pair).
+typedef int (*whfast512_pair_kernel)(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape);
+
+static void whfast512_steps_single(struct reb_simulation* const r, uint64_t N_steps){
+    struct reb_integrator_whfast512_state* whfast512 = r->integrator.state;
+    const uint64_t saved = whfast512->concatenate_steps;
+    whfast512->concatenate_steps = N_steps;
+    reb_simulation_steps(r, 1);
+    whfast512->concatenate_steps = saved;
+}
+
+void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps){
+    struct reb_simulation* rs[2] = {r1, r2};
+    for (int i=0; i<2; i++){
+        if (strcmp(rs[i]->integrator.name, "whfast512") != 0){
+            reb_simulation_error(rs[i], "reb_integrator_whfast512_steps_pair() requires the WHFast512 integrator.");
+            rs[i]->status = REB_STATUS_GENERIC_ERROR;
+            return;
+        }
+        if (reb_integrator_whfast512_verify_setup(rs[i])){
+            rs[i]->status = REB_STATUS_GENERIC_ERROR;
+            return;
+        }
+    }
+    struct reb_integrator_whfast512_state* w1 = r1->integrator.state;
+    struct reb_integrator_whfast512_state* w2 = r2->integrator.state;
+    const int enc1 = r1->exit_min_distance ? 1 : 0, esc1 = r1->exit_max_distance ? 1 : 0;
+    const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
+    whfast512_pair_kernel kernel = NULL;
+    if (r1 != r2 && w1->kernel_used == w2->kernel_used && w1->four_lanes == w2->four_lanes
+            && w1->gr_potential == w2->gr_potential && w1->N_systems == w2->N_systems
+            && enc1 == enc2 && esc1 == esc2){
+        switch (w1->kernel_used){
+            case REB_WHFAST512_KERNEL_C_AVX512: kernel = reb_whfast512c_full_steps_pair_avx512; break;
+            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : reb_whfast512c_full_steps_pair_avx2; break;
+            case REB_WHFAST512_KERNEL_C_GENERIC: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic; break;
+            default: break; // the assembly kernel has no paired version
+        }
+    }
+    if (!kernel){
+        // Cannot be paired: integrate one after the other (same results).
+        whfast512_steps_single(r1, N_steps);
+        if (r1 != r2) whfast512_steps_single(r2, N_steps);
+        return;
+    }
+    r1->status = REB_STATUS_RUNNING;
+    r2->status = REB_STATUS_RUNNING;
+    const int skip1 = whfast512_prepare(r1, w1);
+    const int skip2 = whfast512_prepare(r2, w2);
+    uint64_t done = 0;
+    int st1 = 0, st2 = 0;
+    const int nsys = w1->four_lanes ? 2 : (int)w1->N_systems;
+    const int stopped = kernel(w1->data, w2->data, N_steps, &done, skip1, skip2, &reb_sigint, &st1, &st2, w1->gr_potential, nsys, enc1, esc1);
+    for (int i=0; i<2; i++){
+        struct reb_simulation* r = rs[i];
+        r->t += r->dt*done;
+        r->dt_last_done = r->dt;
+        r->is_synchronized = 0;
+    }
+    if (stopped & 1) r1->status = st1;
+    if (stopped & 2) r2->status = st2;
+    // If only one of them stopped (encounter or escape), the other one continues alone.
+    for (int i=0; i<2; i++){
+        struct reb_simulation* r = rs[i];
+        if (r->status < 0 && done < N_steps && !reb_sigint){
+            uint64_t n = N_steps - done;
+            r->status = whfast512_full_steps(r, r->integrator.state, &n, 0);
+            r->t += r->dt*n;
+        }
+    }
+    for (int i=0; i<2; i++){
+        reb_simulation_synchronize(rs[i]);
+        if (rs[i]->status <= 0) rs[i]->status = REB_STATUS_SUCCESS;
+    }
+}
 
 #ifdef DEBUG_AVX512
 uint64_t reb_integrator_whfast512_debug_counter(struct reb_simulation* r, int test_p){

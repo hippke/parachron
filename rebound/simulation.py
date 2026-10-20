@@ -1294,6 +1294,28 @@ class Simulation(Structure):
             raise Collision("Two particles collided (d < r1+r2)")
         self.process_messages()
 
+    def steps_pair(self, other, N_steps):
+        """
+        WHFast512 only: advance this simulation and `other` by N_steps time steps each, with both
+        integrated in one interleaved kernel call (faster per simulation with the C kernels, see
+        `integrator.kernel`). The results are bitwise identical to setting
+        `integrator.concatenate_steps = N_steps` and calling `steps(1)` on each simulation.
+        Raises the same exceptions as `steps()` (checked for this simulation first).
+        """
+        clibrebound.reb_integrator_whfast512_steps_pair(byref(self), byref(other), c_uint64(N_steps))
+        for sim in (self, other):
+            ret_value = sim._status
+            if ret_value == 1:
+                sim.process_messages()
+                raise GenericError("An error occurred during the integration.")
+            if ret_value == 3:
+                raise Encounter("Two particles had a close encounter (d<exit_min_distance).")
+            if ret_value == 4:
+                raise Escape("A particle escaped (r>exit_max_distance).")
+            if ret_value == 6:
+                raise KeyboardInterrupt
+            sim.process_messages()
+
     def integrate(self, tmax, exact_finish_time=1):
         """
         Main integration function. Call this function when you have setup your simulation and want to integrate it forward (or backward) in time. The function might be called many times to integrate the simulation in steps and create outputs in-between steps.

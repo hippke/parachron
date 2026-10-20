@@ -21,6 +21,7 @@
 #include <math.h>
 #include <time.h>
 #include "rebound.h"
+#include <dlfcn.h>
 #include "integrator_whfast.h"
 #include "integrator_whfast512.h"
 #include "integrator_ias15.h"
@@ -302,6 +303,39 @@ static int w512c_kernel_ok(unsigned int kernel){
 }
 static int have_w512c_avx2(void){ static int ok = -1; if (ok<0) ok = w512c_kernel_ok(3); return ok; }
 static int have_w512c_avx512(void){ static int ok = -1; if (ok<0) ok = w512c_kernel_ok(2); return ok; }
+
+// 3c) Two simulations per call (reb_integrator_whfast512_steps_pair, Oct 2026), looked up at run
+// time. Trees without it step the two simulations one after the other (same work and results),
+// so an A/B comparison measures paired vs separate stepping.
+typedef void (*pair_fn_t)(struct reb_simulation*, struct reb_simulation*, uint64_t);
+struct pairctx { struct reb_simulation* a; struct reb_simulation* b; struct reb_simulation* (*make)(int); };
+static void* pair_create(struct reb_simulation* (*make)(int), unsigned int kernel){
+    struct pairctx* c = calloc(1, sizeof(*c));
+    w512c_kernel = kernel;
+    c->make = make; c->a = make(0); c->b = make(1);
+    return c;
+}
+static double pair_work(void* p){
+    struct pairctx* c = p;
+    static pair_fn_t fn = NULL; static int looked = 0;
+    if (!looked){ fn = (pair_fn_t)dlsym(RTLD_DEFAULT, "reb_integrator_whfast512_steps_pair"); looked = 1; }
+    const uint64_t N = 100000;
+    if (fn){
+        fn(c->a, c->b, N);
+    }else{
+        struct reb_simulation* rs[2] = {c->a, c->b};
+        for (int i=0; i<2; i++){
+            struct reb_integrator_whfast512_state* w = rs[i]->integrator.state;
+            w->concatenate_steps = N;
+            reb_simulation_steps(rs[i], 1);
+        }
+    }
+    return 2.*N;   // simulation-steps
+}
+static double pair_signature(void* p){ struct pairctx* c = p; return state_signature(c->a) + state_signature(c->b); }
+static void pair_destroy(void* p){ struct pairctx* c = p; reb_simulation_free(c->a); reb_simulation_free(c->b); free(c); }
+static void* create_pair_ss_avx512(void){ return pair_create(make_w512c_ss, 2); }
+static void* create_pair_3p_avx2(void){ return pair_create(make_w512c_small, 3); }
 
 // 4) Five Earth-mass planets, WHFast dt=0.05 yr (Obertas et al. 2017)
 static struct reb_simulation* make_obertas(int variant){
@@ -628,6 +662,8 @@ static const struct bench benches[] = {
     {"w512c_ss_avx512", "steps/s",  "Solar System, WHFast512 C kernel AVX-512 + GR",                      create_w512c_ss_avx512, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx512, 5, 30},
     {"w512c_3p_avx2",   "steps/s",  "3 compact planets, WHFast512 C AVX2 (four-lane path; SPOCK-like)",   create_w512c_small_avx2, simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,  5, 40},
     {"w512c_4x2_avx2",  "steps/s",  "4 systems x 2 planets per vector, WHFast512 C AVX2 (ensembles)",     create_w512c_4x2_avx2,  simctx_work, simctx_signature, simctx_destroy, have_w512c_avx2,   5, 40},
+    {"w512c_pair_ss512", "steps/s", "2 Solar Systems per call, WHFast512 C AVX-512 (steps_pair)",          create_pair_ss_avx512, pair_work, pair_signature, pair_destroy, have_w512c_avx512, 2, 16},
+    {"w512c_pair_3p_avx2", "steps/s", "2 x 3 compact planets per call, WHFast512 C AVX2 four-lane (steps_pair)", create_pair_3p_avx2, pair_work, pair_signature, pair_destroy, have_w512c_avx2, 2, 24},
     {"obertas_5p",      "steps/s",  "5 Earth-mass planets, WHFast (Obertas et al. 2017)",                create_obertas,      simctx_work, simctx_signature, simctx_destroy, always,    5,   28},
     {"spock_3p_line",   "steps/s",  "Compact 3-planet systems + line collisions (SPOCK, Tamayo 2016/20)", create_spock,       simctx_work, simctx_signature, simctx_destroy, always,   10,   55},
     {"ias15_hltau",     "orbits/s", "IAS15, 5 Saturn-mass planets (Rein & Tamayo 2017)",                create_hltau,        simctx_work, simctx_signature, simctx_destroy, always,    5,   30},
