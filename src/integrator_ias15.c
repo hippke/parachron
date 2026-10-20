@@ -327,29 +327,97 @@ static int reb_integrator_ias15_stage_parallel_possible(const struct reb_simulat
         && r->N_ghost_x==0 && r->N_ghost_y==0 && r->N_ghost_z==0
         && r->gravity_ignore_terms==REB_GRAVITY_IGNORE_TERMS_NONE && N>=2;
 }
-// Forces of substeps n = 1..7 into buf: stage n uses buf + (n-1)*6N (x, y, z, ax, ay, az).
-static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const r, const size_t N, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf, const double* const m){
+// Row blocks per stage in the stage-parallel mode: a function of N only (never of the thread
+// count), so that results do not depend on the number of threads. 7*K tasks of about equal cost
+// keep cores of different speed (e.g. performance and efficiency cores) busy. Scratch memory:
+// 21*K*N doubles, at most 2^22 (32 MB).
+#define REB_IAS15_STAGE_ROWS_PER_BLOCK 64
+#define REB_IAS15_STAGE_MAX_BLOCKS 16
+static size_t reb_integrator_ias15_stage_blocks(const size_t N){
+    size_t K = N/REB_IAS15_STAGE_ROWS_PER_BLOCK;
+    if (K>REB_IAS15_STAGE_MAX_BLOCKS) K = REB_IAS15_STAGE_MAX_BLOCKS;
+    while (K>1 && 21*K*N > ((size_t)1<<22)) K--;
+    return K<1 ? 1 : K;
+}
+// Predicted positions of substep n into buf + (n-1)*6N (x, y, z): IAS15's predictor.
+static inline void reb_integrator_ias15_stage_predict(const struct reb_simulation* const r, const size_t N, const size_t n, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf){
     const double dt = r->dt;
+    double* const x = buf + (n-1)*6*N;
+    double* const xyz[3] = {x, x+N, x+2*N};
+    const double hn = h[n];
+    const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
+    for (size_t i=0; i<N; i++){
+        for (int c=0; c<3; c++){
+            const size_t k = 3*i+c;
+            const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
+            xyz[c][i] = xk + x0[k];
+        }
+    }
+}
+// Forces of substeps n = 1..7 into buf: stage n uses buf + (n-1)*6N (x, y, z, ax, ay, az).
+// With K > 1 row blocks, task (n, b) computes rows [rb_b, rb_b+1) of the half-pair loop into its
+// own arrays tb + ((n-1)*K+b)*3N; the acceleration of particle k is then the sum over blocks
+// b >= block(k) in ascending order (blocks before k's own do not touch k).
+static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const r, const size_t N, const struct reb_dpconst7 b, const double* const x0, const double* const v0, const double* const a0, const double* const csx, double* const buf, const double* const m, double* const tb, const size_t K){
+    const double G = r->G;
+    const double softening = r->softening;
+    size_t rb[REB_IAS15_STAGE_MAX_BLOCKS+1];
+    for (size_t q=0; q<=K; q++){
+        rb[q] = q==K ? N : (size_t)((double)N*sqrt((double)q/(double)K));
+    }
+    for (size_t q=1; q<=K; q++){ if (rb[q]<rb[q-1]+1) rb[q] = rb[q-1]+1; }
+    rb[K] = N;
+    const size_t RCHUNK = 256;
+    const size_t nrchunk = (N+RCHUNK-1)/RCHUNK;
+    if (K==1){
+        // One block per stage: prediction and force evaluation fused into one task per stage.
 #pragma omp parallel for schedule(dynamic, 1) if(!omp_in_parallel())
+        for (size_t n=1; n<8; n++){
+            reb_integrator_ias15_stage_predict(r, N, n, b, x0, v0, a0, csx, buf);
+            double* const x = buf + (n-1)*6*N;
+            double* const ax = x + 3*N;
+            for (size_t i=0; i<N; i++){ ax[i] = 0.; ax[N+i] = 0.; ax[2*N+i] = 0.; }
+            reb_gravity_basic_rows_arrays(x, x+N, x+2*N, m, ax, ax+N, ax+2*N, 0, N, G, softening);
+        }
+        return;
+    }
+#pragma omp parallel if(!omp_in_parallel())
+    {
+#pragma omp for schedule(static)
     for (size_t n=1; n<8; n++){
-        double* const x = buf + (n-1)*6*N;
-        double* const y = x + N;
-        double* const z = y + N;
-        double* const ax = z + N;
+        reb_integrator_ias15_stage_predict(r, N, n, b, x0, v0, a0, csx, buf);
+    }
+#pragma omp for schedule(dynamic, 1)
+    for (size_t t=0; t<7*K; t++){
+        const size_t n = 1 + t/K;
+        const size_t q = t%K;
+        const double* const x = buf + (n-1)*6*N;
+        double* const ax = tb + t*3*N;
         double* const ay = ax + N;
         double* const az = ay + N;
-        const double hn = h[n];
-        const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
-        double* const xyz[3] = {x, y, z};
-        for (size_t i=0; i<N; i++){
-            for (int c=0; c<3; c++){
-                const size_t k = 3*i+c;
-                const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
-                xyz[c][i] = xk + x0[k];
+        const size_t hi = rb[q+1];
+        for (size_t i=0; i<hi; i++){ ax[i] = 0.; ay[i] = 0.; az[i] = 0.; }
+        reb_gravity_basic_rows_arrays(x, x+N, x+2*N, m, ax, ay, az, rb[q], hi, G, softening);
+    }
+    {
+#pragma omp for schedule(static)
+        for (size_t t=0; t<7*nrchunk; t++){
+            const size_t n = 1 + t/nrchunk;
+            const size_t k0 = (t%nrchunk)*RCHUNK;
+            const size_t k1 = k0+RCHUNK<N ? k0+RCHUNK : N;
+            double* const sa = buf + (n-1)*6*N + 3*N;
+            const double* const tbn = tb + (n-1)*K*3*N;
+            size_t q0 = 0;
+            for (size_t k=k0; k<k1; k++){
+                while (rb[q0+1]<=k) q0++;          // block of particle k
+                for (int c=0; c<3; c++){
+                    double a = tbn[q0*3*N + c*N + k];
+                    for (size_t q=q0+1; q<K; q++) a += tbn[q*3*N + c*N + k];
+                    sa[c*N + k] = a;
+                }
             }
-            ax[i] = 0.; ay[i] = 0.; az[i] = 0.;
         }
-        reb_gravity_basic_arrays(N, x, y, z, m, ax, ay, az, r->G, r->softening);
+    }
     }
 }
 
@@ -374,8 +442,10 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
     const int stage_parallel = reb_integrator_ias15_stage_parallel_possible(r, ias15, N);
     double* stage_buf = NULL;
     double* stage_m = NULL;
+    size_t stage_K = 1;
     if (stage_parallel){
-        const size_t need = 43*N;
+        stage_K = reb_integrator_ias15_stage_blocks(N);
+        const size_t need = 43*N + (stage_K>1 ? 21*stage_K*N : 0);
         if (ias15->N_allocated_stage_buf<need){
             free(ias15->stage_buf);
             ias15->stage_buf = malloc(sizeof(double)*need);
@@ -495,7 +565,7 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
         integrator_megno_thisdt = integrator_megno_thisdt_init;
 
         if (stage_parallel){
-            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m);
+            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m, stage_buf + 43*N, stage_K);
         }
         for(size_t n=1;n<8;n++) {                          // Loop over interval using Gauss-Radau spacings
             r->t = t_beginning + r->dt * h[n];

@@ -46,5 +46,6 @@ void reb_gravity_basic_calculate_and_apply_jerk(struct reb_simulation* r, const 
 
 // Serial half-pair gravity on plain arrays (see gravity.c; used by IAS15's stage-parallel mode).
 void reb_gravity_basic_arrays(const size_t N, const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const double G, const double softening);
+void reb_gravity_basic_rows_arrays(const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const size_t i0, const size_t i1, const double G, const double softening);
 
 #endif

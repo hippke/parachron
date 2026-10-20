@@ -191,14 +191,13 @@ static inline __attribute__((always_inline)) void reb_gravity_rinv3(const size_t
         f[l] = G/(_r*_r*_r);
     }
 }
-// Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
-REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
-    const size_t jlo = i0>startj ? i0 : startj;
+// The serial half-pair loop for rows i in [ifirst, i1), partners j in [jlo, i).
+static inline __attribute__((always_inline)) void reb_gravity_rows(const struct reb_gravity_soa p, const size_t ifirst, const size_t i1, const size_t jlo, const struct reb_vec6d gb, const double G, const double softening){
     double* const REB_RESTRICT pax = p.ax;
     double* const REB_RESTRICT pay = p.ay;
     double* const REB_RESTRICT paz = p.az;
     double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bf[REB_GRAVITY_BLOCK];
-    for (size_t i=(i0>starti?i0:starti); i<i1; i++){
+    for (size_t i=ifirst; i<i1; i++){
         const double xi = gb.x+p.x[i];
         const double yi = gb.y+p.y[i];
         const double zi = gb.z+p.z[i];
@@ -226,6 +225,19 @@ REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity
         }
         pax[i] = axi; pay[i] = ayi; paz[i] = azi;
     }
+}
+// Diagonal tile: the serial half-pair loop for rows i in [i0, i1), partners j in [max(i0,startj), i).
+REB_TARGET_CLONES static void reb_gravity_tile_diagonal(const struct reb_gravity_soa p, const size_t i0, const size_t i1, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening){
+    reb_gravity_rows(p, i0>starti?i0:starti, i1, i0>startj?i0:startj, gb, G, softening);
+}
+// Rows i in [i0, i1) of the serial half-pair loop with all their partners j < i (all particles
+// active, no ghost boxes): adds -f*m_j*dx to particle i and f*m_i*dx to particle j. Used by IAS15's
+// stage-parallel mode, which splits a force evaluation into such row blocks, each accumulated
+// into its own zeroed arrays and then summed in a fixed order.
+REB_TARGET_CLONES void reb_gravity_basic_rows_arrays(const double* x, const double* y, const double* z, const double* m, double* ax, double* ay, double* az, const size_t i0, const size_t i1, const double G, const double softening){
+    const struct reb_gravity_soa p = {x, y, z, m, ax, ay, az};
+    const struct reb_vec6d gb = {0};
+    reb_gravity_rows(p, i0, i1, 0, gb, G, softening);
 }
 // Serial half-pair gravity on plain arrays (all particles active, no ghost boxes, no ignored
 // terms): the same additions in the same order as the serial loop in
