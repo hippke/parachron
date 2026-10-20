@@ -96,6 +96,157 @@ static void add_solar_system(struct reb_simulation* r){
     reb_simulation_move_to_com(r);
 }
 
+// --- Setups ported from benchmarks/perf/bench.c (same initial conditions) ---
+static double cor_bridges(const struct reb_simulation* r, double v){
+    (void)r;
+    double eps = 0.32*pow(fabs(v)*100.,-0.234);
+    if (eps>1) eps=1;
+    if (eps<0) eps=0;
+    return eps;
+}
+static double rng_powerlaw(double min, double max, double slope){
+    double y = rng_uniform(0., 1.);
+    if (slope == -1) return exp(y*log(max/min) + log(min));
+    return pow((pow(max,slope+1.)-pow(min,slope+1.))*y+pow(min,slope+1.), 1./(slope+1.));
+}
+// Self-gravitating disc, tree gravity, N = 10,000 (examples/selfgravity_disc)
+static void setup_selfgrav(struct reb_simulation* r){
+    r->rand_seed = 42;
+    reb_simulation_set_integrator(r, "leapfrog");
+    r->gravity = REB_GRAVITY_TREE;
+    r->boundary = REB_BOUNDARY_OPEN;
+    r->opening_angle2 = 1.5;
+    r->softening = 0.02;
+    r->dt = 3e-2;
+    const double boxsize = 10.2;
+    r->root_size = boxsize;
+    const double disc_mass = 2e-1;
+    const int N = 10000;
+    struct reb_particle star = {0};
+    star.m = 1;
+    reb_simulation_add(r, star);
+    for (int i=0; i<N; i++){
+        struct reb_particle pt = {0};
+        double a = reb_random_powerlaw(r, boxsize/10., boxsize/2./1.2, -1.5);
+        double phi = reb_random_uniform(r, 0, 2.*M_PI);
+        pt.x = a*cos(phi); pt.y = a*sin(phi); pt.z = a*reb_random_normal(r, 0.001);
+        double mu = star.m + disc_mass*(pow(a,-1.5)-pow(boxsize/10.,-1.5))/(pow(boxsize/2./1.2,-1.5)-pow(boxsize/10.,-1.5));
+        double vkep = sqrt(r->G*mu/a);
+        pt.vx = vkep*sin(phi); pt.vy = -vkep*cos(phi);
+        pt.m = disc_mass/(double)N;
+        reb_simulation_add(r, pt);
+    }
+}
+// Shearing sheet with size distribution, tree gravity + tree collisions (~5,000 particles)
+static void setup_rings_poly(struct reb_simulation* r){
+    r->rand_seed = 11;   // collision resolution order is shuffled with rand_seed (random by default)
+    r->opening_angle2 = .5;
+    reb_simulation_set_integrator(r, "sei");
+    r->boundary = REB_BOUNDARY_SHEAR;
+    r->gravity = REB_GRAVITY_TREE;
+    r->collision = REB_COLLISION_TREE;
+    r->collision_resolve = reb_collision_resolve_hardsphere;
+    r->OMEGA = 0.00013143527;
+    r->G = 6.67428e-11;
+    r->softening = 0.1;
+    r->dt = 1e-3*2.*M_PI/r->OMEGA;
+    r->root_size = 100.;
+    r->N_root_x = 2; r->N_root_y = 2; r->N_root_z = 1;
+    r->N_ghost_x = 2; r->N_ghost_y = 2; r->N_ghost_z = 0;
+    r->coefficient_of_restitution = cor_bridges;
+    r->minimum_collision_velocity = 1.*r->OMEGA*0.001;
+    const double bx = 200., by = 200.;
+    const double total_mass = 400.*bx*by;
+    rng_seed(11);
+    double mass = 0;
+    while (mass < total_mass){
+        struct reb_particle p = {0};
+        p.x = rng_uniform(-bx/2., bx/2.);
+        p.y = rng_uniform(-by/2., by/2.);
+        double u1 = rng_uniform(1e-300, 1.), u2 = rng_uniform(0., 1.);
+        p.z = sqrt(-2.*log(u1))*cos(2.*M_PI*u2);
+        p.vy = -1.5*p.x*r->OMEGA;
+        p.r = rng_powerlaw(1., 4., -3.);
+        p.m = 400.*4./3.*M_PI*p.r*p.r*p.r;
+        reb_simulation_add(r, p);
+        mass += p.m;
+    }
+}
+// MERCURIUS planetesimal-driven migration: 2 planets + 2,500 planetesimals (test particles type 1)
+static void setup_mercurius_plts(struct reb_simulation* r){
+    r->rand_seed = 12;
+    reb_simulation_set_integrator(r, "mercurius");
+    r->testparticle_type = 1;
+    r->collision = REB_COLLISION_DIRECT;
+    r->collision_resolve = reb_collision_resolve_merge;
+    r->boundary = REB_BOUNDARY_OPEN;
+    r->root_size = 6; r->N_root_x = 2; r->N_root_y = 2;
+    const double m_earth = 3.003e-6, m_neptune = 5.1e-4, a_scat = 1, a_mig = 1.67;
+    r->dt = 6.283*pow(a_scat,1.5)/50;
+    struct reb_particle star = {0};
+    star.m = 1; star.r = 0.005;
+    reb_simulation_add(r, star);
+    struct reb_particle p = reb_particle_from_orbit(r->G, star, m_neptune, a_scat, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.000467;
+    reb_simulation_add(r, p);
+    p = reb_particle_from_orbit(r->G, star, 2.3*m_earth, a_mig, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.0000788215;
+    reb_simulation_add(r, p);
+    r->N_active = r->N;
+    const int Np = 2500;
+    const double mp = 2.3*10*m_earth/Np;
+    while (r->N < (size_t)Np + r->N_active){
+        double a = reb_random_powerlaw(r, a_mig-0.02, a_mig+1, 1);
+        double e = reb_random_rayleigh(r, 0.005), inc = reb_random_rayleigh(r, 0.005);
+        double Om = reb_random_uniform(r, 0, 2*M_PI), om = reb_random_uniform(r, 0, 2*M_PI), f = reb_random_uniform(r, 0, 2*M_PI);
+        struct reb_particle pt = reb_particle_from_orbit(r->G, star, mp, a, e, inc, Om, om, f);
+        pt.r = 0.00000934532;
+        reb_simulation_add(r, pt);
+    }
+    reb_simulation_move_to_com(r);
+}
+// Fully active planetesimal disc: 2 planets + 500 active planetesimals with merging
+static void setup_disc_active(struct reb_simulation* r, int trace){
+    r->rand_seed = 12;
+    reb_simulation_set_integrator(r, trace ? "trace" : "mercurius");
+    r->collision = REB_COLLISION_DIRECT;
+    r->collision_resolve = reb_collision_resolve_merge;
+    const double m_earth = 3.003e-6;
+    r->dt = 6.283/50;
+    struct reb_particle star = {0};
+    star.m = 1; star.r = 0.005;
+    reb_simulation_add(r, star);
+    struct reb_particle p = reb_particle_from_orbit(r->G, star, 5.1e-4, 1.0, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.000467;
+    reb_simulation_add(r, p);
+    p = reb_particle_from_orbit(r->G, star, 2.3*m_earth, 1.67, 0, reb_random_normal(r, 1e-5), 0, 0, 0);
+    p.r = 0.0000788215;
+    reb_simulation_add(r, p);
+    const int Np = 500;
+    const double mp = 2.3*10*m_earth/Np;
+    for (int i=0; i<Np; i++){
+        double a = reb_random_powerlaw(r, 1.65, 2.67, 1);
+        double e = reb_random_rayleigh(r, 0.01), inc = reb_random_rayleigh(r, 0.005);
+        struct reb_particle pt = reb_particle_from_orbit(r->G, star, mp, a, e, inc, reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI), reb_random_uniform(r, 0, 2*M_PI));
+        pt.r = 0.00000934532*pow(1000./Np, 1./3.);
+        reb_simulation_add(r, pt);
+    }
+    reb_simulation_move_to_com(r);
+}
+// TRACE with two planets and 2,000 test particles
+static void setup_trace_tp(struct reb_simulation* r){
+    rng_seed(21);
+    reb_simulation_add_fmt(r, "m", 1.);
+    reb_simulation_add_fmt(r, "m a", 1e-3, 5.);
+    reb_simulation_add_fmt(r, "m a", 3e-4, 9.5);
+    for (int i=0; i<2000; i++){
+        reb_simulation_add_fmt(r, "a e l", rng_uniform(20., 30.), rng_uniform(0., 0.1), rng_uniform(0, 2*M_PI));
+    }
+    r->N_active = 3;
+    r->dt = 0.5;
+    reb_simulation_set_integrator(r, "trace");
+}
+
 // Returns a simulation and the amount of work: integrate to t_end (adaptive) or n_steps (fixed).
 struct work { struct reb_simulation* r; double t_end; long n_steps; };
 
@@ -141,6 +292,32 @@ static struct work make_case(const char* name, double scale){
         for (int i=0; i<2000; i++) reb_simulation_add_fmt(r, "primary a e inc l", star, rng_uniform(1., 3.), rng_uniform(0, 0.05), rng_uniform(0, 0.02), rng_uniform(0, 2*M_PI));
         r->N_active = 20;
         r->dt = 1e-3; w.t_end = 2.*scale;
+    }else if (!strcmp(name, "tree_selfgrav")){  // leapfrog, tree gravity, N = 10,000
+        r->G = 1.;
+        setup_selfgrav(r);
+        w.n_steps = (long)(40*scale);
+    }else if (!strcmp(name, "tree_selfgrav_group")){ // same, opt-in group walk (tree_group_size = 32)
+        r->G = 1.;
+        setup_selfgrav(r);
+#ifdef REB_HAS_TREE_GROUP_SIZE
+        r->tree_group_size = 32;
+#endif
+        w.n_steps = (long)(40*scale);
+    }else if (!strcmp(name, "tree_rings")){     // SEI, shearing sheet, tree gravity + collisions
+        setup_rings_poly(r);
+        w.n_steps = (long)(60*scale);
+    }else if (!strcmp(name, "mercurius_plts")){ // 2 planets + 2,500 planetesimals (type 1)
+        r->G = 1.;
+        setup_mercurius_plts(r);
+        w.n_steps = (long)(1000*scale);
+    }else if (!strcmp(name, "mercurius_disc") || !strcmp(name, "trace_disc")){ // 500 active bodies + merging
+        r->G = 1.;
+        setup_disc_active(r, name[0]=='t');
+        w.n_steps = (long)(200*scale);
+    }else if (!strcmp(name, "trace_tp")){       // 2 planets + 2,000 test particles
+        r->G = 1.;
+        setup_trace_tp(r);
+        w.n_steps = (long)(2000*scale);
     }else if (!strcmp(name, "whfast_ss")){      // 8 planets: must not get slower
         reb_simulation_set_integrator(r, "whfast");
         r->G = 1.;                        // units as in benchmarks/perf (G=1, AU, Msun)
@@ -167,12 +344,55 @@ static struct work make_case(const char* name, double scale){
     return w;
 }
 
+// Ensembles: K independent Solar System clones (positions perturbed at the 1e-12 level), advanced by
+// reb_simulations_steps with as many workers as OMP_NUM_THREADS (also in the serial build: the
+// ensemble pool uses plain threads). ensemble_ss512: WHFast512 + GR (1000 time steps per REBOUND
+// step); ensemble_ss: WHFast. The signature is the sum over all clones.
+static int run_ensemble(const char* name, double scale){
+    const int is512 = !strcmp(name, "ensemble_ss512");
+    if (!is512 && strcmp(name, "ensemble_ss")){ fprintf(stderr, "unknown case %s\n", name); return 1; }
+    const char* e = getenv("OMP_NUM_THREADS");
+    const int nthreads = e ? atoi(e) : 1;
+    const int K = 32;
+    struct reb_simulation* sims[32];
+    for (int k=0; k<K; k++){
+        struct reb_simulation* r = new_sim();
+        r->G = 1.;
+        if (is512){
+            reb_simulation_set_integrator(r, "whfast512");
+            struct reb_integrator_whfast512_state* w512 = r->integrator.state;
+            w512->gr_potential = 1;
+            w512->concatenate_steps = 1000;
+            r->dt = 5.0/365.25*2.*M_PI;
+            r->exact_finish_time = 0;
+        }else{
+            reb_simulation_set_integrator(r, "whfast");
+            r->dt = 5./365.25*2.*M_PI;
+        }
+        add_solar_system(r);
+        r->particles[1].x += 1e-12*k;
+        if (!is512) ((struct reb_integrator_whfast_state*)r->integrator.state)->safe_mode = 0;
+        reb_simulation_steps(r, 1); // warm-up
+        sims[k] = r;
+    }
+    const long n_steps = (long)((is512 ? 200 : 25000)*scale);
+    const double t0 = now();
+    reb_simulations_steps(sims, (size_t)K, (size_t)n_steps, nthreads);
+    const double t1 = now();
+    double sig = 0;
+    long steps = 0;
+    for (int k=0; k<K; k++){ sig += signature(sims[k]); steps += (long)sims[k]->steps_done-1; reb_simulation_free(sims[k]); }
+    printf("{\"case\": \"%s\", \"seconds\": %.6f, \"steps\": %ld, \"N\": %d, \"signature\": %.17g}\n", name, t1-t0, steps, K, sig);
+    return 0;
+}
+
 int main(int argc, char** argv){
     if (argc<2){
-        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 ias15_tp2000 whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
+        fprintf(stderr, "usage: %s CASE [scale]\ncases (IAS15 cases also as CASE+stages): ias15_hltau ias15_embryos ias15_n128 ias15_n512 ias15_n2048 ias15_tp2000 tree_selfgrav tree_selfgrav_group tree_rings mercurius_plts mercurius_disc trace_disc trace_tp ensemble_ss512 ensemble_ss whfast_ss whfast_tp10k whfast_n256\n", argv[0]);
         return 1;
     }
     const double scale = argc>2 ? atof(argv[2]) : 1.;
+    if (!strncmp(argv[1], "ensemble_", 9)) return run_ensemble(argv[1], scale);
     // A case name ending in "+stages" runs the IAS15 case with ias15.parallel_stages = 1.
     char name[64];
     snprintf(name, sizeof(name), "%s", argv[1]);

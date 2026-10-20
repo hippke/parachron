@@ -32,6 +32,8 @@
 #include "rebound.h"
 #include "rebound_internal.h"
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
 #include "particle.h"
 #include "simulation.h"
 #include "collision.h"
@@ -65,6 +67,27 @@ static void reb_collision_root_range(const double x, const double reach, const d
     *lo = (int)a;
     *hi = (int)b;
 }
+
+#ifdef OPENMP
+// The parallel tree searches append collisions (under a critical section) in the order in which
+// threads find them, which changes from run to run. The serial search finds them projectile by
+// projectile (ascending), and each projectile's collisions in a fixed order; every projectile is
+// handled by one thread, so a stable sort by projectile restores exactly the serial order (and
+// with it the order in which collisions are shuffled and resolved). Counting sort: O(N + N_collisions).
+static void reb_collision_sort_serial_order(struct reb_simulation* const r, const size_t N_projectiles){
+    const size_t Nc = r->N_collisions;
+    if (Nc<2) return;
+    size_t* const count = calloc(N_projectiles+1, sizeof(size_t));
+    struct reb_collision* const tmp = malloc(sizeof(struct reb_collision)*Nc);
+    if (!count || !tmp){ free(count); free(tmp); return; }
+    for (size_t c=0; c<Nc; c++) count[r->collisions[c].p1+1]++;
+    for (size_t i=0; i<N_projectiles; i++) count[i+1] += count[i];
+    for (size_t c=0; c<Nc; c++) tmp[count[r->collisions[c].p1]++] = r->collisions[c];
+    memcpy(r->collisions, tmp, sizeof(struct reb_collision)*Nc);
+    free(tmp);
+    free(count);
+}
+#endif // OPENMP
 
 void reb_collision_search(struct reb_simulation* const r){
     r->N_collisions = 0;
@@ -327,6 +350,9 @@ void reb_collision_search(struct reb_simulation* const r){
                     // Continue if no collision was found
                     if (collision_nearest.p2==SIZE_MAX) continue;
                 }
+#ifdef OPENMP
+                if (reb_omp_parallel(16.*(double)N_projectiles)) reb_collision_sort_serial_order(r, N_projectiles);
+#endif // OPENMP
                 reb_tree_delete(r);
             }
             break;
@@ -423,6 +449,9 @@ void reb_collision_search(struct reb_simulation* const r){
                     // Continue if no collision was found
                     if (collision_nearest.p2==SIZE_MAX) continue;
                 }
+#ifdef OPENMP
+                if (reb_omp_parallel(16.*(double)N_projectiles)) reb_collision_sort_serial_order(r, N_projectiles);
+#endif // OPENMP
                 reb_tree_delete(r);
             }
             break;

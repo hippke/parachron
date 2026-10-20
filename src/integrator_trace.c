@@ -374,7 +374,7 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     const int _testparticle_type   = r->testparticle_type;
 #ifdef OPENMP
     // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_gravity((double)N*(double)N_active))
+    if (!reb_omp_parallel_onesided((double)N*(double)N_active))
 #endif // OPENMP
     {
     for (size_t i=0; i<N; i++){
@@ -547,7 +547,7 @@ static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_s
     size_t* map = trace->encounter_map;
 #ifdef OPENMP
     // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_gravity((double)encounter_N*(double)encounter_N_active))
+    if (!reb_omp_parallel_onesided((double)encounter_N*(double)encounter_N_active))
 #endif // OPENMP
     {
     particles[0].ax = 0; // map[0] is always 0

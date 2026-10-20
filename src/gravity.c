@@ -64,40 +64,31 @@ static void reb_tree_group_find(const struct reb_treecell* node, const size_t G,
 }
 #define REB_TREE_GROUP_MAX 256
 #define REB_TREE_GROUP_STACK 1024
-static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
-    struct reb_particle* const particles = r->particles;
-    const size_t N = r->N;
-    const double G = r->G;
-    const double softening2 = r->softening*r->softening;
-    const double theta = sqrt(r->opening_angle2);
-    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
-    size_t Gs = r->tree_group_size > REB_TREE_GROUP_MAX ? REB_TREE_GROUP_MAX : r->tree_group_size;
-    // Groups and their particles (in depth-first order), once per force evaluation.
-    const struct reb_treecell** gl = malloc(sizeof(*gl)*(N+1));
-    size_t ng = 0;
-    for (size_t i=0; i<N_root; i++) if (r->tree_root[i]) reb_tree_group_find(r->tree_root[i], Gs, gl, &ng);
-    size_t* gidx = malloc(sizeof(size_t)*(N+1));
-    size_t* goff = malloc(sizeof(size_t)*(ng+1));
-    size_t n = 0;
-    for (size_t g=0; g<ng; g++){ goff[g] = n; reb_tree_group_collect(gl[g], gidx, &n); }
-    goff[ng] = n;
-    unsigned char* ingroup = calloc(N>0?N:1, 1);
-    size_t capc = 1024, capp = 1024;
-    double* cl = malloc(sizeof(double)*4*capc);   // accepted cells: mx, my, mz, m
+// Scratch buffers of one thread for the group walk.
+struct reb_tree_group_scratch {
+    size_t capc, capp;
+    double* cl;
 #ifdef QUADRUPOLE
-    double* cq = malloc(sizeof(double)*6*capc);   // and their quadrupole moments
+    double* cq;
 #endif
-    size_t* pl = malloc(sizeof(size_t)*capp);     // particles (leaves) outside the group
-    size_t* plg = malloc(sizeof(size_t)*(REB_TREE_GROUP_MAX+1)); // leaves inside the group
+    size_t* pl;
+    size_t* plg;
+};
+// One group: own function (with an AVX2 clone) rather than the body of an OpenMP region, whose
+// outlined code gets neither the clone nor the same vectorisation. Returns 1 if the tree is too deep.
+REB_TARGET_CLONES static int reb_gravity_tree_group_one(struct reb_simulation* const r, const size_t g, const size_t* const gidx, const size_t* const goff, const size_t* const gid, const struct reb_vec6d gb, const double G, const double softening2, const double theta, const size_t N_root, struct reb_tree_group_scratch* const sc){
+    struct reb_particle* const particles = r->particles;
+    size_t capc = sc->capc, capp = sc->capp;
+    double* cl = sc->cl;
+#ifdef QUADRUPOLE
+    double* cq = sc->cq;
+#endif
+    size_t* pl = sc->pl;
+    size_t* const plg = sc->plg;
+    int too_deep = 0;
     double gx[REB_TREE_GROUP_MAX], gy[REB_TREE_GROUP_MAX], gz[REB_TREE_GROUP_MAX];
     double gax[REB_TREE_GROUP_MAX], gay[REB_TREE_GROUP_MAX], gaz[REB_TREE_GROUP_MAX];
     const struct reb_treecell* stack[REB_TREE_GROUP_STACK];
-    for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
-    for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
-    for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
-        const struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
-        for (size_t g=0; g<ng; g++){
-            if (reb_sigint > 1) goto done;
             const size_t* const idx = &gidx[goff[g]];
             const size_t k = goff[g+1]-goff[g];
             double c0=0, c1=0, c2=0;
@@ -106,7 +97,6 @@ static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
                 gx[a] = p->x + gb.x; gy[a] = p->y + gb.y; gz[a] = p->z + gb.z;
                 gax[a] = 0; gay[a] = 0; gaz[a] = 0;
                 c0 += gx[a]; c1 += gy[a]; c2 += gz[a];
-                ingroup[idx[a]] = 1;
             }
             c0 /= (double)k; c1 /= (double)k; c2 /= (double)k;
             double R = 0;
@@ -124,7 +114,7 @@ static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
                     const struct reb_treecell* const node = stack[--sp];
                     if (node->pt >= 0){
                         const size_t j = (size_t)node->pt;
-                        if (ingroup[j]){ // (also in ghost boxes: like the per-particle walk, no interaction with the own image)
+                        if (gid[j]==g){ // (also in ghost boxes: like the per-particle walk, no interaction with the own image)
                             plg[npg++] = j;
                         }else{
                             if (np == capp){ capp *= 2; pl = realloc(pl, sizeof(size_t)*capp); }
@@ -150,8 +140,9 @@ static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
                         nc++;
                     }else{
                         if (sp + 8 > REB_TREE_GROUP_STACK){
-                            reb_simulation_error(r, "Tree too deep for the group walk.");
-                            goto done;
+                            too_deep = 1;  // reported after the parallel region
+                            sp = 0;
+                            break;
                         }
                         for (int o=7; o>=0; o--) if (node->oct[o]) stack[sp++] = node->oct[o];
                     }
@@ -216,15 +207,67 @@ static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
                 p->ax += gax[a];
                 p->ay += gay[a];
                 p->az += gaz[a];
-                ingroup[idx[a]] = 0;
             }
+    sc->capc = capc; sc->capp = capp; sc->cl = cl; sc->pl = pl;
+#ifdef QUADRUPOLE
+    sc->cq = cq;
+#endif
+    return too_deep;
+}
+
+static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
+    const size_t N = r->N;
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const double theta = sqrt(r->opening_angle2);
+    const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
+    size_t Gs = r->tree_group_size > REB_TREE_GROUP_MAX ? REB_TREE_GROUP_MAX : r->tree_group_size;
+    // Groups and their particles (in depth-first order), once per force evaluation.
+    const struct reb_treecell** gl = malloc(sizeof(*gl)*(N+1));
+    size_t ng = 0;
+    for (size_t i=0; i<N_root; i++) if (r->tree_root[i]) reb_tree_group_find(r->tree_root[i], Gs, gl, &ng);
+    size_t* gidx = malloc(sizeof(size_t)*(N+1));
+    size_t* goff = malloc(sizeof(size_t)*(ng+1));
+    size_t n = 0;
+    for (size_t g=0; g<ng; g++){ goff[g] = n; reb_tree_group_collect(gl[g], gidx, &n); }
+    goff[ng] = n;
+    // Group of each particle (read-only during the walk, so groups can be walked in parallel;
+    // SIZE_MAX: particle in no group). Every particle belongs to at most one group, so each
+    // group's accelerations are written by one thread, and ghost boxes are processed in order:
+    // the results do not depend on the number of threads.
+    size_t* gid = malloc(sizeof(size_t)*(N>0?N:1));
+    for (size_t i=0; i<N; i++) gid[i] = SIZE_MAX;
+    for (size_t g=0; g<ng; g++) for (size_t a=goff[g]; a<goff[g+1]; a++) gid[gidx[a]] = g;
+    int too_deep = 0;
+    for (int gbx=-r->N_ghost_x; gbx<=r->N_ghost_x; gbx++){
+    for (int gby=-r->N_ghost_y; gby<=r->N_ghost_y; gby++){
+    for (int gbz=-r->N_ghost_z; gbz<=r->N_ghost_z; gbz++){
+        if (reb_sigint > 1 || too_deep) goto done;
+        const struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+#pragma omp parallel if(reb_omp_parallel(64.*(double)N)) num_threads(reb_omp_threads())
+        {
+        struct reb_tree_group_scratch sc;
+        sc.capc = 1024; sc.capp = 1024;
+        sc.cl = malloc(sizeof(double)*4*sc.capc);   // accepted cells: mx, my, mz, m
+#ifdef QUADRUPOLE
+        sc.cq = malloc(sizeof(double)*6*sc.capc);   // and their quadrupole moments
+#endif
+        sc.pl = malloc(sizeof(size_t)*sc.capp);     // particles (leaves) outside the group
+        sc.plg = malloc(sizeof(size_t)*(REB_TREE_GROUP_MAX+1)); // leaves inside the group
+#pragma omp for schedule(dynamic, 4)
+        for (size_t g=0; g<ng; g++){
+            if (too_deep) continue;
+            if (reb_gravity_tree_group_one(r, g, gidx, goff, gid, gb, G, softening2, theta, N_root, &sc)) too_deep = 1;
         }
+        free(sc.cl); free(sc.pl); free(sc.plg);
+#ifdef QUADRUPOLE
+        free(sc.cq);
+#endif
+        } // omp parallel
     }}}
 done:
-    free(gl); free(gidx); free(goff); free(ingroup); free(cl); free(pl); free(plg);
-#ifdef QUADRUPOLE
-    free(cq);
-#endif
+    if (too_deep) reb_simulation_error(r, "Tree too deep for the group walk.");
+    free(gl); free(gidx); free(goff); free(gid);
 }
 
 void reb_gravity_tree_calculate_acceleration(struct reb_simulation* r){

@@ -197,6 +197,12 @@ static inline int reb_omp_parallel_gravity(const double work){
     if (work < REB_OMP_MIN_WORK || work < REB_OMP_MIN_WORK_GRAVITY) return 0;
     return reb_omp_parallel(work);
 }
+// One-sided pair loops (each particle sums all its partners; MERCURIUS, TRACE): twice the pair
+// work of the serial half-pair loop, so they only pay off from 3 threads. The serial and the
+// one-sided loops give bitwise identical results, so the choice may depend on the thread count.
+static inline int reb_omp_parallel_onesided(const double work){
+    return reb_omp_parallel_gravity(work) && reb_omp_threads() >= 3;
+}
 #endif // OPENMP
 // Chooses the core policy for the next step of r (no-op without OpenMP): on CPUs with performance
 // and efficiency cores, all cores are used for large systems (N_active >= REB_OMP_ALL_CORES_N),

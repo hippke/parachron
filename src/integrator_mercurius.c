@@ -617,7 +617,7 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     const int L_default = (_L == reb_integrator_mercurius_L_mercury);
 #ifdef OPENMP
     // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_gravity((double)encounter_N*(double)encounter_N_active))
+    if (!reb_omp_parallel_onesided((double)encounter_N*(double)encounter_N_active))
 #endif // OPENMP
     {
     particles[0].ax = 0; // map[0] is always 0 
@@ -751,62 +751,82 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     }
 #ifdef OPENMP
     else {
-    particles[0].ax = 0; // map[0] is always 0 
-    particles[0].ay = 0; 
-    particles[0].az = 0; 
-    // We're in a heliocentric coordinate system.
-    // The star feels no acceleration
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active)) num_threads(reb_omp_threads())
-    for (size_t i=1; i<encounter_N; i++){
-        size_t mi = map[i];
-        particles[mi].ax = 0; 
-        particles[mi].ay = 0; 
-        particles[mi].az = 0; 
-        // Acceleration due to star
-        const double x = particles[mi].x;
-        const double y = particles[mi].y;
-        const double z = particles[mi].z;
-        const double _r = sqrt(x*x + y*y + z*z + softening2);
-        double prefact = -G/(_r*_r*_r)*m0;
-        particles[mi].ax    += prefact*x;
-        particles[mi].ay    += prefact*y;
-        particles[mi].az    += prefact*z;
-        for (size_t j=1; j<encounter_N_active; j++){
-            if (i==j) continue;
-            size_t mj = map[j];
-            const double dx = x - particles[mj].x;
-            const double dy = y - particles[mj].y;
-            const double dz = z - particles[mj].z;
-            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-            const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
-            const double L = _L(r,_r,dcritmax);
-            double prefact = -G*particles[mj].m*(1.-L)/(_r*_r*_r);
-            particles[mi].ax    += prefact*dx;
-            particles[mi].ay    += prefact*dy;
-            particles[mi].az    += prefact*dz;
+    // One-sided parallel loop, bitwise identical to the serial loop above: the serial half-pair
+    // loop adds to each encounter particle the star term first, then its partners in ascending
+    // order (own row j < k, then later rows i > k), then (type 1) the test-particle back-reaction;
+    // a partner-row term (prefact*m_i)*(x_i - x_k) equals (-prefact*m_i)*(x_k - x_i) exactly.
+    // The same far-pair test skips the same pairs.
+    particles[0].ax = 0; // map[0] is always 0
+    particles[0].ay = 0;
+    particles[0].az = 0;
+    const size_t startitestp = MAX(encounter_N_active,2);
+#pragma omp parallel for schedule(guided) num_threads(reb_omp_threads())
+    for (size_t k=1; k<encounter_N; k++){
+        const size_t mk = map[k];
+        const double xk = particles[mk].x, yk = particles[mk].y, zk = particles[mk].z;
+        double ax, ay, az;
+        {
+            const double _r = sqrt(xk*xk + yk*yk + zk*zk + softening2);
+            double prefact = -G/(_r*_r*_r)*m0;
+            ax = prefact*xk; ay = prefact*yk; az = prefact*zk;
         }
-    }
-    if (_testparticle_type){
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel((double)encounter_N*(double)encounter_N_active)) num_threads(reb_omp_threads())
-        for (size_t i=1; i<encounter_N_active; i++){
-            size_t mi = map[i];
-            const double x = particles[mi].x;
-            const double y = particles[mi].y;
-            const double z = particles[mi].z;
-            for (size_t j=encounter_N_active; j<encounter_N; j++){
-                size_t mj = map[j];
-                const double dx = x - particles[mj].x;
-                const double dy = y - particles[mj].y;
-                const double dz = z - particles[mj].z;
-                const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
+        if (k<encounter_N_active || k<startitestp){
+            if (k<encounter_N_active){
+                for (size_t f=1; f<encounter_N_active; f++){
+                    if (f==k) continue;
+                    const size_t mf = map[f];
+                    const double dx = xk - particles[mf].x;
+                    const double dy = yk - particles[mf].y;
+                    const double dz = zk - particles[mf].z;
+                    const double dcritmax = MAX(dcrit[mk],dcrit[mf]);
+                    const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+                    if (L_default && r2 > 1.0002000100*dcritmax*dcritmax) continue;
+                    const double _r = sqrt(r2);
+                    const double L = _L(r,_r,dcritmax);
+                    double prefact = G*(1.-L)/(_r*_r*_r);
+                    double prefactj = -prefact*particles[mf].m;
+                    ax += prefactj*dx;
+                    ay += prefactj*dy;
+                    az += prefactj*dz;
+                }
+                if (_testparticle_type){
+                    for (size_t f=startitestp; f<encounter_N; f++){
+                        const size_t mf = map[f];
+                        const double dx = particles[mf].x - xk;
+                        const double dy = particles[mf].y - yk;
+                        const double dz = particles[mf].z - zk;
+                        const double dcritmax = MAX(dcrit[mf],dcrit[mk]);
+                        const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+                        if (L_default && r2 > 1.0002000100*dcritmax*dcritmax) continue;
+                        const double _r = sqrt(r2);
+                        const double L = _L(r,_r,dcritmax);
+                        double prefact = G*(1.-L)/(_r*_r*_r);
+                        double prefacti = prefact*particles[mf].m;
+                        ax += prefacti*dx;
+                        ay += prefacti*dy;
+                        az += prefacti*dz;
+                    }
+                }
+            }
+        }else{
+            for (size_t f=1; f<encounter_N_active; f++){
+                const size_t mf = map[f];
+                const double dx = xk - particles[mf].x;
+                const double dy = yk - particles[mf].y;
+                const double dz = zk - particles[mf].z;
+                const double dcritmax = MAX(dcrit[mk],dcrit[mf]);
+                const double r2 = dx*dx + dy*dy + dz*dz + softening2;
+                if (L_default && r2 > 1.0002000100*dcritmax*dcritmax) continue;
+                const double _r = sqrt(r2);
                 const double L = _L(r,_r,dcritmax);
-                double prefact = -G*particles[mj].m*(1.-L)/(_r*_r*_r);
-                particles[mi].ax    += prefact*dx;
-                particles[mi].ay    += prefact*dy;
-                particles[mi].az    += prefact*dz;
+                double prefact = G*(1.-L)/(_r*_r*_r);
+                double prefactj = -prefact*particles[mf].m;
+                ax += prefactj*dx;
+                ay += prefactj*dy;
+                az += prefactj*dz;
             }
         }
+        particles[mk].ax = ax; particles[mk].ay = ay; particles[mk].az = az;
     }
     }
 #endif // OPENMP
@@ -826,7 +846,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     const int L_default = (_L == reb_integrator_mercurius_L_mercury);
 #ifdef OPENMP
     // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_gravity((double)N*(double)N_active))
+    if (!reb_omp_parallel_onesided((double)N*(double)N_active))
 #endif // OPENMP
     {
     for (size_t i=0; i<N; i++){
@@ -921,43 +941,52 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     }
 #ifdef OPENMP
     else {
-    particles[0].ax = 0; 
-    particles[0].ay = 0; 
-    particles[0].az = 0; 
-#pragma omp parallel for schedule(guided) if(reb_omp_parallel(32.*(double)N)) num_threads(reb_omp_threads())
-    for (size_t i=1; i<N; i++){
-        particles[i].ax = 0; 
-        particles[i].ay = 0; 
-        particles[i].az = 0; 
-        for (size_t j=1; j<N_active; j++){
-            if (i==j) continue;
-            const double dx = particles[i].x - particles[j].x;
-            const double dy = particles[i].y - particles[j].y;
-            const double dz = particles[i].z - particles[j].z;
-            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-            const double dcritmax = MAX(dcrit[i],dcrit[j]);
-            const double L = _L(r,_r,dcritmax);
-            const double prefact = -G*particles[j].m*L/(_r*_r*_r);
-            particles[i].ax    += prefact*dx;
-            particles[i].ay    += prefact*dy;
-            particles[i].az    += prefact*dz;
+    // One-sided parallel loop, bitwise identical to the serial loop above (same terms, same
+    // order per particle: partners in ascending order, then the type-1 back-reaction of the test
+    // particles; a partner-row term (prefact*m_i)*(x_i - x_k) equals (-prefact*m_i)*(x_k - x_i)).
+    particles[0].ax = 0;
+    particles[0].ay = 0;
+    particles[0].az = 0;
+    const size_t startitestp = MAX(N_active,2);
+#pragma omp parallel for schedule(guided) num_threads(reb_omp_threads())
+    for (size_t k=1; k<N; k++){
+        const double xk = particles[k].x, yk = particles[k].y, zk = particles[k].z;
+        double ax = 0., ay = 0., az = 0.;
+        const int active = k<N_active;
+        if (!active && k<startitestp){
+            particles[k].ax = 0.; particles[k].ay = 0.; particles[k].az = 0.;
+            continue;
         }
-    }
-    if (_testparticle_type){
-        for (size_t i=1; i<N_active; i++){
-            for (size_t j=N_active; j<N; j++){
-                const double dx = particles[i].x - particles[j].x;
-                const double dy = particles[i].y - particles[j].y;
-                const double dz = particles[i].z - particles[j].z;
+        for (size_t j=1; j<N_active; j++){
+            if (j==k) continue;
+            const double dx = xk - particles[j].x;
+            const double dy = yk - particles[j].y;
+            const double dz = zk - particles[j].z;
+            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+            const double dcritmax = MAX(dcrit[k],dcrit[j]);
+            const double L = (L_default && _r > 1.0001*dcritmax) ? 1. : _L(r,_r,dcritmax);
+            const double prefact = G*L/(_r*_r*_r);
+            const double prefactj = -prefact*particles[j].m;
+            ax += prefactj*dx;
+            ay += prefactj*dy;
+            az += prefactj*dz;
+        }
+        if (active && _testparticle_type){
+            for (size_t i=startitestp; i<N; i++){
+                const double dx = particles[i].x - xk;
+                const double dy = particles[i].y - yk;
+                const double dz = particles[i].z - zk;
                 const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                const double dcritmax = MAX(dcrit[i],dcrit[j]);
-                const double L = _L(r,_r,dcritmax);
-                const double prefact = -G*particles[j].m*L/(_r*_r*_r);
-                particles[i].ax    += prefact*dx;
-                particles[i].ay    += prefact*dy;
-                particles[i].az    += prefact*dz;
+                const double dcritmax = MAX(dcrit[i],dcrit[k]);
+                const double L = (L_default && _r > 1.0001*dcritmax) ? 1. : _L(r,_r,dcritmax);
+                const double prefact = G*L/(_r*_r*_r);
+                const double prefacti = prefact*particles[i].m;
+                ax += prefacti*dx;
+                ay += prefacti*dy;
+                az += prefacti*dz;
             }
         }
+        particles[k].ax = ax; particles[k].ay = ay; particles[k].az = az;
     }
     }
 #endif // OPENMP
