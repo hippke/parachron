@@ -142,6 +142,15 @@ extern struct reb_integrator_configuration* reb_integrator_configurations_custom
 static inline int reb_omp_parallel(const double work){
     return work >= REB_OMP_MIN_WORK && omp_get_max_threads() > 1 && !omp_in_parallel();
 }
+// Pair-force loops (basic and compensated gravity): the parallel kernels do about 1.5x the work of
+// the serial half-pair loop (see gravity.c), so they only pay off with more work per thread.
+// Work = N*N_active pair interactions; 2^19 is the break-even point measured on 2 cores (N ~ 700).
+#ifndef REB_OMP_MIN_WORK_GRAVITY
+#define REB_OMP_MIN_WORK_GRAVITY 524288.
+#endif
+static inline int reb_omp_parallel_gravity(const double work){
+    return work*(double)omp_get_max_threads() >= 2.*REB_OMP_MIN_WORK_GRAVITY && reb_omp_parallel(work);
+}
 #endif // OPENMP
 
 #if defined(REB_HAS_TARGET_CLONES_ATTR) && defined(__x86_64__) && defined(__linux__) && defined(__GLIBC__) && !defined(REB_NO_TARGET_CLONES)

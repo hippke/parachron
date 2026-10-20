@@ -508,7 +508,11 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     const size_t encounter_N = mercurius->encounter_N;
     const size_t encounter_N_active = mercurius->encounter_N_active;
     size_t* map = mercurius->encounter_map;
-#ifndef OPENMP
+#ifdef OPENMP
+    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
+    if (!reb_omp_parallel_gravity((double)encounter_N*(double)encounter_N_active))
+#endif // OPENMP
+    {
     particles[0].ax = 0; // map[0] is always 0 
     particles[0].ay = 0; 
     particles[0].az = 0; 
@@ -573,7 +577,9 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
             }
         }
     }
-#else // OPENMP
+    }
+#ifdef OPENMP
+    else {
     particles[0].ax = 0; // map[0] is always 0 
     particles[0].ay = 0; 
     particles[0].az = 0; 
@@ -631,6 +637,7 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
             }
         }
     }
+    }
 #endif // OPENMP
 }
 
@@ -646,7 +653,11 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     // The default changeover function returns exactly 1 for d > dcrit; with a small margin
     // (y >= 1.0001 in reb_integrator_mercurius_L_mercury) the call can be skipped.
     const int L_default = (_L == reb_integrator_mercurius_L_mercury);
-#ifndef OPENMP
+#ifdef OPENMP
+    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
+    if (!reb_omp_parallel_gravity((double)N*(double)N_active))
+#endif // OPENMP
+    {
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 
@@ -695,7 +706,9 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
             }
         }
     }
-#else // OPENMP
+    }
+#ifdef OPENMP
+    else {
     particles[0].ax = 0; 
     particles[0].ay = 0; 
     particles[0].az = 0; 
@@ -733,6 +746,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
                 particles[i].az    += prefact*dz;
             }
         }
+    }
     }
 #endif // OPENMP
 

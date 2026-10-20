@@ -342,7 +342,11 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     const double softening2 = r->softening*r->softening;
     const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
     const int _testparticle_type   = r->testparticle_type;
-#ifndef OPENMP
+#ifdef OPENMP
+    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
+    if (!reb_omp_parallel_gravity((double)N*(double)N_active))
+#endif // OPENMP
+    {
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0;
         particles[i].ay = 0;
@@ -390,7 +394,9 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
         }
     }
 
-#else // OPENMP
+    }
+#ifdef OPENMP
+    else {
     particles[0].ax = 0;
     particles[0].ay = 0;
     particles[0].az = 0;
@@ -401,12 +407,13 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
         particles[i].az = 0;
         for (size_t j=1; j<N_active; j++){
             if (i==j) continue;
-            if (trace->current_Ks[j*N+i]) continue;
+            // Encounter flags are set in the upper triangle only (row = lower index), as read by the serial loops.
+            if (trace->current_Ks[MIN(i,j)*N+MAX(i,j)]) continue;
             const double dx = particles[i].x - particles[j].x;
             const double dy = particles[i].y - particles[j].y;
             const double dz = particles[i].z - particles[j].z;
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-            const double prefact = -G*particles[j].m/(_r*_r*_r);
+            const double prefact = -(G/(_r*_r*_r))*particles[j].m; // same rounding as the serial loop
             particles[i].ax    += prefact*dx;
             particles[i].ay    += prefact*dy;
             particles[i].az    += prefact*dz;
@@ -415,17 +422,18 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     if (_testparticle_type){
         for (size_t i=1; i<N_active; i++){
             for (size_t j=N_active; j<N; j++){
-                if (trace->current_Ks[j*N+i]) continue;
+                if (trace->current_Ks[i*N+j]) continue; // upper triangle: active i < test particle j
                 const double dx = particles[i].x - particles[j].x;
                 const double dy = particles[i].y - particles[j].y;
                 const double dz = particles[i].z - particles[j].z;
                 const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                const double prefact = -G*particles[j].m/(_r*_r*_r);
+                const double prefact = -(G/(_r*_r*_r))*particles[j].m; // same rounding as the serial loop
                 particles[i].ax    += prefact*dx;
                 particles[i].ay    += prefact*dy;
                 particles[i].az    += prefact*dz;
             }
         }
+    }
     }
 #endif // OPENMP
 
@@ -466,7 +474,11 @@ static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_s
     const size_t encounter_N = trace->encounter_N;
     const size_t encounter_N_active = trace->encounter_N_active;
     size_t* map = trace->encounter_map;
-#ifndef OPENMP
+#ifdef OPENMP
+    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
+    if (!reb_omp_parallel_gravity((double)encounter_N*(double)encounter_N_active))
+#endif // OPENMP
+    {
     particles[0].ax = 0; // map[0] is always 0
     particles[0].ay = 0;
     particles[0].az = 0;
@@ -536,7 +548,9 @@ static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_s
             }
         }
     }
-#else // OPENMP
+    }
+#ifdef OPENMP
+    else {
     particles[0].ax = 0; // map[0] is always 0
     particles[0].ay = 0;
     particles[0].az = 0;
@@ -553,19 +567,19 @@ static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_s
         const double y = particles[mi].y;
         const double z = particles[mi].z;
         const double _r = sqrt(x*x + y*y + z*z + softening2);
-        double prefact = -G/(_r*_r*_r)*m0;
-        particles[mi].ax    += prefact*x;
-        particles[mi].ay    += prefact*y;
-        particles[mi].az    += prefact*z;
+        double prefact = -G * m0 / (_r*_r*_r); // same expression as the serial loop
+        particles[mi].ax    = prefact*x;
+        particles[mi].ay    = prefact*y;
+        particles[mi].az    = prefact*z;
         for (size_t j=1; j<encounter_N_active; j++){
             if (i==j) continue;
             size_t mj = map[j];
-            if (!trace->current_Ks[mj*N+mi]) continue;
+            if (!trace->current_Ks[MIN(mi,mj)*N+MAX(mi,mj)]) continue; // upper triangle, as in the serial loop
             const double dx = x - particles[mj].x;
             const double dy = y - particles[mj].y;
             const double dz = z - particles[mj].z;
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-            double prefact = -G*particles[mj].m/(_r*_r*_r);
+            double prefact = -(G/(_r*_r*_r))*particles[mj].m; // same rounding as the serial loop
             particles[mi].ax    += prefact*dx;
             particles[mi].ay    += prefact*dy;
             particles[mi].az    += prefact*dz;
@@ -580,17 +594,18 @@ static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_s
             const double z = particles[mi].z;
             for (size_t j=encounter_N_active; j<encounter_N; j++){
                 size_t mj = map[j];
-                if (!trace->current_Ks[mj*N+mi]) continue;
+                if (!trace->current_Ks[mi*N+mj]) continue; // upper triangle: active mi < test particle mj
                 const double dx = x - particles[mj].x;
                 const double dy = y - particles[mj].y;
                 const double dz = z - particles[mj].z;
                 const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                double prefact = -G*particles[mj].m/(_r*_r*_r);
+                double prefact = -(G/(_r*_r*_r))*particles[mj].m; // same rounding as the serial loop
                 particles[mi].ax    += prefact*dx;
                 particles[mi].ay    += prefact*dy;
                 particles[mi].az    += prefact*dz;
             }
         }
+    }
     }
 #endif // OPENMP
 }
