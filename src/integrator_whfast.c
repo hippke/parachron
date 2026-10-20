@@ -936,8 +936,10 @@ void reb_integrator_whfast_kepler_step(const struct reb_simulation* const r, str
         case REB_INTEGRATOR_WHFAST_COORDINATES_JACOBI:
 #pragma omp parallel for private(eta)
             for (size_t i=1;i<N;i++){
+                // Same mu as the serial loop: m0 plus the masses of all active particles up to
+                // and including i (the serial loop adds p_jh[i].m before the drift).
                 eta = m0;
-                for (size_t j=1;j<MIN(i,N_active);j++){
+                for (size_t j=1;j<MIN(i+1,N_active);j++){
                     eta += p_jh[j].m;
                 }
                 reb_integrator_whfast_kepler_solver(&p_jh[i], eta*G, _dt, r);

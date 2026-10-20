@@ -58,6 +58,10 @@ else:
     ##### Turn off floating point contractions for bitwise reproducibility
     if os.environ.get("FFP_CONTRACT_OFF"):
         extra_compile_args.append("-ffp-contract=off")
+    ##### Optional shared-memory parallelisation (same as `make OPENMP=1` for the C library)
+    if os.environ.get("REBOUND_OPENMP"):
+        extra_compile_args += ["-fopenmp", "-DOPENMP"]
+        extra_link_args += ["-fopenmp"]
 
 
 class build_ext_avx512(build_ext):
