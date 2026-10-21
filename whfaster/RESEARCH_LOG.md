@@ -269,8 +269,8 @@ at the final X), at no speed cost relative to the forked kernel.
    block-diagonal matrices for packed systems) — pre-existing.
 5. P3 (secular coarse propagator for parareal) is the only untested parallel-in-time route; expect a research project.
 
-Push: this session could not push to github.com/hippke/rebound (repository not authorized for the session). The
-branch is delivered as `whfaster.bundle` and `patches/` in this directory: `git fetch whfaster.bundle whfaster:whfaster`.
+Branch: pushed to github.com/hippke/rebound, branch `whfaster` (based on main @ 2cfc0c4; merges cleanly with the
+later OpenMP/IAS15 commits on main, which touch none of the files changed here).
 
 ---
 
