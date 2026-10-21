@@ -102,3 +102,11 @@ first-order theory incl. all components), `pint_long` + `freq_ana.py` (10 Myr va
   "K = 2 if the k = 2 update is small" becomes possible.
 * Next: Jacobian block attribution for the new G at the hard epochs (`jac_new.py`, `jacblock2.py`); then the C
   port (Phase 5) with cost control — the Python prototype costs ~2 s per call; the C config B 1.0 ms.
+
+## 6. Outcome (iterations 24–26)
+* Phase 3/4: second-order secular rates (U2) added; Gate 4 reached 6/10 (target 8/10); k = 3 at noise for all.
+* Phase 5: C cost of the all-component transform 2.1 ms per pass → r ≈ 0.2–0.4 for the full step → no gain at 10
+  cores. Per-slice freezing of the second-order coefficients works (only the k = 0 sweep pays), but the k = 0 sweep
+  is on the critical path and needs the full G (config B for k = 0 destroys K = 2).
+* Phase 7: continuous pipelining simulated with the real numerics — not better than windows at P = 10.
+* Phase 6/8 not started (no candidate worth validating at 10 cores yet). Next: `RESEARCH_PLAN_R4.md`.

@@ -80,6 +80,22 @@ of the first-order theory: Venus–Earth high-harmonic aliasing (fixable, not wo
 4λ_E − 8λ_M + 3λ_J (+ϖ)**, second order in the masses. A substantial further gain requires K = 2 → a complete
 second-order mean-element theory with this term as resonant dynamics: `RESEARCH_PLAN_R3.md`.
 
-## 9. How to run
+## 9. Round 3 (iterations 17–26): a much better coarse step — but not cheaper
+Goal: K = 2 (each saved iteration ≈ 25–30 % of S). Result (Python prototype, 10 test windows over 10 Myr):
+* The round-2 "first-order" theory had first-order errors: small divisors from osculating mean motions (the
+  Venus–Earth 8:13 term), a too coarse Venus–Earth secular grid, Uranus/Neptune missing from the secular rates,
+  aliasing of the giants' 60-yr term in the secular quadrature, no transform of λ, k, h, q, p. Plus two genuine
+  second-order effects: the Earth–Mars–Jupiter resonant term and the second-order secular rates (Mars–Jupiter).
+* With all fixes: **k = 2 ≤ 2 × noise for 6/10 windows (median 1.45; round 2: 0/10, median 245) and k = 3 at the
+  noise floor for every window (worst 1.6–2.7 × noise; round 2: 870)**. The three hardest windows need the complete
+  second-order short-period theory (a partial one made things worse).
+* Cost: one all-component transform pass costs 2.1 ms in C (the whole config-B step 1.0 ms); the improved step needs
+  ≥ 2 passes → r ≈ 0.2–0.4 → no wall-clock gain at ≈ 10 cores (break-even r ≈ 0.12). Continuous pipelining
+  instead of windows (simulated with the real numerics) is not better than the windowed pipeline at P = 10.
+* Recommendation unchanged: config B with the adaptive rule (≈ 2.3× on 10 cores). Round-4 plan
+  (`RESEARCH_PLAN_R4.md`): make the accurate coarse step cheap (reusable/Taylor-corrected tables, analytic
+  derivatives, pruned evaluation).
+
+## 10. How to run
 `pint/README.md`: build, `./pint_pipe 10 360000 3 <windows> 2 1 1 3e-6 6` (10 threads, adaptive), AVX2-only CPUs:
 fifth argument 3. Long validation runs: `pint_long`, analysis `freq_ana.py`, `energy_ana.py`, `drift_ana.py`.
