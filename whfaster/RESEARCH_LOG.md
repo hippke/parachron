@@ -1188,3 +1188,15 @@ Energy vs serial: within ±1e-11 everywhere.
   error) and K̄ even drops a little (2.56). Inner rms 1.5e-6 ≈ 0.3 × the dt = 6 d error → **"between dt 6 and 8 d"
   accuracy with K̄ ≈ 2.56** (vs 3.78 at the reference setting). Its cost (giants' run twice as long on the coarse
   chain) is measured in the timing runs.
+* Same ensemble, K_min 2 + giants 180 d at other τ:
+  | τ | K̄ | inner rms / max | significant means (≥ 2σ) | Saturn g6 |
+  |---|---|---|---|---|
+  | 1e-4 | 2.90–2.95 | 8.3e-7 / 2.0e-6 | s2 = s3 +1.2e-6 ± 0.3e-6, s4 +7.6e-7 ± 2e-7, g4 −7.2e-7 ± 3e-7 | +9e-8 ± 2e-8 |
+  | 3e-4 | 2.53–2.60 | 1.5e-6 / 3.3e-6 | none resolved (s4 −8e-7, 1.7σ) | +4.7e-7 ± 0.7e-7 |
+  | 1e-3 | 2.11–2.16 | 1.1e-5 / 3.0e-5 | g4 −8.9e-6 ± 4e-6, g6 +1.2e-6 ± 0.1e-6 (s2 +1.1e-5 ± 7e-6) | +1.2e-6 |
+  Windows that stop at k = 2 leave **systematic** inner shifts of ≈ 1e-6 ″/yr in s2/s4 (the size of going from
+  dt 6 d to dt 8 d: s2 +1.1e-6 → +2.1e-6) — a legitimate accuracy class, but not the reference accuracy.
+* **Accuracy classes** (errors relative to dt 3 d; dt 6 d reference ≈ 5e-6 max, systematic):
+  (A) reference — K_min 3, τ 3e-6 … 3e-5: adds ≤ 7e-7 rms, unbiased inner planets (K̄ 3.6–3.1);
+  (B) ≈ dt 6–8 d — K_min 3, τ 1e-4 (K̄ 3.02) or K_min 2 + giants 180 d, τ 1e-4 … 3e-4 (K̄ 2.9–2.56);
+  (C) ≈ dt 12 d — K_min 2, τ 1e-3 (K̄ 2.1). Speeds: iteration 39.
