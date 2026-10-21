@@ -1136,3 +1136,9 @@ parareal τ 3e-6 **+8.6e-11, growing linearly** (+1.44e-11 at 10 Myr, +4.0e-11 a
   (its apply/unapply pair is not an exact inverse either), ≈ 6× below the original.
 * Drivers: `PINT_JR` (default **1**) sets `jacobi_recursive` for all fine solves and serial references in
   `pint_pipe` and `pint_long`; `PINT_CHUNKS` (default 10) = kernel calls per speculative fine slice.
+* Checks on host2 (separate worktree `/home/ubuntu/rb2`, so the running jobs keep their library): with
+  `jacobi_recursive = 0` the new library is **bitwise identical** to the old one (serial runs, kernels 1 and 2). Per-call
+  offset with `jacobi_recursive = 1`, 6000 states: asm −0.3e-17 ± 1.1e-17, C AVX-512 −1.5e-17 ± 1.1e-17 (was +7.2e-17 /
+  +11e-17). `test_jr.c`: 1 vs 0 agree to ≤ 8e-16 after one 10-step call for N_systems = 1, 2, 4 (C kernels 3, 4).
+* Long runs re-planned: the τ = 1e-5 Gyr run with the biased transformation was cancelled; added a serial run with the
+  fix (`s0jr`) and, after the τ = 3e-6 run finishes, the τ/K_min scan and a 1 Gyr parareal run with the fix (`p3jr`).
