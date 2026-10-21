@@ -980,3 +980,17 @@ serial 71 s, parareal (non-pipelined driver) 43–50 s; `runs/p9/v16*`). Differe
   few windows moved s1 by 4e-7 → the scatter of a single 10 Myr realisation is ≈ 3e-7 ″/yr, so τ = 1e-5 (3.8e-7)
   is not distinguishable from τ = 3e-6 with one realisation. Accepting τ = 1e-5 (K̄ 3.77 → 3.35, ≈ +11 % speed)
   needs an ensemble test. Kept: τ = 3e-6.
+
+### Iteration 30 — staged parallel coarse step: giants on the calling core (KEPT, bitwise identical)
+The giants' WH run (the longest single task, ≈ 0.17 ms) ran on a helper thread, i.e. on the SMT sibling of a core
+busy with a fine slice (≈ 1.7× slower under load), and the step had four fork-join rounds plus the giants' worker.
+New schedule in `pint_coarse_par` (`coarse_staged`): the **caller integrates the giants** on its own core while the
+helpers run, as one staged job, start grids → start pairs/GR → reduction + predictor → end-table grids of the inner
+planets → end-table inner–inner pairs and GR (these need only the inner planets' predicted elements, so they overlap
+the giants' run); after the giants: their grids and the inner–giant pairs (second job), reduction and Heun corrector
+in the caller. The pool is now a staged pool (per-stage task counters with a barrier between stages); the giants'
+worker thread is gone. Serial path refactored into the same pieces (`table_setup/_reduce`, `inner_predict/_correct`).
+* `test_par`: bitwise identical (4, 8, 15 helpers); idle coarse step 0.219 → 0.165 ms (4 helpers), 0.191 (8).
+* `pint_pipe 16 360000 3 100 2 1 1 3e-6 6 h 2` (7950X): h = 8: **wall 3.98 s, speedup 2.84–2.86** (was 4.14–4.21 s,
+  2.66–2.74); h = 4: 2.81–2.82; h = 2: 2.61. Coarse busy 2.43 → 2.06 core-s. Final Δx unchanged (2.84e-4 AU), i.e.
+  the same trajectory bit for bit.

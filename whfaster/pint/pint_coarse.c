@@ -229,12 +229,22 @@ static void task_gr(struct tctx* x, int t){
 static int spin_iters=-1;   // PINT_SPIN env: pause instructions to spin before sleeping (default 0; 7950X: 0 best)
 static int get_spin(void){ if (spin_iters<0){ const char* e=getenv("PINT_SPIN"); spin_iters= e? atoi(e) : 0; } return spin_iters; }
 #define SPIN_ITERS get_spin()
+// A job is a list of stages; each stage is a set of independent tasks, and a stage starts only when all tasks of the
+// previous one are finished. Helpers (and the caller, in pool_join) take tasks from per-stage counters.
 static pthread_mutex_t pool_mx=PTHREAD_MUTEX_INITIALIZER, pool_busy=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER;
-static int pool_n=0; static atomic_int pool_gen=0, pool_next=0, pool_active=0;
-static void (*volatile pool_fn)(void*,int); static void* volatile pool_arg; static volatile int pool_ntask;
+#define MAXST 8
+struct pjob { int nst; void (*fn[MAXST])(void*,int); void* arg[MAXST]; int ntask[MAXST]; };
+static struct pjob job;
+static int pool_n=0; static atomic_int pool_gen=0, pool_active=0, st_next[MAXST], st_done[MAXST];
 static void pool_run_tasks(void){
-    for (;;){ const int t=atomic_fetch_add(&pool_next,1); if (t>=pool_ntask) break; pool_fn(pool_arg,t); }
+    for (int s=0;s<job.nst;s++){
+        for (;;){
+            const int t=atomic_fetch_add(&st_next[s],1); if (t>=job.ntask[s]) break;
+            job.fn[s](job.arg[s],t); atomic_fetch_add_explicit(&st_done[s],1,memory_order_release);
+        }
+        while (atomic_load_explicit(&st_done[s],memory_order_acquire)<job.ntask[s]) _mm_pause();
+    }
 }
 static void* pool_worker(void* a){
     int gen=(int)(long)a;          // generation at creation (no job can be in flight then)
@@ -252,64 +262,40 @@ static void* pool_worker(void* a){
     }
     return NULL;
 }
-// persistent worker for the giants' WH run (concurrent with the start tables)
-static atomic_int og_gen=0, og_done=0; static void (*volatile og_fn)(void*); static void* volatile og_arg;
-static pthread_mutex_t og_mx=PTHREAD_MUTEX_INITIALIZER, og_busy=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t og_cv=PTHREAD_COND_INITIALIZER;
-static int og_started=0;
-static void* og_worker(void* a){
-    int gen=(int)(long)a;
-    for (;;){
-        int spins=0;
-        while (atomic_load_explicit(&og_gen,memory_order_acquire)==gen && spins<SPIN_ITERS){ _mm_pause(); spins++; }
-        if (atomic_load(&og_gen)==gen){
-            pthread_mutex_lock(&og_mx); while (atomic_load(&og_gen)==gen) pthread_cond_wait(&og_cv,&og_mx); pthread_mutex_unlock(&og_mx);
-        }
-        gen=atomic_load(&og_gen);
-        og_fn(og_arg);
-        atomic_store_explicit(&og_done,gen,memory_order_release);
-    }
-    return NULL;
-}
 void pint_set_threads(int nhelpers){
     pthread_mutex_lock(&pool_busy);
     for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen)); pthread_detach(th); }
     if (nhelpers>pool_n) pool_n=nhelpers;
-    if (nhelpers>0 && !og_started){ pthread_t th; pthread_create(&th,NULL,og_worker,(void*)(long)atomic_load(&og_gen)); pthread_detach(th); og_started=1; }
     pthread_mutex_unlock(&pool_busy);
 }
-// run fn(arg, 0..ntask-1); on the pool if par and the pool is free, else serially in the caller
-static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
-    if (!par || pool_n==0 || pthread_mutex_trylock(&pool_busy)!=0){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
-    pool_fn=fn; pool_arg=arg; pool_ntask=ntask;
-    atomic_store(&pool_next,0); atomic_store(&pool_active,pool_n);
+// the caller must hold pool_busy; pool_launch starts the helpers on j, pool_join lets the caller help and waits
+static void pool_launch(const struct pjob* j){
+    job=*j;
+    for (int s=0;s<j->nst;s++){ atomic_store(&st_next[s],0); atomic_store(&st_done[s],0); }
+    atomic_store(&pool_active,pool_n);
     pthread_mutex_lock(&pool_mx); atomic_fetch_add_explicit(&pool_gen,1,memory_order_release); pthread_cond_broadcast(&pool_cv); pthread_mutex_unlock(&pool_mx);
+}
+static void pool_join(void){
     pool_run_tasks();
     while (atomic_load_explicit(&pool_active,memory_order_acquire)>0) _mm_pause();
-    pthread_mutex_unlock(&pool_busy);
 }
-// start fn(arg) on the giants' worker; returns the generation to wait for, or 0 if it ran in the caller
-static int og_start(void (*fn)(void*), void* arg){
-    if (!og_started || pthread_mutex_trylock(&og_busy)!=0){ fn(arg); return 0; }
-    og_fn=fn; og_arg=arg;
-    pthread_mutex_lock(&og_mx); const int g=atomic_fetch_add_explicit(&og_gen,1,memory_order_release)+1; pthread_cond_broadcast(&og_cv); pthread_mutex_unlock(&og_mx);
-    return g;
-}
-static void og_wait(int g){
-    if (!g) return;
-    while (atomic_load_explicit(&og_done,memory_order_acquire)!=g) _mm_pause();
-    pthread_mutex_unlock(&og_busy);
+static int pool_acquire(int par){ return par && pool_n>0 && pthread_mutex_trylock(&pool_busy)==0; }
+static void pool_release(void){ pthread_mutex_unlock(&pool_busy); }
+// run fn(arg, 0..ntask-1); on the pool if par and the pool is free, else serially in the caller
+static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
+    if (!pool_acquire(par)){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
+    struct pjob j={1,{fn},{arg},{ntask}}; pool_launch(&j); pool_join(); pool_release();
 }
 static void grid_task(void* a, int t){ task_grid((struct tctx*)a, t); }
 static void pairgr_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) task_gr(x,t); else task_pair(x,t); }
-static void table_par(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6], int par){
-    static __thread struct tctx* x=NULL; if (!x) x=malloc(sizeof *x);
-    x->c=c; x->E=E; x->nc= R ? 6 : 1;
+// table setup: masses, mean motions (planets < nn only; the others are set by table_nmotion) and the task list in the
+// serial loop order
+static void table_setup(struct tctx* x, const struct pint_cfg* c, const double E[PINT_NP][6], int rates, int nn){
+    x->c=c; x->E=E; x->nc= rates ? 6 : 1;
     const double* m=c->masses; double acc=0;
-    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; x->Mint[i]=acc; x->mu[i]=x->Mint[i]+m[i+1]; x->n[i]=sqrt(x->mu[i]/exp(3.*E[i][0])); }
+    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; x->Mint[i]=acc; x->mu[i]=x->Mint[i]+m[i+1]; if (i<nn) x->n[i]=sqrt(x->mu[i]/exp(3.*E[i][0])); }
     x->N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii); x->N2=c->ng_io; x->Nlo=c->ng_ii;
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
-    run_tasks(grid_task,x,c->maxj+1,par);
-    // task list in the serial loop order
     int nt=0;
     for (int i=0;i<PINT_NI;i++){
         for (int j=i+1;j<=c->maxj;j++){
@@ -319,8 +305,11 @@ static void table_par(const struct pint_cfg* c, const double E[PINT_NP][6], doub
         x->ti[nt]=i; x->tkind[nt]=2; nt++;
     }
     x->ntask=nt;
-    run_tasks(pairgr_task,x,nt,par);
-    // reduction in the serial order
+}
+static void table_nmotion(struct tctx* x, int from){ for (int i=from;i<PINT_NP;i++) x->n[i]=sqrt(x->mu[i]/exp(3.*x->E[i][0])); }
+// reduction in the serial order
+static void table_reduce(struct tctx* x, double disp[PINT_NI], double R[PINT_NI][6]){
+    const int nt=x->ntask;
     for (int i=0;i<PINT_NI;i++){ disp[i]=0; if (R) for (int e=0;e<6;e++) R[i][e]=0; }
     for (int t=0;t<nt;t++){
         const int i=x->ti[t];
@@ -337,6 +326,13 @@ static void table_par(const struct pint_cfg* c, const double E[PINT_NP][6], doub
             disp[i]+=x->tda[t];
         }
     }
+}
+static void table_par(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6], int par){
+    static __thread struct tctx* x=NULL; if (!x) x=malloc(sizeof *x);
+    table_setup(x,c,E,R!=NULL,PINT_NP);
+    run_tasks(grid_task,x,c->maxj+1,par);
+    run_tasks(pairgr_task,x,x->ntask,par);
+    table_reduce(x,disp,R);
 }
 static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6]){
     table_par(c,E,disp,R,0);
@@ -370,24 +366,9 @@ static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], doubl
     }
     reb_simulation_free(s);
 }
-struct outer_arg { const struct pint_cfg* c; const double (*E)[6]; double (*Eo)[6]; };
-static void outer_task(void* a, int t){ (void)t; struct outer_arg* o=a; outer_wh(o->c,o->E,o->Eo); }
-static void outer_fn(void* a){ outer_task(a,0); }
-void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
-void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){ pint_coarse_par(c,E_in,E_out,0); }
-void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){
-    const double t0=now();
-    const double* m=c->masses;
-    double Mint[PINT_NP], mu[PINT_NP]; double acc=0;
-    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
-    double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
-    // the giants' WH run is independent of the start tables: run it concurrently when parallel
-    double Mg[PINT_NP][6]; struct outer_arg oa={c,E_in,Mg}; int othr=0, og=0;
-    if (par && pool_n>0){ og=og_start(outer_fn,&oa); othr=1; }
-    table_par(c,E_in,disp,R,par);
-    const double t1=now();
+// first (predictor) part of the inner planets' step: mean ln a, Kepler + secular drift with the start rates
+static void inner_predict(const struct pint_cfg* c, const double* mu, const double E_in[PINT_NP][6], const double disp[PINT_NI], const double R[PINT_NI][6], double M2[PINT_NP][6]){
     const double T=c->slice_days*DAY;
-    memcpy(M2,E_in,sizeof M2);
     for (int i=0;i<PINT_NI;i++){
         const double lna=E_in[i][0]-disp[i];
         const double nbar=sqrt(mu[i]/exp(3.*lna));
@@ -395,21 +376,84 @@ void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], do
         M2[i][1]=wrap(E_in[i][1]+(nbar+R[i][1])*T);
         for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+R[i][e]*T;
     }
-    if (othr){ og_wait(og); for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6); }
-    else outer_wh(c,E_in,M2);
+}
+// Heun corrector with the end rates R1, and the end displacement
+static void inner_correct(const struct pint_cfg* c, const double* mu, const double E_in[PINT_NP][6], const double R[PINT_NI][6], const double R1[PINT_NI][6], const double disp1[PINT_NI], double M2[PINT_NP][6], double E_out[PINT_NP][6]){
+    const double T=c->slice_days*DAY;
+    for (int i=0;i<PINT_NI;i++){
+        const double lna=M2[i][0], nbar=sqrt(mu[i]/exp(3.*lna));
+        M2[i][1]=wrap(E_in[i][1]+(nbar+0.5*(R[i][1]+R1[i][1]))*T);
+        for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+0.5*(R[i][e]+R1[i][e])*T;
+    }
+    memcpy(E_out,M2,sizeof(double)*PINT_NP*6);
+    for (int i=0;i<PINT_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
+}
+// parallel schedule (bitwise identical to the serial one): the caller integrates the giants (the longest single
+// task) while the helpers build the start tables, form the predictor and build the parts of the end tables that need
+// only the inner planets (their grids, the inner-inner pairs, GR); then the giants' grids and the inner-giant pairs.
+struct pctx {
+    const struct pint_cfg* c; const double (*E_in)[6]; double (*M2)[6]; const double* mu;
+    struct tctx *x0, *x1; double disp[PINT_NI], R[PINT_NI][6];
+    int ninner, inner_t[NTASKMAX], nouter, outer_t[NTASKMAX];
+};
+static void p_grid0(void* a, int t){ struct pctx* p=a; task_grid(p->x0,t); }
+static void p_pair0(void* a, int t){ struct pctx* p=a; pairgr_task(p->x0,t); }
+static void p_pred(void* a, int t){ (void)t; struct pctx* p=a;
+    table_reduce(p->x0,p->disp,p->R);
+    inner_predict(p->c,p->mu,p->E_in,p->disp,p->R,p->M2);
+    table_setup(p->x1,p->c,(const double (*)[6])p->M2,p->c->heun,PINT_NI);
+    p->ninner=p->nouter=0;
+    for (int t2=0;t2<p->x1->ntask;t2++){ if (p->x1->tkind[t2]==1) p->outer_t[p->nouter++]=t2; else p->inner_t[p->ninner++]=t2; }
+}
+static void p_grid1i(void* a, int t){ struct pctx* p=a; task_grid(p->x1,t); }
+static void p_pair1i(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->inner_t[t]); }
+static void p_grid1o(void* a, int t){ struct pctx* p=a; task_grid(p->x1,PINT_NI+t); }
+static void p_pair1o(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->outer_t[t]); }
+static int coarse_staged(const struct pint_cfg* c, const double* mu, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){
+    if (!c->heun || !pool_acquire(1)) return 0;
+    static __thread struct tctx *x0=NULL, *x1=NULL; if (!x0){ x0=malloc(sizeof *x0); x1=malloc(sizeof *x1); }
+    static __thread struct pctx p; double M2[PINT_NP][6], Mg[PINT_NP][6];
+    p.c=c; p.E_in=E_in; p.M2=M2; p.mu=mu; p.x0=x0; p.x1=x1;
+    table_setup(x0,c,E_in,1,PINT_NP);
+    // the number of inner tasks of the end table equals that of the start table (same task list)
+    int ni=0; for (int t=0;t<x0->ntask;t++) if (x0->tkind[t]!=1) ni++;
+    struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{c->maxj+1,x0->ntask,1,PINT_NI,ni}};
+    pool_launch(&a);
+    outer_wh(c,E_in,Mg);
+    pool_join();
+    for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6);
+    table_nmotion(x1,PINT_NI);
+    struct pjob b={2,{p_grid1o,p_pair1o},{&p,&p},{c->maxj+1-PINT_NI,p.nouter}};
+    pool_launch(&b); pool_join(); pool_release();
+    double disp1[PINT_NI], R1[PINT_NI][6];
+    table_reduce(x1,disp1,R1);
+    inner_correct(c,mu,E_in,p.R,R1,disp1,M2,E_out);
+    return 1;
+}
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
+void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){ pint_coarse_par(c,E_in,E_out,0); }
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){
+    const double t0=now();
+    const double* m=c->masses;
+    double Mint[PINT_NP], mu[PINT_NP]; double acc=0;
+    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
+    if (par && coarse_staged(c,mu,E_in,E_out)){ pint_t_total=now()-t0; return; }
+    double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
+    table_par(c,E_in,disp,R,par);
+    const double t1=now();
+    inner_predict(c,mu,E_in,disp,R,M2);
+    outer_wh(c,E_in,M2);
     const double t2=now();
     double disp1[PINT_NI];
     if (c->heun){
         double R1[PINT_NI][6];
         table_par(c,M2,disp1,R1,par);
-        for (int i=0;i<PINT_NI;i++){
-            const double lna=M2[i][0], nbar=sqrt(mu[i]/exp(3.*lna));
-            M2[i][1]=wrap(E_in[i][1]+(nbar+0.5*(R[i][1]+R1[i][1]))*T);
-            for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+0.5*(R[i][e]+R1[i][e])*T;
-        }
-    } else table_par(c,M2,disp1,NULL,par);
-    memcpy(E_out,M2,sizeof M2);
-    for (int i=0;i<PINT_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
+        inner_correct(c,mu,E_in,R,R1,disp1,M2,E_out);
+    } else {
+        table_par(c,M2,disp1,NULL,par);
+        memcpy(E_out,M2,sizeof M2);
+        for (int i=0;i<PINT_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
+    }
     const double t3=now();
     pint_t_tables=(t1-t0)+(t3-t2); pint_t_outer=t2-t1; pint_t_total=t3-t0;
 }
