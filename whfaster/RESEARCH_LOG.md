@@ -947,3 +947,36 @@ Build check: `./test_par 8` → bitwise identical: yes; coarse step serial 0.631
 | 12 | 8 | 3.47 | 3.58 s | 8.48 s | 2.37 | 7.7e-5 |
 N = 16 stays best: the shorter window saves iterations at N = 12 (K̄ 3.47), but not enough to pay for 25 % fewer
 slices. Leaving physical cores free for the helpers does not help. Run-to-run spread of the speedup ≈ ±2 %.
+
+### Iteration 29 — where the time goes on 16 cores (event trace), and the 10 Myr contract at N = 16
+**Trace** (`PINT_TRACE=file ./pint_pipe 16 360000 3 100 2 1 1 3e-6 6 8 2`, new optional per-thread event log;
+analysis: mean over 100 windows). Window = 41.1 ms:
+| part | ms per window |
+|---|---|
+| k = 0 coarse sweep (16 × 0.347 ms) | 5.6 |
+| iterations k = 1 … K: increments 9.79, 9.13, 8.88, 8.68 (74 %), 8.57 (6 %) | 34.4 |
+| tail (decision → threads joined) + gap between windows | 0.7 + 0.2 |
+* Fine slice **under full load 8.28 ms** vs 7.0 ms on an idle machine (16 concurrent serial runs pinned to cores 0–15:
+  +11 % on CCD 0, +17 % on CCD 1). Clock effect, the serial reference runs at single-core boost. Governor: powersave
+  (not changed). CPUs 0–15 are distinct physical cores, 16–31 their SMT siblings (pinning is correct).
+* Coarse step on the chain 0.29–0.37 ms (0.22 ms idle): the helpers and the giants' worker run on SMT siblings of
+  busy cores.
+* Per-hop driver helpers (simulation creation in `project_energy`, `energy_el`, `poserr_el`) ≈ 30 µs → ≈ 1 %. Not worth it.
+* Fine solves: 55.5 completed + 12.1 abandoned per window (3.5 + 0.8 per slice); 75 % core utilisation.
+* SMT: 32 concurrent fine runs give +19 % total throughput but each is 1.68× slower → not useful for parareal latency.
+→ K̄ × T_F is 77 % of the window; the coarse chain 14 %; overheads ≈ 5 %.
+
+**10 Myr contract at N = 16** (hard ICs of iteration 14, `pint_long … 625 16 360000 16 3 1 τ 0 2 1 1 1e-6`; 7950X:
+serial 71 s, parareal (non-pipelined driver) 43–50 s; `runs/p9/v16*`). Differences vs serial C [″/yr]:
+| run | K̄ (K = 3/4/5/6) | max inner-planet shift | giants | energy vs serial C at 10 Myr |
+|---|---|---|---|---|
+| serial asm (round-off ref.) | — | 5.9e-10 | 1.5e-8 | +5.3e-12 |
+| **τ = 3e-6** | 3.77 (171/437/16/1) | **9.3e-8** | 4.8e-8 | +6.1e-12 |
+| τ = 1e-5 | 3.35 (412/206/7) | 3.8e-7 (s2) | 1.0e-7 | +6.5e-12 |
+| τ = 3e-5 | 3.11 (557/66/2) | 7.3e-7 (s2) | 1.5e-7 | +2.5e-12 |
+| K_min = 2, τ = 3e-6 (K_max 5) | 3.77 (172/435/18) | 3.2e-7 (s1) | 5.6e-8 | — |
+* τ = 3e-6 is validated at N = 16 (same fidelity as at N = 10). Energy unbiased in all runs.
+* **No window converges at k = 2** with config B (K_min = 2 changes nothing); but capping K at 5 instead of 6 in a
+  few windows moved s1 by 4e-7 → the scatter of a single 10 Myr realisation is ≈ 3e-7 ″/yr, so τ = 1e-5 (3.8e-7)
+  is not distinguishable from τ = 3e-6 with one realisation. Accepting τ = 1e-5 (K̄ 3.77 → 3.35, ≈ +11 % speed)
+  needs an ensemble test. Kept: τ = 3e-6.

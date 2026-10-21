@@ -78,6 +78,12 @@ static double wrapd(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 static el U[KMAX+1][NMAX+1];
 static sem_t ready[KMAX+1][NMAX+1];
 static double tbusyF[NMAX], tbusyG[NMAX];
+// optional event trace (env PINT_TRACE=file): per thread (window, k, n, type, t_start, t_end); type 0 = coarse+update,
+// 1 = fine completed, 2 = fine abandoned, 3 = waiting for the start state
+typedef struct { int w,k,type; double t0,t1; } tev;
+static tev* trace[NMAX]; static int ntr[NMAX], trace_on=0, cur_w=0; static double trace_t0;
+#define TRACE_MAX 200000
+static void tr(int n,int k,int type,double t0,double t1){ if (trace_on && ntr[n]<TRACE_MAX) trace[n][ntr[n]++]=(tev){cur_w,k,type,t0-trace_t0,t1-trace_t0}; }
 static void* slice_thread(void* arg){
     const int n=(int)(long)arg;
     if (pin){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(n % CPU_SETSIZE, &cs); pthread_setaffinity_np(pthread_self(), sizeof cs, &cs); }
@@ -85,7 +91,7 @@ static void* slice_thread(void* arg){
     const int kend = tol>0. ? Kmax : K;
     for (int k=0;k<=kend;k++){
         { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
-        if (n>0) sem_wait(&ready[k][n]);
+        { double tw=now(); if (n>0) sem_wait(&ready[k][n]); tr(n,k,3,tw,now()); }
         { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
         double t0=now();
         el g;
@@ -109,7 +115,7 @@ static void* slice_thread(void* arg){
             const double u = n>=k-1 ? poserr_el(U[k][n+1],U[k-1][n+1]) : 0.;
             pthread_mutex_lock(&upd_mx); if (u>upd_max[k]) upd_max[k]=u; pthread_mutex_unlock(&upd_mx);
         }
-        double t1=now(); tbusyG[n]+=t1-t0;
+        double t1=now(); tbusyG[n]+=t1-t0; tr(n,k,0,t0,t1);
         if (n<N-1) sem_post(&ready[k][n+1]);
         else {
             // last slice: all updates of iteration k are known -> decide
@@ -122,7 +128,8 @@ static void* slice_thread(void* arg){
         }
         have_F=0;
         if (k<kend && n>=k){     // fine slice for the next iteration (speculative when adaptive)
-            if (fine(U[k][n],Fprev,k+1)){ EUprev=energy_el(U[k][n]); EFprev=energy_el(Fprev); have_F=1; }
+            if (fine(U[k][n],Fprev,k+1)){ EUprev=energy_el(U[k][n]); EFprev=energy_el(Fprev); have_F=1; tr(n,k,1,t1,now()); }
+            else tr(n,k,2,t1,now());
         }
         tbusyF[n]+=now()-t1;
     }
@@ -155,8 +162,11 @@ int main(int argc, char** argv){
         pint_sim_to_el(s,Eser); reb_simulation_free(s);
     }
     el Ecur; memcpy(Ecur,E0,sizeof(el));
-    const double t0=now();
+    const char* trf=getenv("PINT_TRACE");
+    if (trf){ trace_on=1; for (int n=0;n<N;n++) trace[n]=malloc(TRACE_MAX*sizeof(tev)); }
+    const double t0=now(); trace_t0=t0;
     for (int w=0;w<W;w++){
+        cur_w=w;
         for (int k=0;k<=KMAX;k++){ memcpy(U[k][0],Ecur,sizeof(el)); upd_max[k]=0; for (int n=0;n<=N;n++) sem_init(&ready[k][n],0,0); }
         atomic_store(&stop_at,-1);
         pthread_t th[NMAX];
@@ -167,6 +177,7 @@ int main(int argc, char** argv){
         memcpy(Ecur,U[ks][N],sizeof(el));
     }
     const double tpr=now()-t0;
+    if (trf){ FILE* f=fopen(trf,"w"); for (int n=0;n<N;n++) for (int i=0;i<ntr[n];i++) fprintf(f,"%d %d %d %d %.7f %.7f\n",trace[n][i].w,n,trace[n][i].k,trace[n][i].type,trace[n][i].t0,trace[n][i].t1); fclose(f); }
     double sF=0,sG=0; for (int n=0;n<N;n++){ sF+=tbusyF[n]; sG+=tbusyG[n]; }
     printf("iterations per window:"); double km=0; for (int k=0;k<=KMAX;k++) if (khist[k]){ printf(" K=%d: %d",k,khist[k]); km+=k*khist[k]; } printf(" (mean %.2f)\n",km/W);
     printf("pipelined parareal: N=%d threads (+%d coarse helpers, mode %d), K=%d, %d windows of %d x %.0f d: wall %.3f s, busy fine %.3f s, coarse %.3f s (core-s)\n",
