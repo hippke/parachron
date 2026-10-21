@@ -6,9 +6,9 @@ from ptlib import *
 import meanel
 m=np.array(mass); Mint=np.cumsum(m)[:-1]; mu=Mint+m[1:]
 class Coarse:
-    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0, meann=0, giant_mean=0, nsec=0, sec_ng=None):
+    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0, meann=0, giant_mean=0, nsec=0, sec_ng=None, gavg=0.):
         self.days=slice_days; self.T=slice_days*DAY; self.Ng=Ng; self.dt_out=dt_out; self.sec=sec
-        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng if Ng_sec is None else Ng_sec; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun; self.meann=meann; self.giant_mean=giant_mean; self.nsec=nsec; self.sec_ng=sec_ng
+        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng if Ng_sec is None else Ng_sec; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun; self.meann=meann; self.giant_mean=giant_mean; self.nsec=nsec; self.sec_ng=sec_ng; self.gavg=gavg
     def table(self, n, E):
         if self.live: th=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps; return th
         if n not in self.tables:
@@ -33,6 +33,18 @@ class Coarse:
                 out.append([np.log(o.a), o.l, o.e*np.cos(o.pomega), o.e*np.sin(o.pomega), si*np.cos(o.Omega), si*np.sin(o.Omega)])
             return np.array(out)
         res=[E[ni:].copy()]
+        if self.gavg>0 and nseg>1:          # dense samples; giants' elements box-averaged over gavg yr (not lambda)
+            ds=5; s.integrator.concatenate_steps=ds; nd=nst//ds
+            S=[E[ni:].copy()]
+            for q in range(nd): s.steps(1); S.append(els())
+            S=np.array(S); tt=np.arange(nd+1)*ds*self.dt_out/365.25; Ty=tt[-1]; w=self.gavg
+            out=[]
+            for q in range(nseg+1):
+                tq=Ty*q/nseg; lo=min(max(tq-w/2,0),Ty-w); sel=(tt>=lo)&(tt<=lo+w)
+                X=S[int(round(q*nd/nseg))].copy(); X[:,[0,2,3,4,5]]=S[sel][:,:,[0,2,3,4,5]].mean(0); out.append(X)
+            out[-1][:,:]=out[-1]; out[-1]=np.where(np.arange(6)[None,:]==1,S[-1],out[-1])
+            self._giants_end=S[-1]
+            return out
         s.integrator.concatenate_steps=nst//nseg
         for q in range(nseg):
             s.steps(1); res.append(els())
@@ -87,7 +99,7 @@ class Coarse:
         if self.nsub:
             outs=self.outerWH(E,2*self.nsub)
             M2=self.drift_rk(M,outs)
-            M2[self.ni:]=outs[-1]
+            M2[self.ni:]=self._giants_end if (self.gavg>0) else outs[-1]
         else:
             M2=self.drift(M,n,th)
             M2[self.ni:]=self.outerWH(E)

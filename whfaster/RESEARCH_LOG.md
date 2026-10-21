@@ -768,3 +768,21 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   median 601 / **1.81** / 1.04, worst 2.0e3 / 13.2 / 1.59; **k2 ≤ 2 at 6/10 epochs** (config B: 0/10).
   Remaining hard epochs: 3400 (12.2), 4500 (13.2), 8160 (8.1), 1030 (4.6). Python cost ~7 s per call (not yet
   optimised; Phase 5).
+
+## Iteration 23 — giants' short-period aliasing, filter, and the secular-matrix error
+* Cheaper secular drift: RK4 with 2 sub-steps is as good as 10 (median k2 1.53, k2 ≤ 2 at 6/10).
+* Mars (k, h) error at 1 Myr: a single line explained by **−λJ + 2λS** (the 60-yr Jupiter–Saturn term, R² = 0.73):
+  the giants' 60-yr eccentricity oscillation was point-sampled (aliased) by the RK stages. Box-averaging the giants'
+  elements over 120 yr around each stage (`gavg`, dense samples of the giants' WH run): Mars k error 1.2e-5 → 5.7e-6
+  with 2 sub-steps.
+* Filtered start/end mean elements (L = 10 yr) on top: helps some epochs (3400: 12 → 0.9; 8160: 8 → 2), hurts
+  others (0: 0.6 → 3.5; 7000: 0.9 → 3.5); 5/10 at k2 ≤ 2 — not kept as default.
+* **The remaining Mars/Venus/Earth (k, h) errors are a secular-matrix error**: at 4.5 Myr the per-slice errors are
+  exactly linear in the eccentricity vectors (R² = 1.00): δz_M = (2e-5 − 2.1e-4 i) z_M per slice, i.e. Mars' g
+  is off by 0.044″/yr (0.25 %), plus V–E couplings of the same size — the second-order (in the masses) secular terms
+  missing from a first-order theory. λ and ln a errors are white (not predictable from slow variables).
+* Empirical correction (`seccal.py`): a 4 × 4 complex matrix A (δz = A z_inner per slice) fitted from the coarse
+  defects F − G of the preceding 50–150 slices predicts the next 20 slices' z errors 10–50 × better
+  (1e-5 → 2–7e-7). Fits from other epochs transfer only 2–5 × (A depends on the slow state) and short fits
+  (≤ 30 slices) are ill-conditioned. In production the defects of the previous converged windows are free
+  (parareal computes F − G anyway); A is held fixed within a window so G stays one function per window.
