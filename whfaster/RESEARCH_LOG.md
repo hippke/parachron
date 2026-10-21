@@ -467,3 +467,36 @@ Profile of the optimised table pair: grid r, v, ∂E/∂v 0.15 ms, pair loops 0.
 r = 0.073. Pipelined model on 10 cores: **S = 2.53 (25 % efficiency)**; non-pipelined schedule (as implemented):
 1.69. Measured wall on this 2-vCPU host: 0.60 × serial (expected for P < N; the host cannot show the 10-core number).
 1.5-kyr slices (Python): k = 4 → keep ~1 kyr.
+
+## Iteration 8 — what limits k (C coarse through ctypes: `parareal/ptc.py`; `oracle2.py`; `pint_run`)
+* Jacobian diagnostic of config A (13 s with the C coarse step): linear prediction = measured iterations; dominant
+  remaining mismatches ∂(ln a, λ)/∂λ and ∂(ln a, λ)/∂(k, h) of Mars and Venus.
+* Oracle (coarse Jacobian blocks replaced by the exact ones), max a·|Δλ| at k = 1, 2, 3 [AU]:
+  config A 2.3e-4, 6.5e-6, 3.0e-8; exact (ln a, λ) rows ← all columns 7.9e-5, 3.1e-7, 2.8e-9; exact inner-planet rows
+  (all six elements) 1.3e-5, 3.4e-8, 4e-11. **k = 2 would need an essentially exact inner-planet Jacobian** (plus
+  better e0); not reachable with cheap first-order improvements.
+* Shorter slices do not help (the noise target shrinks with the window): 10 × 493 yr: k = 3, r = 0.154 (S10 = 2.0);
+  10 × 246 yr: k = 3, r = 0.26 (S10 = 1.6). 1 kyr stays optimal.
+* Scaling with the number of slices (= cores), 986-yr slices, C driver:
+
+| N | k | r | modelled S (pipelined) | efficiency |
+|---|---|---|---|---|
+| 5 | 3 | 0.087 | 1.35 | 27 % |
+| 10 | 3 | 0.073 | 2.53 | 25 % |
+| 20 | 4 | 0.080 | 3.38 | 17 % |
+| 40 | 4 | 0.078 | 5.38 | 13 % |
+
+## Iteration 9 — long runs and the energy contract (`pint/pint_long.c`, `energy_ana.py`)
+`pint_long`: consecutive windows of N slices, fixed k, optional serial runs (kernel 2 or 1) and boundary-jump
+diagnostics. 1 Myr (100 windows × 10 × 986 yr, k = 3): all windows k = 3, last update 1e-6 – 3e-5 AU; parareal
+energy history statistically equal to the serial one.
+Boundary jumps U_n − F(U_{n−1}) (30 windows): **energy rms 5.8e-14, mean −2.3e-15 ± 3.3e-15**; the asm-vs-C
+difference over one slice (pure round-off): rms 4.9e-14. Same at k = 4 and 5 (5.3e-14, 5.5e-14): the energy jumps
+are round-off limited — the boundary state descends from F(U^{k−1}), i.e. another round-off realisation. Position
+jumps: median 2.3e-9 AU (round-off 5e-10), growing along the window (max 3e-7 AU at slice 9).
+Energy random walk (300 kyr, per-slice energy increments compared with the serial C run): serial asm 5.44e-14 rms,
+parareal 6.25e-14, **parareal + energy projection 5.76e-14** — i.e. the parareal trajectory's own random-walk
+amplitude is 1.28× (1.11× with projection) that of a serial run; no bias detectable (means ≤ 2e-15 ± 3e-15).
+Energy projection (kept, default on): after each correction, scale barycentric velocities so that
+E(U^k_{n+1}) = E(U^k_n) + [E(F(U^{k−1}_n)) − E(U^{k−1}_n)] (each slice's energy increment = one fine round-off
+realisation, as in a serial run; leaves the parareal fixed point unchanged; one energy evaluation per boundary).

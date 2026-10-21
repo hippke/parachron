@@ -13,3 +13,8 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 6,config A 20 slices,20,986,4,?,,,yes,
 6,config A 1.5 kyr slices,10,1479,4,,,,no,longer slices cost an iteration
 7,config A in C (pint_coarse.c),10,986,3,0.073,1.42,2.53,yes,measured r on cloud Xeon (fine 12.7 ms/slice; G 0.93 ms); S pipelined model
+8,config A N=5,5,986,3,0.087,1.35,,yes,
+8,config A N=20,20,986,4,0.080,,3.38 (N=20),yes,
+8,config A N=40,40,986,4,0.078,,5.38 (N=40),yes,
+8,config A 0.5 kyr slices,10,493,3,0.154,,2.00,no,
+9,config A long run 1 Myr + energy projection,10,986,3,0.073,1.42,2.53,yes,energy random walk 1.11x serial; no bias

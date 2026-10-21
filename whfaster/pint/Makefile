@@ -5,3 +5,7 @@ pint_test: pint_test.c pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) pint_test.c pint_coarse.c -o $@ $(LDFLAGS)
 pint_run: pint_run.c pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) pint_run.c pint_coarse.c -o $@ $(LDFLAGS)
+libpint.so: pint_coarse.c pint_coarse.h
+	$(CC) $(CFLAGS) -shared -fPIC pint_coarse.c -o $@ $(LDFLAGS)
+pint_long: pint_long.c pint_coarse.c pint_coarse.h
+	$(CC) $(CFLAGS) pint_long.c pint_coarse.c -o $@ $(LDFLAGS)

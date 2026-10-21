@@ -13,11 +13,14 @@ p.add_argument('--save',default='jac2.pkl')
 p.add_argument('--dt_out',type=float,default=180)
 p.add_argument('--Ng',type=int,default=64)
 p.add_argument('--live',type=int,default=0)
+p.add_argument('--cg',default='py')
 p.add_argument('--Ngj',type=int,default=0)
 a=p.parse_args()
 N=a.slices; T=a.slice_days
 H=np.array([1e-7,1e-4,1e-5,1e-5,1e-5,1e-5])
 CG=mgc.Coarse(T,Ng=a.Ng,dt_out=a.dt_out,live=a.live)
+if a.cg=='c':
+    import ptc; CG=ptc.CoarseC(T,dt_out=a.dt_out)
 def F(E): return to_el(prop(from_el(E),T,6))
 def jac(f, E):
     J=np.zeros((48,48))
