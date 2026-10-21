@@ -22,6 +22,18 @@ minutes (stopped) to 57 s, 956 tests passing. Not tested in parallel: WHFast512 
 ~150 ns per step for 8 planets: expected 1.00x), MERCURIUS/TRACE performance (tests only), compensated
 gravity performance.
 
+Later rounds (iterations 12–26) added:
+- one OpenMP team size per step;
+- automatic use of the efficiency cores for large systems;
+- stage mode for test particles, compensated gravity and ghost boxes;
+- deterministic parallel tree collisions (they depended on thread scheduling);
+- bitwise MERCURIUS parallel loops;
+- a parallel tree group walk;
+- paired WHFast512 ensembles;
+- the opt-in block-order basic gravity (`gravity_block_order = 1`).
+
+User guide: `docs/openmp.md`.
+
 ## Process
 
 Same loop as `PERF_LOG.md` of the single-core work, adapted to threads:
@@ -559,6 +571,121 @@ Tried (in the source, results independent of the thread count):
 Reverted. Conclusion: the extra 17–28 % iterations are the price of evaluating the substeps in
 parallel; stage mode pays off from about 2 threads (N ≥ 128) or 4 threads (N ≈ 60), and on 1–2
 threads the default mode should be used (documented in the setting's description).
+
+## Iteration 22 — new benchmark cases; tree collisions were not deterministic (commit `af5c99d`) — kept (correctness)
+
+New pbench cases (setups from `benchmarks/perf/bench.c`): `tree_selfgrav` (leapfrog, tree gravity,
+N = 10,000), `tree_selfgrav_group` (same with `tree_group_size = 32`), `tree_rings` (SEI shearing
+sheet, ~5,000 particles, tree gravity + tree collisions), `mercurius_plts` (2 planets + 2,500
+planetesimals, type 1), `mercurius_disc` / `trace_disc` (2 planets + 500 active planetesimals,
+merging), `trace_tp` (2 planets + 2,000 test particles), and ensembles (`ensemble_ss512`,
+`ensemble_3p512`, `ensemble_ss`; 32 clones through `reb_simulations_steps`, as many workers as
+threads, also in the serial build).
+
+First run on the VM found two correctness problems:
+- **Tree collision search (TREE and LINETREE):** with 2+ threads the parallel search appends
+  collisions (critical section) in thread order. Since the resolution order is a shuffle of that
+  list, results changed from run to run (reproduced: two runs at T = 2 differ). Fix: after a
+  parallel search, a stable counting sort by projectile restores exactly the serial order (each
+  projectile is searched by one thread, in the serial order). O(N + N_collisions). Now identical to
+  the serial build at T = 1, 2, 3 and on reruns, with and without ghost boxes and tree gravity.
+  Regression test `test_openmp_determinism.py` (negative control: without the sort it fails with
+  "1500 of 1500 particles differ between 1 and 2 threads").
+  Side note: `sim.rand_seed` is random by default (time and PID), so runs with collisions are not
+  reproducible unless it is set; that is upstream behaviour, not an OpenMP issue (documented).
+- **MERCURIUS (iteration 23).**
+
+## Iteration 23 — MERCURIUS and TRACE: bitwise parallel loops, used from 3 threads (commit `af5c99d`) — kept
+
+Since the gravity threshold of iteration 7 (N ≈ 256), MERCURIUS's own OpenMP branches (WH-mode and
+encounter-mode pair forces) engaged for the 500-body disc, and they used other expressions
+(`-G*m*L/r^3`) and no far-pair test: results differed from the serial build at T = 2. Both are now
+one-sided loops that reproduce the serial half-pair loop bitwise (per particle: star term,
+partners in ascending order, then type-1 back-reaction; a partner-row term
+`(prefact*m_i)*(x_i - x_k)` equals `(-prefact*m_i)*(x_k - x_i)` exactly; the same far-pair tests).
+One-sided loops do twice the pair work; on 2 threads MERCURIUS and TRACE were slower than serial
+(0.77x / 0.74x). New `reb_omp_parallel_onesided`: these loops run in parallel only from 3 threads
+(the choice cannot change results). Checks: mercurius_disc, trace_disc, mercurius_plts, trace_tp
+identical to the serial build at T = 1-4, also in a build with all thresholds forced to 4 (every
+loop parallel).
+
+## Iteration 24 — tree gravity: parallel group walk (commit `af5c99d`) — kept
+
+Profile (callgrind, tree_selfgrav): tree walk 80 % (parallel), tree construction ~10 % (serial;
+limits 2 threads to ~1.7x). The opt-in group walk (`tree_group_size`, added on main) was entirely
+serial and used a shared in-group flag array. Now: group-id lookup (read-only), groups walked in
+parallel with per-thread scratch, one group per call of an AVX2-cloned function (the first version
+inside the OpenMP region ran at 0.72x on one thread: outlined region bodies get neither the clone
+nor the same vectorisation). Bitwise identical to the serial group walk. VM: tree_selfgrav_group
+T = 1 0.96-1.04x, T = 2 1.42-1.61x; tree_selfgrav T = 2 1.25-1.5x; tree_rings T = 2 1.2-1.6x.
+
+## Iteration 25 — ensembles: WHFast512 simulations paired (commit `51083d4`) — kept
+
+`reb_simulations_steps` / `rebound.steps_simulations` claim simulations in pairs. If both are
+WHFast512 simulations that can share a paired kernel (C AVX-512; C AVX2 four-lane for <= 4
+planets; C generic) and have no per-step extras (heartbeat is fine; no timestep modifications,
+ODEs, variational particles, collisions, archive), each REBOUND step runs one paired kernel call
+(`reb_integrator_whfast512_step_pair`, no extra synchronisation) and the rest of the step per
+simulation exactly as `reb_simulation_steps`. `steps_pair` itself could not be used: it
+synchronises after every call, and N REBOUND steps of C kernel steps are not bitwise equal to one
+call of N*C steps (both checked). Test `test_ensemble_pairing.py`: bitwise equal to stepping each
+simulation alone, kernels 1-4, encounter in one simulation of a pair. VM, 32 three-planet systems,
+2 workers: 0.46 -> 0.36 s (AVX2 four-lane, 1.27x), 0.75 -> 0.57 s (C AVX-512, 1.31x).
+Not paired: 8 planets on AVX2-only CPUs (no paired kernel, no gain), the assembly kernel; the
+integrate mode (`integrate_simulations`, exact finish times).
+
+## Iteration 26 — opt-in basic gravity in block order, `gravity_block_order = 1` (commit `384ee10`) — kept
+
+The default parallel basic gravity reproduces the serial loop bitwise, at ~1.5x its work plus a
+pair table. New saved setting `sim.gravity_block_order = 1`: row blocks (N_active/64, at most 64;
+test-particle blocks of ~8,192 pairs; ghost boxes in the serial order), partial sums added in a
+fixed order, in place where one block owns its particles; the same code in serial and OpenMP builds
+(plain `omp for` with the full team). Results identical between builds and for any thread count
+(`gravity_check blocks`: 126/126 at T = 1, 2, 3, 5), max difference to the default 7.7e-15
+(relative to the largest acceleration). VM, speedup vs the default serial build:
+
+| case | default T = 2 | block order T = 1 | block order T = 2 |
+|---|---|---|---|
+| whfast_n256 | 0.90x | 1.18x | 1.90x |
+| ias15_n512 | 1.25x | 1.21x | 1.76x |
+| ias15_n2048 | 1.04x | 1.24x | 2.33x |
+| ias15_tp2000 | 1.36x | 1.31x | 1.53x |
+
+Faster also on one core (structure-of-arrays kernel). New user documentation `docs/openmp.md`
+(building, determinism, what runs in parallel, hybrid CPUs, stage mode, block order, ensembles);
+`docs/gravity.md` corrected (it said OpenMP makes basic gravity O(N^2)).
+Tests (whole round): 979 passed (serial build), 983 passed (OpenMP build, 3 threads).
+
+## Iteration 27 — single-core regression in the group walk found and fixed (commit `639c71e`) — kept
+
+Single-core A/B of the whole `benchmarks/perf` suite against `bbaacec` (the commit before this
+round, `run.py ab --repeat 3`): geomean 0.983x, all 25 benchmarks bitwise identical, but
+`selfgrav_group` 0.72x. Cause: the per-group function of iteration 24 received `softening^2` as a
+parameter, so GCC kept the errno branch of `sqrt` and did not vectorise the cell and particle
+loops (callgrind: 389 M vs 250 M instructions; the same pitfall as in iteration 4). The AVX2 clone
+also cost more than it saved for groups of at most 32 particles. Fix: square the softening inside
+the function, no clone. Targeted A/B (`--repeat 5`): selfgrav_group 0.983x, rings_poly_tree 1.041x,
+selfgrav_tree 0.987x, ias15_embryos 1.006x, mercurius_disc 0.999x, trace_disc 0.977x; geomean
+0.999x, all identical. The other benchmarks of the full run were within ±3 % (noise).
+
+## Iteration 28 — ensembles did not scale with thread binding (commit `ca1564b`) — kept
+
+The end-to-end `run_parallel.py` run showed ensembles at 1.0x on 2 threads (the direct run had
+2.04x). With `OMP_PROC_BIND` set, the OpenMP runtime binds the calling thread to one core, and the
+ensemble pool's pthreads inherited that binding. In OpenMP builds the pool is now an OpenMP
+parallel region: the workers follow `OMP_PROC_BIND` / `OMP_PLACES`, and REBOUND's regions inside a
+worker are nested (single-threaded). VM with binding: ensemble_ss512 1.97x, ensemble_3p512 1.88x,
+ensemble_ss 1.65x at 2 threads, results identical.
+
+VM run of all cases after iterations 22–28 (`run_parallel.py --repeat 1 --threads 1,2`, before the
+ensemble fix; single repeat, so ±10–20 %): tree_selfgrav 1.86x, tree_selfgrav_group 1.48x,
+tree_rings 1.48x, trace_tp 1.30x, mercurius_plts / mercurius_disc / trace_disc 0.96–1.03x (one-sided
+loops engage only from 3 threads), block order 1.43–1.80x (vs default serial, at 2 threads:
+ias15_n512 1.89x, ias15_n2048 2.21x, whfast_n256 1.82x), stage mode as before. All results
+identical between builds and thread counts.
+Tests at the end of the round: 979 passed (serial build), 983 passed (OpenMP build, 2 and 3
+threads, also with binding), and 983 passed with every parallel path forced on (thresholds set to
+4, 2 threads; 30 minutes because every tiny loop then runs in parallel).
 
 ## Current state on the VM (commit `93d4a96` + threshold reorder)
 

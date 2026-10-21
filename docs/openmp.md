@@ -113,8 +113,9 @@ rebound.steps_simulations(sims, N_steps)    # each sim advanced by N_steps steps
 These functions (C: `reb_simulations_integrate`, `reb_simulations_steps`) run independent
 simulations on a pool of threads. They work in serial builds too, and use all logical CPUs by
 default (`n_threads` sets the number). Results are bitwise identical to running the simulations
-one after another. Inside an OpenMP build, each simulation runs single-threaded, so the cores are
-not oversubscribed.
+one after another. In an OpenMP build the workers are an OpenMP team, so they follow
+`OMP_PROC_BIND` / `OMP_PLACES`, and each simulation runs single-threaded, so the cores are not
+oversubscribed.
 
 In `steps_simulations`, WHFast512 simulations are advanced two at a time with the paired kernel
 when both can use it, with the same results. That gives about 1.2–1.5x more throughput per core:
