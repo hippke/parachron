@@ -695,6 +695,17 @@ static void reb_simulations_run_batch(struct reb_simulations_batch* b, int N_thr
         reb_simulations_batch_worker(b);
         return;
     }
+#ifdef OPENMP
+    // OpenMP builds: the workers are the threads of an OpenMP team. They then follow the user's
+    // thread placement (OMP_PROC_BIND / OMP_PLACES); plain threads would inherit the binding of
+    // the calling thread, i.e. all run on one core when binding is enabled. REBOUND's parallel
+    // regions inside a worker are nested and run single-threaded.
+    if (!omp_in_parallel()){
+#pragma omp parallel num_threads(N_threads)
+        reb_simulations_batch_worker(b);
+        return;
+    }
+#endif // OPENMP
 #if defined(_WIN32)
     HANDLE* th = malloc(sizeof(HANDLE)*(size_t)N_threads);
     int started = 0;
