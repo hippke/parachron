@@ -226,8 +226,8 @@ static void task_gr(struct tctx* x, int t){
 // threads is ~0.1 ms, comparable to a table pass) ----
 #include <stdatomic.h>
 #include <immintrin.h>
-static int spin_iters=-1;   // PINT_SPIN env (default 20000 pause instructions, ~0.3-0.6 ms), 0: sleep at once
-static int get_spin(void){ if (spin_iters<0){ const char* e=getenv("PINT_SPIN"); spin_iters= e? atoi(e) : 20000; } return spin_iters; }
+static int spin_iters=-1;   // PINT_SPIN env: pause instructions to spin before sleeping (default 0; 7950X: 0 best)
+static int get_spin(void){ if (spin_iters<0){ const char* e=getenv("PINT_SPIN"); spin_iters= e? atoi(e) : 0; } return spin_iters; }
 #define SPIN_ITERS get_spin()
 static pthread_mutex_t pool_mx=PTHREAD_MUTEX_INITIALIZER, pool_busy=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER;

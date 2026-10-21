@@ -920,3 +920,15 @@ step has 4 fork-join rounds plus a thread creation for the giants' run. Fix (ite
 worker, lock-free task counter, workers spin `PINT_SPIN` pause instructions (default 20000) before sleeping.
 Here (2 vCPUs, oversubscribed) spinning hurts (1.10 ms) and `PINT_SPIN=0` is best (0.68 ms vs 1.03 serial); to be
 measured on the 7950X.
+
+### Phase 8, user run 4 (7950X, N = 16, 100 windows, tol 3e-6, K̄ 3.80)
+| variant | wall | speedup | coarse busy |
+|---|---|---|---|
+| 8 helpers, mode 2, spin 20000 | 4.22 s | 2.67 | 2.45 core-s |
+| **8 helpers, mode 2, `PINT_SPIN=0`** | **4.17 s** | **2.71** | 2.45 |
+| 8 helpers, mode 1 | 4.69 s | 2.42 | 4.61 |
+| 15 helpers, mode 2 | 4.29 s | 2.64 | 2.57 |
+Coarse step 2.1× faster (5.17 → 2.45 core-s) → speedup 2.37 → 2.71 (+14 %). Default `PINT_SPIN` set to 0.
+Model with r_eff ≈ 0.057 predicts 3.25; measured/model = 0.83 — the remaining overheads (≈ 4.4 fine solves per slice
+incl. speculative ones; energy projection and position checks on the chain; helpers sharing cores with fine solves)
+now matter. Upper bound at r → 0 with 4.4 fine solves per slice: 16/4.4 ≈ 3.6.
