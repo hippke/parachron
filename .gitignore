@@ -65,3 +65,9 @@ whfaster/parareal/__pycache__/
 whfaster/pint/pint_test
 whfaster/pint/pint_run
 whfaster/pint/*.so
+whfaster/pint/pint_long
+whfaster/pint/*.bin
+whfaster/pint/pint_pipe
+whfaster/pint/ser_pert
+whfaster/pint/runs/
+whfaster/pint/libpint.so
