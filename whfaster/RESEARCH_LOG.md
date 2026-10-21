@@ -726,3 +726,40 @@ J_G(ε) = J_F + ε (J_G − J_F) on selected rows and e0 → ε0 e0.
   i.e. W2 — not only the resonant U2. Long-period content of the mean ln a (1-yr binned) is only 1.3e-8 (235 yr) for
   Venus/Earth and 3.7e-8 (1500 yr, E–M–J) for Mars; its λ effect is small except for Mars.
 * Grid resolution is converged (ng_ii up to 128, ng_io 64 give the same boundary jumps of the mean ln a).
+
+## Iteration 21 — the real first-order errors: small divisors and missing secular terms
+Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
+* A perfect mean ln a (slice average of a densely sampled fine run, start and end) alone: median k2 245 → 85 — not
+  sufficient. Linearised block test: setting the coarse error e0 of the V, E, M rows to zero gives median k2 7.8,
+  but only if **all** elements are fixed (ln a + λ only: 123; k, h, q, p only: 131) → every element of the inner
+  planets must improve together.
+* Per-slice defects of k, h (config B) are white (no smoothness), ~4e-5: the untransformed first-order short-period
+  terms of k, h (config B transforms ln a only).
+* **Small divisors from osculating mean motions** were the main error of the first-order transform: tables rebuilt
+  at the *mean* semi-major axes (one fixed-point iteration, `mgc.Coarse(meann=1)`) reduce the pointwise error of the
+  mean ln a at the hard epoch 1030 from 5.5e-7 to 9e-9 (the Venus–Earth 8:13 term, divisor 2π/240 yr, is extremely
+  sensitive to the 1e-5 short-period part of the osculating a). Per-slice λ error Venus 1.6e-3 → 2.6e-4.
+* Python coarse step (`ph1mn.py`), parareal at the 10 epochs, error/noise:
+
+| coarse step | k=2 median | k=2 worst | k=3 median | k=3 worst |
+|---|---|---|---|---|
+| config B (C, round 2) | 245 | 1.9e4 | 1.5 | 870 |
+| ln a transform, mean-n tables | 47 | 400 | 1.0 | 11.8 |
+| all-component transform, mean-n | 29 | 352 | 0.95 | 12.3 |
+| + Earth–Mars–Jupiter 2nd-order term (`g3`, FD step 1e-4) | 10.2 | 48.7 | 1.04 | 2.14 |
+| + giants' WH step 180 d | **3.5** | 49 | 0.76 | 1.59 |
+| + giants' step 90 d | 3.9 | 49 | 0.87 | 1.82 |
+
+* The E–M–J term first raised the k=3 floor (2.75): its slow-element derivatives by finite differences (h = 1e-6
+  on top of the finite-difference dE/dv) were noisy (G not smooth at the 1e-10 level); h = 1e-4 fixed it.
+* With all inner improvements, the giants (WH at 360 d) limited k=2 at several epochs; 180 d is converged.
+
+## Iteration 22 — secular rates: grids and Uranus/Neptune
+* Grid convergence of the secular rates per pair: Venus–Earth needs ≥ 48² (32²: 0.5 % error — the ~1e-5 per-slice
+  k, h error), Earth–Mars ≥ 32², all others 16–24² suffice.
+* **Uranus and Neptune were missing from the inner planets' secular rates** (maxj = 5 for the transform and the
+  rates): their contribution (~1e-3 of Jupiter's) was the per-slice q, p error (Venus 9.7e-7 → 9.4e-8 with them).
+* Secular drift by RK4 over sub-steps with the giants sampled from their WH run (`nsub`): Mars k error
+  1.3e-5 → 5.7e-6 (Jupiter's short-period variation was aliased by the two-point Heun rule).
+* Numerical filtering of the start mean elements (10-yr fine run, first-order transform point by point, Hann
+  average; `gfilt.GF2`): Mars λ per-slice error 1.7e-4 → 8.9e-5, Venus/Earth only 10–15 %.

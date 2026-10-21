@@ -68,14 +68,14 @@ def dEdv(mu, r, v, rel=1e-6):
 
 class Theory:
     """First-order short-period theory around given osculating Jacobi elements E0 (8,6)."""
-    def __init__(self, masses, E0, Ng=64, gr=True, slow_period=None, inner=None, pair_ng=None):
+    def __init__(self, masses, E0, Ng=64, gr=True, slow_period=None, inner=None, pair_ng=None, n_override=None):
         """inner: if set, only pairs with i < inner (at least one inner planet) and GR for i < inner"""
         self.m=np.array(masses); m=self.m; Np=len(m)-1; self.Np=Np
         Mint=np.cumsum(m)[:-1]          # interior mass for planet i (index i-1)
         self.mu=G*(Mint+m[1:])
         self.Mint=Mint
         self.E0=E0.copy(); self.Ng=Ng
-        self.n=np.sqrt(self.mu/np.exp(3*E0[:,0]))
+        self.n=np.sqrt(self.mu/np.exp(3*E0[:,0])) if n_override is None else np.asarray(n_override)
         self.pairs={}; self.single={}
         lg=2*np.pi*np.arange(Ng)/Ng
         K=np.fft.fftfreq(Ng,1/Ng)
@@ -151,15 +151,17 @@ class Theory:
         for i,(_,f0) in self.single.items(): R[i]+=f0
         return R
 
-def secular_rates_fast(masses, E, Ng=24, inner=4, gr=True):
+def secular_rates_fast(masses, E, Ng=24, inner=4, gr=True, pair_ng=None):
     """first-order secular (averaged) element rates (8,6) at elements E, only pairs with an inner planet;
     rows >= inner are not filled (outer planets are propagated elsewhere)"""
     m=np.asarray(masses); Np=len(m)-1
     Mint=np.cumsum(m)[:-1]; mu=G*(Mint+m[1:])
-    R=np.zeros((Np,6))
-    lg=2*np.pi*np.arange(Ng)/Ng
+    R=np.zeros((Np,6)); Ng0=Ng
     for i in range(min(inner,Np)):
         for j in range(i+1,Np):
+            Ng=Ng0 if pair_ng is None else pair_ng(i,j)
+            if Ng==0: continue
+            lg=2*np.pi*np.arange(Ng)/Ng
             Ei=np.broadcast_to(E[i],(Ng,Ng,6)).copy(); Ej=np.broadcast_to(E[j],(Ng,Ng,6)).copy()
             Ei[...,1]=lg[:,None]; Ej[...,1]=lg[None,:]
             ri,vi=el_to_rv(mu[i],Ei); rj,vj=el_to_rv(mu[j],Ej)
@@ -172,6 +174,7 @@ def secular_rates_fast(masses, E, Ng=24, inner=4, gr=True):
                                                     - 3*rj*(rdot/rj2/rj3)[...,None])
                 R[j]+=np.einsum('abec,abc->e',dEdv(mu[j],rj,vj),aj)/Ng**2
         if gr:
+            Ng=Ng0 or 64; lg=2*np.pi*np.arange(Ng)/Ng
             Ei=np.broadcast_to(E[i],(Ng,6)).copy(); Ei[:,1]=lg
             ri,vi=el_to_rv(mu[i],Ei); rr=np.linalg.norm(ri,axis=-1)
             agr=(-6*m[0]**2/C_GR**2)*ri/rr[:,None]**4

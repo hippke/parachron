@@ -14,6 +14,10 @@ def pair_rule(i,j):
     if j>=4: return 16
     return 64 if (i,j) in ((1,2),(2,3)) else 32
 
+def sec_rule(i,j):
+    if j>=4: return 16
+    return 64 if (i,j) in ((1,2),(2,3)) else 32
+
 class GF:
     def __init__(self, L_yr=10., ds=3, end=1, days=360000, comps=None, Ng=32):
         self.L=L_yr; self.ds=ds; self.end=end; self.days=days; self.T=days*DAY
@@ -58,3 +62,18 @@ if __name__=='__main__':
     else:
         import ph1eval
         ph1eval.evaluate(G,f'GF L={L} end={end}',eps=[0,1030,3400,6000,9300] if mode=='eval5' else None)
+
+class GF2:
+    """filtered mean elements on top of an mgc.Coarse core (nsub path): start mean from a short fine run
+    (first-order transform with the core's start tables), end state corrected by the same measurement"""
+    def __init__(self, core, L_yr=10., ds=3, end=1):
+        self.core=core; self.f=GF.__new__(GF); self.f.L=L_yr; self.f.ds=ds
+        self.f.nsamp=int(L_yr*365.25/(6*ds)); self.f.w=np.hanning(self.f.nsamp+2)[1:-1]
+        self.end=end; core.mean_hook=self.mean_hook; core.end_hook=self.end_hook if end else None
+    def mean_hook(self, E, th, M):
+        self.th=th; M=M.copy(); M[:NI]=self.f.filtered(E,th,self.f.rates(M,th)); return M
+    def end_hook(self, Ee, M2):
+        c=self.core; th2=c.table(1,M2)
+        Mt=self.f.filtered(Ee,th2,self.f.rates(M2,th2))
+        d=M2[:NI]-Mt; d[:,1]=wrap(d[:,1]); Ee=Ee.copy(); Ee[:NI]+=d; Ee[:NI,1]=wrap(Ee[:NI,1]); return Ee
+    def __call__(self, E): return self.core(E,0)
