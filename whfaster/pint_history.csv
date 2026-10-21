@@ -18,3 +18,8 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 8,config A N=40,40,986,4,0.078,,5.38 (N=40),yes,
 8,config A 0.5 kyr slices,10,493,3,0.154,,2.00,no,
 9,config A long run 1 Myr + energy projection,10,986,3,0.073,1.42,2.53,yes,energy random walk 1.11x serial; no bias
+10,pipelined driver pint_pipe (config A),10,986,3,,,,tool,final state within noise; run on >=10 cores to measure wall
+11,config A + previous-window calibration,20,986,4,,,,no,defects phase-dependent
+12,config A Euler K=3 10 Myr,10,986,3,0.077,,2.50,no,secular frequency bias up to 1e-5 arcsec/yr (Mars g4)
+12,config A Euler K=4 10 Myr,10,986,4,0.077,,2.00,ok,frequency shifts <=2e-7
+12,config B (Heun) K=3 10 Myr,10,986,3,0.083,1.40,2.45,yes,frequency shifts <=2.6e-7 (chaos-noise level); energy OK

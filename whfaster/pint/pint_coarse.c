@@ -15,7 +15,7 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
-    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2;
+    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 0;
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -265,7 +265,15 @@ void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double
     outer_wh(c,E_in,M2);
     const double t2=now();
     double disp1[PINT_NI];
-    table(c,M2,disp1,NULL);
+    if (c->heun){
+        double R1[PINT_NI][6];
+        table(c,M2,disp1,R1);
+        for (int i=0;i<PINT_NI;i++){
+            const double lna=M2[i][0], nbar=sqrt(mu[i]/exp(3.*lna));
+            M2[i][1]=wrap(E_in[i][1]+(nbar+0.5*(R[i][1]+R1[i][1]))*T);
+            for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+0.5*(R[i][e]+R1[i][e])*T;
+        }
+    } else table(c,M2,disp1,NULL);
     memcpy(E_out,M2,sizeof M2);
     for (int i=0;i<PINT_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
     const double t3=now();

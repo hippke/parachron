@@ -500,3 +500,49 @@ amplitude is 1.28× (1.11× with projection) that of a serial run; no bias detec
 Energy projection (kept, default on): after each correction, scale barycentric velocities so that
 E(U^k_{n+1}) = E(U^k_n) + [E(F(U^{k−1}_n)) − E(U^{k−1}_n)] (each slice's energy increment = one fine round-off
 realisation, as in a serial run; leaves the parareal fixed point unchanged; one energy evaluation per boundary).
+
+## Iteration 10 — pipelined driver (`pint/pint_pipe.c`)
+One thread per slice; thread n waits for U^k_n (semaphore), computes G, forms and hands on U^k_{n+1} (with energy
+projection), then runs F(U^k_n) for the next iteration; slices n < k are passed through. Schedule = the pipelined
+model N T_G + K (T_F + T_G) per window; windows chained. Checked: 10 × 986 yr, K = 3 → final state within 1.7e-8 AU
+of the serial run (3 × noise = 4e-8). Measures wall-clock and core-hours against a serial run of the same span —
+the program to run on a ≥ 10-core machine (`pint_pipe 10 360000 3 <windows>`).
+
+## Iteration 11 — previous-window calibration of G (rejected)
+G_cal = G + mean defect (F − G) of the previous window (all elements, or λ only), N = 20: k = 4 in all variants
+(errors at k = 3: 7.7e-7 uncalibrated, 6.9e-7 λ-calibrated, 9.2e-7 fully calibrated). The defects vary from slice to
+slice (phase-dependent); a constant correction does not reduce the iteration error.
+
+## Iteration 12 — 10 Myr validation: secular frequencies and drifts; Heun secular step (KEPT)
+10 Myr = 1000 windows × 10 × 986 yr (energy projection on), compared with serial C (kernel 2), serial asm
+(kernel 1, round-off reference) and serial C with all planets' x perturbed by 1e-12 and 1e-9 AU (chaos
+reference). NAFF frequency analysis of k + ih, q + ip (`pint/freq_ana.py`), differences vs serial C [″/yr]:
+
+| | asm | IC +1e-9 AU | **Euler K=3** | Euler K=4 | Euler K=5 | **Heun K=3** |
+|---|---|---|---|---|---|---|
+| g1 | −4e-10 | +1.1e-8 | **+1.7e-6** | −1.5e-7 | −1.6e-8 | **+3.3e-8** |
+| g2 | −3e-11 | −1.5e-8 | +1.1e-6 | −2.9e-8 | −9.7e-9 | +1.1e-8 |
+| g4 | −1e-10 | −8.3e-8 | **+1.05e-5** | +5.2e-8 | −1.0e-7 | −1.9e-7 |
+| g6 | +6e-9 | −1.4e-7 | +4e-9 | +5e-9 | −6e-9 | −2.4e-8 |
+| s1 | +6e-10 | −5.2e-8 | +9.5e-7 | +2.0e-7 | −7.1e-8 | −1.2e-7 |
+| s2 = s3 | +3e-10 | +9.8e-8 | −5.0e-6 | −8.4e-8 | +6.4e-8 | +2.6e-7 |
+| s4 | +1e-10 | +4.5e-8 | −3.6e-6 | −7.5e-8 | +4.5e-8 | +1.2e-7 |
+| giants | ≤ 6e-9 | ≤ 1.4e-7 | ≤ 5e-9 | ≤ 5e-9 | ≤ 6e-9 | ≤ 2.4e-8 |
+
+* **Euler K = 3 fails**: the inner planets' e and i vectors drift away from the serial run steadily (Mars |Δz| 4e-5,
+  |Δζ| 1e-5 at 10 Myr, vs 3e-6 / 1e-7 for the 1e-9 AU IC perturbation), frequency shifts up to 1e-5 ″/yr, i.e.
+  larger than the WH truncation error at 6 d (dg1 = −8.8e-7 ″/yr, round 1). Mechanism: G's secular step error is
+  systematic (Euler over 0.03–0.09 rad of rotation per slice), so the residual after K iterations biases every
+  boundary in the same direction. More iterations shrink it (K = 4: ≤ 2e-7; K = 5: ≤ 1e-7).
+* **Heun (trapezoidal) secular step** (rates also at the predicted end, from the end table that is built anyway):
+  K = 3 deviations ≤ 2.6e-7 ″/yr, at the level of the 1e-9 AU chaos reference and ≤ 4 % (g1) of the WH truncation
+  error; e/i vector differences at 10 Myr chaos-like (Mars |Δz| 2e-6, |Δζ| 4e-7). Kept (config B).
+* Energy (all runs): (E − E_serialC)/E at 10 Myr: asm −8.3e-12, IC 1e-9 +4.1e-12, Euler K3 −1.5e-12, Heun K3 +8.5e-12,
+  K4 −8.5e-12, K5 +1.8e-12 — parareal within the spread of two serial round-off realisations; no drift beyond it.
+* Convergence over 1000 windows (Heun K = 3): last update median 1.5e-6 AU, 89 windows > 1e-5 AU, max 2.5e-4 AU
+  (clustered episodes, e.g. 3.3–3.6 Myr); with Euler K = 4: median 3e-8, max 1.1e-5.
+* Cost (idle host, `pint_run`): Euler r = 0.077 (S10 = 2.50), **Heun r = 0.083 (S10 = 2.45)**.
+
+**Config B = config A + Heun secular step + energy projection, K = 3 for 10 slices of 986 yr**: accuracy contract
+items 1–3 met in these tests (energy unbiased, Brouwer-like; secular frequencies at chaos-noise level);
+modelled wall-clock speedup 2.45 on 10 cores (25 % efficiency), 3.3 on 20 cores (K = 4).

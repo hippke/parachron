@@ -9,3 +9,7 @@ libpint.so: pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) -shared -fPIC pint_coarse.c -o $@ $(LDFLAGS)
 pint_long: pint_long.c pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) pint_long.c pint_coarse.c -o $@ $(LDFLAGS)
+pint_pipe: pint_pipe.c pint_coarse.c pint_coarse.h
+	$(CC) $(CFLAGS) pint_pipe.c pint_coarse.c -o $@ $(LDFLAGS)
+ser_pert: ser_pert.c pint_coarse.c pint_coarse.h
+	$(CC) $(CFLAGS) ser_pert.c pint_coarse.c -o $@ $(LDFLAGS)

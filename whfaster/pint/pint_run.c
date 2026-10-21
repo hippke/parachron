@@ -52,6 +52,7 @@ int main(int argc, char** argv){
     const double dt_out = argc>5 ? atof(argv[5]) : 360.;
     const double start = argc>6 ? atof(argv[6]) : 0.;
     struct pint_cfg c; pint_default_cfg(&c, ss_mass, slice_days); c.dt_out_days=dt_out;
+    if (argc>7) c.heun=atoi(argv[7]);
     // initial state (optionally after a fine pre-run)
     struct reb_simulation* r0=ss_create(6.,0);
     reb_simulation_set_integrator(r0,"whfast512");
