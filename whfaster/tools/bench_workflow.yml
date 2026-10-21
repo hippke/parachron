@@ -1,0 +1,28 @@
+# Template: GitHub Actions workflow for remote benchmarking on a self-hosted runner (the 7950X).
+# Put this file as .github/workflows/bench.yml on the DEFAULT branch of the repository the runner is registered to.
+# Trigger:  gh workflow run bench.yml -R <owner>/<repo> -f ref=whfaster -f cmd="./pint_pipe 16 360000 3 100 2 1 1 3e-6 6 8 2"
+# Read:     gh run list -R <owner>/<repo> -w bench.yml ; gh run view <id> -R <owner>/<repo> --log
+name: bench
+on:
+  workflow_dispatch:
+    inputs:
+      ref: { description: "rebound branch/commit", default: "whfaster" }
+      cmd: { description: "command run in whfaster/pint", default: "./pint_pipe 16 360000 3 100 2 1 1 3e-6 6" }
+concurrency: { group: bench, cancel-in-progress: false }   # one benchmark at a time
+jobs:
+  bench:
+    runs-on: [self-hosted, zen4]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: hippke/rebound, ref: "${{ inputs.ref }}", path: rebound }
+      - name: build
+        run: |
+          cd rebound/src && make -j OPENGL=0 SERVER=0 librebound.so
+          cd ../whfaster/pint && make REB=$(pwd)/../../src pint_pipe libpint.so
+      - name: run
+        working-directory: rebound/whfaster/pint
+        run: |
+          lscpu | grep -E "Model name|^CPU\(s\)|Thread"
+          echo "+ ${{ inputs.cmd }}"
+          bash -c "${{ inputs.cmd }}"
