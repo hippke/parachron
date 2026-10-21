@@ -271,3 +271,74 @@ at the final X), at no speed cost relative to the forked kernel.
 
 Push: this session could not push to github.com/hippke/rebound (repository not authorized for the session). The
 branch is delivered as `whfaster.bundle` and `patches/` in this directory: `git fetch whfaster.bundle whfaster:whfaster`.
+
+---
+
+# Lessons, pitfalls and untested ideas (for the next round)
+
+## Measurement methodology
+* **Timing on shared cloud hosts:** single runs vary by ±10–30 % (host-level frequency/contention drifts, low steal
+  time). Use many short interleaved rounds and the median of the *paired* ratio (variant/reference in the same round);
+  differences of ~1 % are then resolvable. Minimum times are a usable second check; medians of unpaired runs are not.
+* The two vCPUs of the cloud box are SMT siblings of one core: two simultaneous ensembles each run at ~200 ns/step
+  instead of ~150. Never time anything while a background ensemble runs.
+* "Calibration variants" that are deliberately wrong (force exactly 1/2/3 Newton iterations, skip the Kepler or the
+  interaction step) are the quickest way to learn what a change can gain at most and where the critical path is.
+* A latency model of the step was right for the Kepler step and wrong for the interaction step (throughput-bound):
+  measure before restructuring.
+
+## Accuracy methodology
+* **Energy ensembles are a weak bias detector.** A per-step Kepler bias of 1.4e-18 on Mercury (the forked C kernel's
+  defect) shows up as only ~2.5e-12 in ΔE/E after 10^9 steps — inside a 16-run ensemble's noise. The decisive tests:
+  (1) Kepler-only, at the planets' own (a, e) and dt, 64 random phases × 10^6 steps, t-statistic of the relative
+  a-error per planet (`lab/kgrid_lab <variant> ss`, ~4 s per kernel); (2) the (a, e) grid with 16 phases per point
+  and ⟨t²⟩ ≈ 1.15 for an unbiased solver (SE ≈ 0.22 per bin). Use several seeds before believing a 2–3σ result:
+  one variant's single-seed 1.86 turned out to be noise (1.47–1.76 over 3 more seeds).
+* Sign maps after 1000 orbits (paper Fig. 2/3) are ambiguous: the bias changes sign across (a, e), so "fraction
+  positive" and "mean/sem over the grid" disagree. Per-point t over several phases is unambiguous.
+* For dt/P ≳ 0.07 (high e) or ≳ 0.2, every kernel (assembly included) has deterministic series-truncation errors;
+  exclude that region when testing round-off bias, or the statistic is dominated by it.
+* Measure the "reference noise level" of a chaotic integration by comparing two valid fine integrators (asm vs C)
+  from identical ICs: 1.3e-9 AU after 1 kyr, 7e-8 AU after 10 kyr, 7e-6 AU after 100 kyr. Any parallel-in-time
+  scheme only has to converge to that level.
+* For dt comparisons, use exact step counts (`reb_simulation_steps`) with a sample interval divisible by all dt
+  (360 000 d), so different runs are compared at identical times.
+
+## Numerical facts learned
+* Plain Horner with rounded constants 1/k! is systematically biased: the error of 1/3! (stored 0.5 ulp low) makes G3
+  5.5e-17 too small *in every step*. Fixed cheaply by adding the constants' rounding errors (W512_IF_ERR) before the
+  final rounding. Sign convention: W512_IF_ERR(k) = rounded − true (the compensated Horner *subtracts* it).
+* Evaluating the Stiefel functions at the final X is necessary; the first-order update from the previous iterate is
+  biased (residual Mercury t ≈ +4–7, Saturn ≈ −3) even with compensated or constant-corrected series and the ratio
+  form. **Mechanism not understood** — worth a closer look, because it would save ~8 % (one series evaluation).
+* After the constant correction, compensated Horner (paper Appendix C) is no longer needed for unbiasedness in these
+  tests (plain + correction + evaluation at the final X: ⟨t²⟩ ≈ 1.2, planets clean).
+* The Kepler solver's 19-term Stiefel series is not converged for z = βX² ≳ 2 (dt/P ≳ 0.2); the bisection fallback
+  then returns wrong results too (the same for the assembly). Long-standing, undocumented.
+* WHFast512's universal-variable start: a sixth-order series reversion (coefficients in the log, derived with sympy)
+  makes one Halley step + one Newton step sufficient at dt ≤ 6 d; the start's latency matters only after η and v²
+  (which need the new velocities), so position-only coefficients should be precomputed.
+* The lazy-implementer kernel (WHCKL) is not exactly symplectic (kick ∇B(q + c∇B) is not a gradient at O(c²ε³));
+  irrelevant here since S1 was rejected, but relevant if someone revisits it for Gyr runs.
+
+## Practical pitfalls in this code base
+* `reb_simulation_steps()` synchronizes at the end; WHFast512's default `concatenate_steps` is 10^6, so
+  `sim.steps(1)` integrates 10^6 steps (tests rely on this).
+* The Python package loads `librebound.cpython-*.so` built by `pip install -e .`, not `src/librebound.so`; rebuild
+  with pip (≈ 70 s) or `benchmarks/perf/check.py` after any C change, or the tests run stale code.
+* For ≤ 4 planets the C kernels dispatch to the four-lane instantiations (`*x4`); debug with those.
+* Empty lanes are NaN inside the Kepler step; any new mask/convergence logic must restrict to `c->k1`, otherwise
+  every step with < 8 planets falls into the bisection fallback.
+* `integrator_saba.c`: synchronize with `keep_unsynchronized=1` before the first step crashed (fixed in this branch).
+* `pkill -f <pattern>` kills the invoking shell when the pattern appears in its own command line.
+
+## Untested ideas (ranked by my estimate)
+1. Find why the first-order Stiefel update is biased; if fixable, the final evaluation (~8 %) can go again.
+2. Shorter final evaluation: reuse the high-order tail of the Newton step's series and re-evaluate only the leading
+   terms at the final X (needs a first-order correction of the tail; accuracy at the 1e-18 level must be shown).
+3. A staggered/partitioned splitting that lets the next Kepler step start before the interaction step finishes
+   (Kepler 0.5 and interaction 0.35 of the step would overlap); changes the method, needs a full S1-style analysis.
+4. Argument reduction (half/quarter-angle identities) for the Stiefel functions for z ≳ 2 — correctness for compact
+   systems, not speed.
+5. P3: parareal with a secular coarse model in elements (only untested multi-core route; research project).
+6. Measure on Zen 4/5: the division-free Newton step gains less where 512-bit division latency is short.
