@@ -18,12 +18,13 @@ void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_day
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
     c->meann = 0;
-    // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT, PINT_ALPHAHI
+    // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT, PINT_ALPHAHI, PINT_MAXJ (7: Uranus and Neptune paired with the inner planets)
     const char* e;
     if ((e=getenv("PINT_MEANN"))) c->meann=atoi(e);
     if ((e=getenv("PINT_NGHI"))) c->ng_hi=atoi(e);
     if ((e=getenv("PINT_DTOUT"))) c->dt_out_days=atof(e);
     if ((e=getenv("PINT_ALPHAHI"))) c->alpha_hi=atof(e);
+    if ((e=getenv("PINT_MAXJ"))) c->maxj=atoi(e);
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
