@@ -449,3 +449,21 @@ tables rebuilt per call.
 
 Model speedups (S = N/(N r + k(1 + r))): N = 10, k = 3: 2.7 at r = 0.05, 2.3 at r = 0.1; N = 20, k = 4: 3.8 at
 r = 0.05; N = 5, k = 3: 1.5 at r = 0.05. The coarse cost r in C is the open number → iteration 7.
+
+## Iteration 7 — coarse propagator and parareal driver in C (`pint/pint_coarse.c`, `pint_test.c`, `pint_run.c`)
+`pint_coarse()` implements config A (giants' WH step 360 d, C kernel 2). Agreement with the Python prototype from the
+same input: giants bitwise, inner ln a to 1e-15, λ to 1e-11 (1000 yr × n), k/h/q/p to 1e-10 (forward-difference
+secular rates). Optimisation (one core, this host; per G call = 2 table builds + giants):
+
+| version | G [ms] | tables | giants WH | fine slice [ms] | r |
+|---|---|---|---|---|---|
+| straight port (FD dE/dv for 6 components, naive FFT, complex division) | 2.39 | 2.12 | 0.28 | 13.2 | 0.18 |
+| analytic ∂ln a/∂v, FD only for the secular components, converged Kepler, twiddle FFT, two real grids per complex FFT, division-free half evaluation | **0.85** | 0.61 | 0.24 | 11.1 | **0.071–0.076** |
+
+Profile of the optimised table pair: grid r, v, ∂E/∂v 0.15 ms, pair loops 0.18, FFTs 0.15, series evaluation 0.12.
+
+`pint_run 10 360000 2 5 360` (10 × 986 yr, 2 threads): k = 0…3 max position error 6.6e-3, 1.7e-4, 7.0e-6,
+**2.7e-8 AU** (noise 1.35e-8 AU) → **k = 3**, same as Python. Measured: fine slice 12.7 ms, coarse step 0.93 ms,
+r = 0.073. Pipelined model on 10 cores: **S = 2.53 (25 % efficiency)**; non-pipelined schedule (as implemented):
+1.69. Measured wall on this 2-vCPU host: 0.60 × serial (expected for P < N; the host cannot show the 10-core number).
+1.5-kyr slices (Python): k = 4 → keep ~1 kyr.

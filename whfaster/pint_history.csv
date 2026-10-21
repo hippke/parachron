@@ -11,3 +11,5 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 6,config A dt_out=360d,10,986,3,?,,,yes,
 6,config A start at 1 Myr,10,986,3,?,,,yes,
 6,config A 20 slices,20,986,4,?,,,yes,
+6,config A 1.5 kyr slices,10,1479,4,,,,no,longer slices cost an iteration
+7,config A in C (pint_coarse.c),10,986,3,0.073,1.42,2.53,yes,measured r on cloud Xeon (fine 12.7 ms/slice; G 0.93 ms); S pipelined model
