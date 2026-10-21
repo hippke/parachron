@@ -342,3 +342,68 @@ later OpenMP/IAS15 commits on main, which touch none of the files changed here).
    systems, not speed.
 5. P3: parareal with a secular coarse model in elements (only untested multi-core route; research project).
 6. Measure on Zen 4/5: the division-free Newton step gains less where 512-bit division latency is short.
+
+---
+
+# Round 2 (Oct 21, 2026): parallel-in-time with a mean-element coarse propagator
+
+Literature review of this round: `LITERATURE_PINT.md` (5 parallel searches; no measured single-trajectory multicore
+speedup for a planetary integrator exists; the leading untested idea is parareal in mean elements). Process as in
+`../PERF_LOG.md` (one work item per iteration, measure, keep/revert, log). Prototype code: `parareal/` (Python driving
+the C kernel through the library; F = WHFast512 C kernel 2, dt = 6 d, GR, corrector 17, as in round 1).
+Machine: same 2-vCPU cloud Xeon (one physical core; **multi-core wall-clock cannot be measured here** — speedups are
+computed from measured iteration counts k and cost ratios r with the pipelined parareal model
+S = N / (N r + k (1 + r)), N = slices = cores).
+Convergence criterion: every boundary within the fine solver's own round-off noise (asm vs C kernel from identical ICs:
+Mercury λ ≈ 1e-7 rad, ln a ≈ 1e-12 over 10 × 1 kyr; positions 1.3e-9 → 2e-8 AU).
+History: `pint_history.csv`.
+
+## Iteration 1 — slice-Jacobian test (`parareal/jac.py`, `oracle.py`)
+Central-difference Jacobians (48 × 48, Jacobi elements ln a, λ, k, h, q, p) of one 986-yr slice of F and of coarse WH
+(dt_G = 16, 24 d) at the 10 slice starts; linearised parareal recursion e^{k+1}_{n+1} = G'e^{k+1}_n + (F'−G')e^k_n
+started from the true coarse errors.
+* The linear model **reproduces the measured nonlinear parareal iteration by iteration** (dt_G = 16 d: Mercury λ
+  4e-2 → 2e-2 → 9e-4 → 8e-5 → 1e-6 → 8e-8 (actual) vs 4e-2 → 2e-2 → 4e-4 → 6e-5 → 6e-8 (linear); 24 d: no contraction
+  in both). So convergence is a property of F'−G' along the trajectory, and can be predicted cheaply.
+* The mismatch is in the **ln a rows of Mercury–Mars**: |∂ln a_end/∂(·)| mismatch 1e-2…5e-2 (16 d), 0.8 (24 d). F' itself
+  has ∂ln a_end/∂λ_j ≈ 1e-6…1e-5 (short-period terms) and ∂ln a_end/∂ln a_j up to 0.09 (short-period × shear, e.g.
+  Earth ← Venus). Coarse WH gets these short-period derivatives wrong (aliasing at large dt).
+* Oracle (coarse = F' + noise): k ≤ 3 to the noise level needs **ln a rows accurate to ≲ 1e-8 absolute and all other
+  entries to ≲ 1e-2 relative**; with ln a rows at 1e-6 it takes 5–6 iterations; replacing only the ln a rows of the WH
+  coarse Jacobian by the exact ones is not enough (λ rows are wrong too).
+* Conclusion: no osculating-element coarse model can meet 1e-8 in the ln a rows (that is 1e-3 relative to the
+  short-period terms themselves *and* requires correct end phases). In mean elements these rows are ≈ identity.
+
+## Iteration 2 — numerical first-order mean-element theory (`parareal/meanel.py`, `test_meanel.py`)
+For each planet pair (i<j), the first-order Jacobi perturbing accelerations (interior-on-exterior with the dipole
+indirect term, exterior-on-interior heliocentric-like; checked against a direct N-body sum: 3–5e-5 relative for the
+inner planets, 1–2e-3 for the giants = second-order terms) are evaluated on a 64 × 64 grid of (λ_i, λ_j) with frozen
+slow elements; Gauss' equations (∂E/∂v by central differences) give the element rates; their 2-D FFT gives the
+short-period displacements f_k/(i k·ν) plus the shear term −1.5 n·(ln a)_k/(i k·ν)² for λ. GR (the kernel's
+−3 m0²/(c² r²) potential) as a 1-D single-planet term. Mean = osculating − Σ displacements. Set-up 0.5 s in numpy.
+Residual short-period scatter of the mean elements along a 10-yr fine run (std after removing a quadratic trend):
+
+| | Mer | Ven | Ear | Mar | Jup | Sat | Ura | Nep |
+|---|---|---|---|---|---|---|---|---|
+| osc ln a | 2.0e-6 | 6.3e-6 | 1.0e-5 | 3.3e-5 | 2.3e-5 | 5.5e-5 | 1.9e-5 | 2.2e-6 |
+| mean ln a | **8.6e-10** | 7.2e-9 | 9.8e-9 | 3.0e-8 | 1.2e-7 | 3.2e-7 | 6.5e-8 | 1.3e-8 |
+| osc λ | 2.8e-5 | 2.6e-5 | 2.4e-5 | 8.0e-5 | 3.9e-5 | 8.8e-5 | 2.7e-5 | 4.4e-6 |
+| mean λ | 2.0e-8 | 6.4e-8 | 5.2e-8 | 9.1e-8 | 3.0e-6 | 7.5e-6 | 1.6e-7 | 1.7e-7 |
+
+Inner planets: 300–2300× reduction, at the shear-scaled requirement (≈ 1e-8 × shear_Mer/shear_i). Giants: limited by
+the near-resonant great inequality (2n_J − 5n_S, 880 yr) and Uranus–Neptune (≈ 2:1, 4200 yr), which a first-order
+theory with small divisors cannot represent.
+
+## Iteration 3 — mean-element parareal (`parareal/mpr.py`, `mgc.py`, `jac2.py`)
+G = osculating → mean (start tables) → Kepler drift at n(ā) + first-order secular rates (k = 0 Fourier terms) →
+osculating (end tables); tables cached per slice boundary. Correction in osculating elements as in round 1.
+10 × 986 yr slices, max error over slices (ln a | λ) for Mercury … Neptune:
+
+* **All planets in mean elements:** inner planets fine (k = 0: Mercury λ 2e-4 vs 4e-2 for WH 16 d), giants don't
+  contract (λ ≈ 1e-2, Saturn ln a 2e-4): near-resonances, as predicted by iteration 2.
+* **Hybrid** — giants by WHFast512 at dt = 180 d in a Sun(+inner mass) + 4-planet subsystem, inner planets in mean
+  elements: giants converge in 1–2 iterations; inner planets: Mercury λ 2e-4, 2e-4, 2e-4, 4e-5, 4e-7, 2e-7, 8e-8;
+  Mars slowest; **k = 6 to the noise level** (max position error 3e-8 AU). Linear prediction again exact.
+* Dominant remaining mismatch (`jac2.py`, terms (F'−G')_rc e_c, ln a rows × shear): derivatives w.r.t. the
+  **eccentricity vectors** (Mars λ ← Mars k, Mars ln a ← Mars k, Venus ln a ← Earth k/h): the frozen tables have no
+  slow-element dependence. Next: tables rebuilt from the actual state (“live”), then a cheap equivalent.
