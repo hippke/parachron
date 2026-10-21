@@ -13,3 +13,5 @@ pint_pipe: pint_pipe.c pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) pint_pipe.c pint_coarse.c -o $@ $(LDFLAGS)
 ser_pert: ser_pert.c pint_coarse.c pint_coarse.h
 	$(CC) $(CFLAGS) ser_pert.c pint_coarse.c -o $@ $(LDFLAGS)
+test_par: test_par.c pint_coarse.c pint_disp6.c pint_coarse.h
+	$(CC) $(CFLAGS) test_par.c pint_coarse.c pint_disp6.c -o $@ $(LDFLAGS)
