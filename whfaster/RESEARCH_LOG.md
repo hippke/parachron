@@ -1200,3 +1200,7 @@ Energy vs serial: within ±1e-11 everywhere.
   (A) reference — K_min 3, τ 3e-6 … 3e-5: adds ≤ 7e-7 rms, unbiased inner planets (K̄ 3.6–3.1);
   (B) ≈ dt 6–8 d — K_min 3, τ 1e-4 (K̄ 3.02) or K_min 2 + giants 180 d, τ 1e-4 … 3e-4 (K̄ 2.9–2.56);
   (C) ≈ dt 12 d — K_min 2, τ 1e-3 (K̄ 2.1). Speeds: iteration 39.
+* Tried: Uranus/Neptune paired with the inner planets in the coarse step (`PINT_MAXJ=7`, it. 22 found them missing
+  from the inner secular rates; bitwise serial = parallel checked) for K_min 2 + giants 180 d: τ 1e-4 K̄ 2.92,
+  s2 +9.7e-7 ± 4e-7, s4 +6.2e-7 ± 3e-7 (without: +1.2e-6 ± 3e-7, +7.6e-7 ± 2e-7); τ 3e-4 K̄ 2.55, inner rms
+  3.1e-6. → The k = 2 shifts are a convergence-level effect, not this missing term. Not kept.
