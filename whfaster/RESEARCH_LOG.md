@@ -932,3 +932,18 @@ Coarse step 2.1× faster (5.17 → 2.45 core-s) → speedup 2.37 → 2.71 (+14 %
 Model with r_eff ≈ 0.057 predicts 3.25; measured/model = 0.83 — the remaining overheads (≈ 4.4 fine solves per slice
 incl. speculative ones; energy projection and position checks on the chain; helpers sharing cores with fine solves)
 now matter. Upper bound at r → 0 with 4.4 fine solves per slice: 16/4.4 ≈ 3.6.
+
+## Phase 9 — new session with direct access to host2 (7950X), Oct 21, 2026
+Machines are documented in `MACHINES.md`. From now on the agent runs the 7950X measurements itself (`ssh root@host2`,
+repo `/home/ubuntu/rebound`, outputs in `whfaster/pint/runs/p9/`). numpy 1.26 / scipy 1.11 installed there (apt).
+Build check: `./test_par 8` → bitwise identical: yes; coarse step serial 0.631 ms, parallel (8 helpers) 0.219 ms (idle machine).
+
+### Iteration 28 — window size with helpers (the runs suggested at the end of Phase 8), tol 3e-6, Kmax 6, mode 2
+| N | helpers | K̄ (K=3/4/5) | wall | serial | speedup | final Δx |
+|---|---|---|---|---|---|---|
+| 16 | 8 | 3.80 (26/68/6) | 4.14–4.21 s (4 runs) | 11.19–11.50 s | **2.66–2.74** | 2.84e-4 AU |
+| 14 | 4 | 3.78 (29/64/7) | 3.95 s | 9.87 s | 2.50 | 1.55e-4 |
+| 12 | 4 | 3.47 (54/45/1) | 3.55 s | 8.50 s | 2.39 | 7.7e-5 |
+| 12 | 8 | 3.47 | 3.58 s | 8.48 s | 2.37 | 7.7e-5 |
+N = 16 stays best: the shorter window saves iterations at N = 12 (K̄ 3.47), but not enough to pay for 25 % fewer
+slices. Leaving physical cores free for the helpers does not help. Run-to-run spread of the speedup ≈ ±2 %.
