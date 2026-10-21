@@ -53,9 +53,11 @@ class Coarse:
         th=th or self.table(n,E); M=E.copy(); M[:self.ni]=th.mean(E)[:self.ni]; return M
     def osc_inner(self, M, n):
         th=self.table(n,M); Ee=M.copy()
+        if self._WS is not None:     # second order: X = Y + W1(Y) + W2(Y), evaluated at the mean elements Y
+            Ee[:self.ni]=M[:self.ni]+th.disp(M)[:self.ni]+self._WS.disp(M)[:self.ni]
+            Ee[:self.ni,1]=wrap(Ee[:self.ni,1]); return Ee
         for _ in range(3):
             Ee[:self.ni]=M[:self.ni]+th.disp(Ee)[:self.ni]
-            if self._WS is not None: Ee[:self.ni]+=self._WS.disp(Ee)[:self.ni]
         return Ee
     def drift(self, M, n, th0=None):
         """Kepler + first-order secular drift of the inner mean elements over one slice"""
@@ -99,14 +101,30 @@ class Coarse:
             th=meanel.Theory(m,E1,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng,n_override=nov); th.comps=self.comps
             M=self.mean_inner(E,n,th)
         self._WS=None; self._U2=None
-        if self.w2 is not None:                  # second-order transform and secular rates (w2triple)
+        if self.w2 is not None and getattr(self,'freeze_U2',0) and getattr(self,'_U2frozen',None) is not None:
+            self._U2=self._U2frozen.copy()
+        elif self.w2 is not None:                  # second-order transform and secular rates (w2triple)
             import w2triple
             E1=E.copy(); E1[:self.ni,0]=M[:self.ni,0]
-            WS=w2triple.W2Set(E1,n=np.sqrt(mu/np.exp(3*E1[:,0])),pairs=self.w2[0],triples=self.w2[1])
+            WS=w2triple.W2Set(E1,n=np.sqrt(mu/np.exp(3*E1[:,0])),pairs=self.w2[0],triples=self.w2[1],nu_cut=self.w2[2] if len(self.w2)>2 else 1/500)
             Y=M.copy()
-            for _ in range(3):
-                Y[:self.ni]=E[:self.ni]-th.disp(Y)[:self.ni]-WS.disp(Y)[:self.ni]
-            Y[:self.ni,1]=wrap(Y[:self.ni,1]); M=Y; self._WS=WS; self._U2=WS.U2()
+            opt=self.w2[3] if len(self.w2)>3 else ''
+            if 'Uonly' in opt:          # X-form first-order transforms kept; only the second-order secular rates
+                U=WS.U2()
+                if 'Ukh' in opt: U[:,[0,1]]=0
+                self._U2=U; WS=None
+            if WS is None: pass
+            elif 'noW' in opt: WS.disp=lambda X: np.zeros((8,6))
+            if 'nolamW' in opt:
+                _d=WS.disp; WS.disp=lambda X,_d=_d: (lambda D: (D.__setitem__((slice(None),1),0),D)[1])(_d(X))
+            if WS is not None:
+                for _ in range(3):
+                    Y[:self.ni]=E[:self.ni]-th.disp(Y)[:self.ni]-WS.disp(Y)[:self.ni]
+                Y[:self.ni,1]=wrap(Y[:self.ni,1]); M=Y; self._WS=WS; self._U2=WS.U2()
+            opt=self.w2[3] if len(self.w2)>3 else ''
+            if 'noU' in opt: self._U2=None
+            if 'nolamU' in opt and self._U2 is not None: self._U2[:,1]=0
+            if getattr(self,'freeze_U2',0): self._U2frozen=None if self._U2 is None else self._U2.copy()
         if getattr(self,'mean_hook',None): M=self.mean_hook(E,th,M)
         if self.nsub:
             outs=self.outerWH(E,2*self.nsub)

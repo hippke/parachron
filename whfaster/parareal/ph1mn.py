@@ -7,17 +7,26 @@ import sys, numpy as np, mgc, ph1eval, gfilt
 from ptlib import *
 import itertools
 W2SETS={'a':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)]),
-        'p':([P for P in itertools.combinations(range(6),2) if min(P)<4],[])}
+        'p':([P for P in itertools.combinations(range(6),2) if min(P)<4],[]),
+        'c':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/150),
+        'd':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/50),
+        'e':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/500,'noW'),
+        'f':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/500,'nolamW'),
+        'g':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/500,'nolamU'),
+        'h':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/500,'Uonly'),
+        'k':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1/500,'Uonly Ukh'),
+        'u':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)],1e9)}
 def build(spec):
-    comps=None if 'all' in spec else [0]
+    comps=None if 'all' in spec else ([0,1,2,3] if 'c4' in spec else [0])
     mn=int(spec.split('mn')[1][0]) if 'mn' in spec else 0
     dto=float(spec.split('dt')[1].split('_')[0]) if '_dt' in spec else 360
     CG=mgc.Coarse(360000,Ng=32,dt_out=dto,live=1,comps=comps,pair_ng=gfilt.pair_rule,heun=1,meann=mn,giant_mean=int('gm' in spec),nsec=int('ns' in spec and 'nsub' not in spec),nsub=int(spec.split('nsub')[1].split('_')[0]) if 'nsub' in spec else 0,Ng_sec=int(spec.split('ngs')[1].split('_')[0]) if 'ngs' in spec else 0,sec_ng=gfilt.sec_rule if 'un' in spec else None,gavg=float(spec.split('ga')[1].split('_')[0]) if '_ga' in spec else 0.,w2=W2SETS.get(spec.split('w2')[1].split('_')[0]) if '_w2' in spec else None)
     G=lambda E: CG(E,0)
+    if 'frz' in spec: CG.freeze_U2=1
     if '_L' in spec:
         L=float(spec.split('_L')[1].split('_')[0]); gf=gfilt.GF2(CG,L,end=int('noend' not in spec))
     if 'g3' in spec:
-        import g3; G=g3.G3(base=lambda E: CG(E,0),ode=int(spec.split('ode')[1].split('_')[0]) if 'ode' in spec else 0)
+        import g3; G=g3.G3(base=lambda E: CG(E,0),freeze=int('frz' in spec),ode=int(spec.split('ode')[1].split('_')[0]) if 'ode' in spec else 0)
     return G
 def calibrated(G, ep, nfit=100):
     """secular-matrix calibration (it. 23): per-slice z = k+ih error of the inner planets modelled as A z_inner,
@@ -53,6 +62,9 @@ if __name__=='__main__':
         elif DIAG:
             print(spec)
             for ep in (EPS or ph1eval.EP): diag(G,ep)
+        elif 'frz' in spec:     # per-window frozen second-order quantities: fresh G per window (epoch)
+            R=np.array([ph1eval.evaluate(build(spec),spec,eps=[ep],verbose=True)[0] for ep in (EPS or ph1eval.EP)])
+            print(f"== {spec} median k1..: "+" ".join(f"{x:.3g}" for x in np.median(R,0))+" | worst: "+" ".join(f"{x:.3g}" for x in R.max(0))+f" | k2<=2 at {np.sum(R[:,1]<=2)}/{len(R)}",flush=True)
         elif '_cal' in spec:
             R=np.array([ph1eval.evaluate(calibrated(G,ep),spec,eps=[ep],verbose=True)[0] for ep in (EPS or ph1eval.EP)])
             print(f"== {spec} median k1..: "+" ".join(f"{x:.3g}" for x in np.median(R,0))+" | worst: "+" ".join(f"{x:.3g}" for x in R.max(0))+f" | k2<=2 at {np.sum(R[:,1]<=2)}/{len(R)}",flush=True)

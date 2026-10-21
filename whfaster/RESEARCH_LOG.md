@@ -808,3 +808,11 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   Mars–Jupiter same-pair term. With W2 + U2 (14 pairs + V–E–J, E–M–J, V–E–M triples) in the coarse step the
   per-slice k errors drop 13–14 × (Venus 4.7e-6 → 3.7e-7, Earth 4.6e-6 → 3.5e-7, Mars 5.7e-6 → 4.1e-7), q 2–6 ×;
   λ errors only 5–20 %.
+* Parareal with W2 + U2 in the coarse step: **worse** (k1 3–10 × larger; 1030: 4.9 → 40). Diagnosis: the mean ↔
+  osculating maps must be used in one consistent form. The first-order step used the "X-form" (W1 evaluated at the
+  osculating angles both ways); W2 is the second-order term of the "Y-form" (X = Y + W1(Y) + W2(Y)). Switching to the
+  Y-form with an incomplete W2 (14 pairs + 3 triples) degraded the Venus/Earth λ (8:13, 3:5 small divisors).
+* **U2 only** (second-order secular rates of k, h, q, p from the 14 pairs + 3 triples, transforms unchanged):
+  k2 / noise per epoch 0.68, 1.49, 2.52, 11.4, 9.0, 1.36, 1.41, 0.87, 9.32, 1.22 — median 1.45, k2 ≤ 2 at 6/10
+  (1030: 4.9 → 1.5; 2000 0.8 → 2.5), k3 worst 1.61. The three hard epochs (3400, 4500 Mars; 8160 Venus/Earth)
+  remain at 9–11.

@@ -4,8 +4,8 @@ from ptlib import *
 import ptc, so2
 TERMS=[{2:-4,3:8,4:-3}]          # Earth-Mars-Jupiter
 class G3:
-    def __init__(self, days=360000, terms=TERMS, Ng=32, base=None, ode=0, **kw):
-        self.ode=ode
+    def __init__(self, days=360000, terms=TERMS, Ng=32, base=None, ode=0, freeze=0, **kw):
+        self.ode=ode; self.freeze=freeze; self._Ucache={}
         self.G0=ptc.CoarseC(days,heun=1,**kw); self.base=base or self.G0; self.T=days*DAY; self.terms=terms; self.Ng=Ng
     def mean_motions(self, E, g):
         d,R=ptc.lna_disp_R(self.G0,E)
@@ -17,7 +17,10 @@ class G3:
     def __call__(self, E, nslice=0):
         g=self.base(E); n=self.mean_motions(E,g); T=self.T
         for K in self.terms:
-            U=so2.resonant_U2(E,K,Ng=self.Ng)
+            key=str(K)
+            if self.freeze and key in self._Ucache: U=self._Ucache[key]
+            else:
+                U=so2.resonant_U2(E,K,Ng=self.Ng); self._Ucache[key]=U
             nu=sum(k*n[p] for p,k in K.items())
             p0=sum(k*E[p,1] for p,k in K.items()); e0=np.exp(1j*p0); e1=np.exp(1j*(p0+nu*T))
             if self.ode:      # resonant term integrated numerically (phase feedback through the term's own ln a, lambda)
