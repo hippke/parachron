@@ -5,6 +5,27 @@ with server access. Repository: https://github.com/hippke/rebound, branch **`whf
 The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core test machine is `host2`
 (AMD Ryzen 9 7950X, 16 cores / 32 threads, AVX-512, repo at `/home/ubuntu/rebound`).*
 
+## Update after session 2 (Oct 21–22, 2026; agent with direct access to host2) — read this before §0–7
+* Machines: `MACHINES.md` (host2 = `ssh root@23.239.118.238`; it can pull but not push → edit and push locally, then
+  `git pull` on host2; a second worktree `/home/ubuntu/rb2` was used to build without disturbing running jobs).
+* Iterations 28–38 in `RESEARCH_LOG.md` ("Phase 9"), summary `PINT_SUMMARY.md` §11. Results:
+  1. Driver: staged coarse step with the giants on the calling core (it. 30) and persistent slice threads (it. 31):
+     **2.95–3.05×** at τ 3e-6 (was 2.71×), bitwise identical trajectory. `pint_pipe` now writes trajectories
+     (`PINT_OUT`), see the header of `pint/pint_pipe.c` for all environment options.
+  2. **Energy bug in WHFast512 found and fixed** (it. 36): +7e-17 per integration call from the inertial ↔ Jacobi
+     matrices → linear drift in parareal (10 calls per slice) and in any serial run with frequent outputs. Opt-in
+     `jacobi_recursive` (src/integrator_whfast512.c); drivers use it by default (`PINT_JR=1`). Worth reporting
+     upstream (default kept bitwise identical to upstream on purpose).
+  3. Accuracy yardstick (it. 35/37): the dt = 6 d WH error itself is up to 5e-6 ″/yr (Mars g4), a systematic bias;
+     parareal adds 1e-7 (τ 3e-6) … 2e-6 (τ 1e-4) and is unbiased → larger τ is defensible; τ = 1e-5 validated by a
+     7-realisation ensemble (3.24×).
+  4. Ceiling of this scheme on 16 cores ≈ 16/K̄ × 0.84 − coarse chain; K̄ cannot go below 3 with K_min = 3. K_min = 2
+     reaches K̄ 2.1–2.6 but with a systematic Saturn g6 error (coarse giants at 360 d) — see it. 37/38.
+* Open leads (ranked): (a) K_min = 2 with a more accurate giants' coarse step (the Saturn error) — it. 38 ensemble;
+  (b) the round-4 plan (cheap accurate inner coarse step) is still the only route to K = 2 at reference accuracy;
+  (c) per-core fine-time imbalance (second CCD 3–5 % slower; the slowest slice sets every iteration);
+  (d) residual per-call energy offset from the symplectic corrector (≈ −1.5e-17 ± 1.1e-17, not significant yet).
+
 ## 0. Read this first
 1. **Goal (user):** make one long Solar System trajectory (Sun + 8 planets, WHFast512, Jacobi coordinates,
    dt = 6 d, GR potential, order-17 correctors) faster in wall-clock time by using several cores, at research-grade

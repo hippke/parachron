@@ -97,5 +97,32 @@ Goal: K = 2 (each saved iteration ≈ 25–30 % of S). Result (Python prototype,
   derivatives, pruned evaluation).
 
 ## 10. How to run
-`pint/README.md`: build, `./pint_pipe 10 360000 3 <windows> 2 1 1 3e-6 6` (10 threads, adaptive), AVX2-only CPUs:
-fifth argument 3. Long validation runs: `pint_long`, analysis `freq_ana.py`, `energy_ana.py`, `drift_ana.py`.
+`pint/README.md`: build, `./pint_pipe 16 360000 3 <windows> 1 1 1 3e-6 6 8 2` (16 cores, adaptive, 8 coarse helpers;
+kernel 1 = asm is fastest on the 7950X), `PINT_OUT=prefix` writes the trajectory. AVX2-only CPUs: kernel argument 3.
+Long validation runs: `pint_pipe` with `PINT_OUT` or `pint_long`; analysis `freq_ana.py`, `energy_ana.py`,
+`ens_ana.py` (ensembles), `tau_ana.py` (vs time-step references), `gyr_ana.py` (Gyr statistics).
+
+## 11. Round 4 — measured on 16 cores (AMD Ryzen 9 7950X, iterations 28–38, Oct 21–22, 2026)
+**Driver engineering (bitwise identical results):** the coarse step runs the giants' WH integration on the calling
+core while helpers build the tables in a staged task graph (it. 30; 2.7 → 2.85×); persistent slice threads hand
+windows over without a join (it. 31; → 2.95–3.05×). Measured: fine slice 8.3 ms under full load (7.0 ms idle: clock),
+coarse step 0.26 ms on the chain; window = 16 coarse hops + K̄ × (slowest fine slice + hop).
+
+**Rejected (measured):** SMT (32 threads), 20/24/32 slices, other slice lengths, paired fine solves (`steps_pair`
+gives no throughput on Zen 4), mean-n tables (no K̄ gain), 64² close-pair grids (K̄ −10 % but too slow on the chain),
+giants' coarse step 180–1000 d (no gain / no convergence), sliding windows (round 3 simulation).
+
+**What binds:** always the phase λ of Venus, Earth or Mars at the last boundaries (Kepler-shear image of 3e-10
+errors in ln a); the stop rule needs the k = 2 iterate within τ at all 16 boundaries.
+
+**Energy bias found and fixed (it. 36):** WHFast512's inertial ↔ Jacobi matrices are not exact inverses; every
+integration call (synchronization) adds dE/E ≈ +7e-17 for the Solar System. The parareal driver makes 10 calls per
+slice → linear drift +7.7e-13 per Myr (+1.3e-10 after 167 Myr, ≈ 4e-9 per 5 Gyr), invisible in 10 Myr tests. New
+opt-in `jacobi_recursive` in WHFast512 (recursive transformations; default unchanged and bitwise identical to
+upstream) removes it (per-call offset 0 within ±1e-17); the drivers use it by default (`PINT_JR`). This also affects
+ordinary serial WHFast512 runs with frequent outputs.
+
+**Accuracy yardstick (it. 35, 37):** frequency errors of serial runs vs dt = 3 d: dt 6 d up to 5.1e-6 ″/yr (Mars g4;
+scales as dt², a systematic bias), dt 8 d 1.0e-5, dt 12 d 2.6e-5. Parareal is unbiased (7-realisation ensemble) and
+adds, on top of the dt = 6 d error: τ 3e-6 → 1e-7, τ 1e-5 → 4e-7, τ 3e-5 → 7e-7, τ 1e-4 → 2e-6 (all with K_min 3).
+Allowing a stop at k = 2 (K_min 2) gives K̄ < 3 but a systematic Saturn g6 error (dt 8–12 d level).
