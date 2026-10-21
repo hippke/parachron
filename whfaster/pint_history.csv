@@ -33,3 +33,5 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 15,adaptive stop tau=1e-6 AU,10,986,3.64 mean,0.083,,2.13,ok,frequency shifts <=2.5e-7
 16,ng_hi=64 for V-E and E-M pairs (aliasing fix),10,986,3.6 mean,0.154,,1.76,no,residual Venus 7x smaller; cost outweighs gain
 16,empirical E-M-J three-body term in G,10,986,mixed,~0.09,,,no,term identified (P=1836 yr amp 2.2e-7); fit too crude
+21,mean-n tables + all comps + E-M-J term + giants 180 d (Python),10,986,k2 median 3.5,,,,research,k3 worst 1.6
+22,+ RK4 secular (giants sampled) + Uranus/Neptune secular (Python),10,986,k2 median 1.8 (6/10 <=2),,,,research,k3 worst 1.6

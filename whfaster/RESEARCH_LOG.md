@@ -763,3 +763,8 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   1.3e-5 → 5.7e-6 (Jupiter's short-period variation was aliased by the two-point Heun rule).
 * Numerical filtering of the start mean elements (10-yr fine run, first-order transform point by point, Hann
   average; `gfilt.GF2`): Mars λ per-slice error 1.7e-4 → 8.9e-5, Venus/Earth only 10–15 %.
+* **Parareal with all of it** (`all_mn1_g3_dt180_nsub10_un`: all-component transform at mean-n tables, E–M–J
+  term, giants 180 d, RK4 secular drift with 10 sub-steps and Uranus/Neptune): error/noise at k = 1, 2, 3 —
+  median 601 / **1.81** / 1.04, worst 2.0e3 / 13.2 / 1.59; **k2 ≤ 2 at 6/10 epochs** (config B: 0/10).
+  Remaining hard epochs: 3400 (12.2), 4500 (13.2), 8160 (8.1), 1030 (4.6). Python cost ~7 s per call (not yet
+  optimised; Phase 5).
