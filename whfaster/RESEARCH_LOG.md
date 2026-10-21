@@ -681,3 +681,48 @@ coarse map exact to second order *including* the Earth–Mars–Jupiter near-res
 period ≈ 2 slices, so it cannot be averaged away) and with the frequency taken from second-order mean motions.
 That is a full second-order (Lie-series) theory with three-planet terms — a multi-week project with uncertain
 payoff; ranked as the main open research item in the plan.
+
+---
+# Round 3 — second-order mean-element theory (plan: `RESEARCH_PLAN_R3.md`)
+Test bed for all round-3 iterations: `parareal/ph1eval.py` — nonlinear parareal (N = 10 × 986 yr) from 10 epochs of
+the 10 Myr serial run (slices 0, 1030, …, 9300), error / noise (noise = asm vs C fine kernel) at k = 1, 2, 3.
+Config B (round 2) at k = 2: median ≈ 245 × noise, worst ≈ 2e4; k2 ≤ 2 at 0/10 epochs.
+
+## Iteration 17 — Phase 0: requirements oracle (`parareal/phase0.py`)
+Slice Jacobians J_F, J_G and coarse errors e0 at the 10 epochs; linearised parareal with
+J_G(ε) = J_F + ε (J_G − J_F) on selected rows and e0 → ε0 e0.
+* K = 2 at all 10 epochs needs ε ≈ 0.03 and ε0 ≈ 0.03 on the inner-planet rows (all six elements); or ε 0.03 / ε0 0.1
+  if all rows are improved. ln a and λ rows alone are not enough. **Gate 0 passed** (ε ≈ 0.03 is what a second-order
+  theory can plausibly deliver).
+* Row test (nonlinear, oracle rows replaced by F): Venus, Earth and Mars rows (all elements) are all needed
+  (median k2 270 → 3.5); Mercury and giants irrelevant.
+
+## Iteration 18 — Phase 1: completeness of the first-order theory (`ph1eval.py`, `ph1py.py`, `slice_quality.py`)
+* Python transform of all six components (λ with shear, k, h, q, p) vs ln a only: median k2 245 → 225 (5 epochs) —
+  little gain. Heun option added to the Python coarse step (`mgc.py`); the Python ln a-only step reproduces C exactly.
+* Close-pair grid `ng_hi = 64`: worst epoch k3 870 → 40 but median k2 only 245 → 75–110; 128 = 64 (converged).
+* Per-slice errors (`slice_quality.py`, 200 slices from boundary 1000): λ rms Venus 1.4e-3, Earth 8.6e-4,
+  Mars 2.5e-4 rad (ng_hi 64: 1.0e-3 / 7.0e-4 / 2.5e-4); k, h errors smooth (≈ 2 % secular-rate error).
+
+## Iteration 19 — Phase 3: second-order Earth–Mars–Jupiter term from first principles (`so2.py`, `g3.py`)
+* `so2.resonant_U2`: second-order averaged field U2 = ⟨D V1·W1 − D W1·V̄1 + ½ D²V0[W1,W1]⟩_K for one harmonic K from
+  the first-order pair Fourier tables (products of different pairs sharing one planet; slow derivatives by finite
+  differences). For K = −4λE + 8λM − 3λJ it reproduces the measured Mars term (amplitude match with the true
+  frequency, phase correlation 0.92).
+* `g3.G3`: the term added to config B as resonant dynamics, integrated analytically over the slice (ln a, λ incl.
+  shear, k, h, q, p). Epoch 0: k2 245 → 106; epoch 6000 unchanged. Mars per-slice λ error 2.5e-4 → 1.9e-4.
+  Python cost 0.58 s per call.
+
+## Iteration 20 — what limits Venus and Earth (`resid_at.py`, harmonic regressions)
+* No single slow harmonic explains the Venus/Earth per-slice λ errors (best: 8λV − 13λE, R² = 0.05).
+* The λ error is driven by the **pointwise error of the transformed mean ln a at the slice start**: regression of
+  the λ error on the change of transformed mean ln a between boundaries has slope 0.75 n T (as expected), and
+  replacing the start value by the slice average of a densely sampled fine run removes 2–5 × of the λ error.
+* Dense fine run (6 d sampling, 3 kyr from boundary 1000, ng_hi 64): pointwise residual of the mean ln a 2.3e-8
+  (Venus), 2.6e-8 (Earth), 4.0e-8 (Mars) — 4 × worse than at t = 0 — with a broadband line spectrum: high
+  harmonics and three-body combinations around the Venus–Earth 3:5 near-resonance (P = 8 yr): 6λV − 10λE (4.1 yr),
+  −3λV + 5λE − 2λJ (22 yr), 2λV − 5λM − 4λJ (3.9 yr), plus Mars–Jupiter/Saturn combinations. These are
+  **second-order short-period terms** (squares and cross products of first-order terms with the 3:5 small divisor),
+  i.e. W2 — not only the resonant U2. Long-period content of the mean ln a (1-yr binned) is only 1.3e-8 (235 yr) for
+  Venus/Earth and 3.7e-8 (1500 yr, E–M–J) for Mars; its λ effect is small except for Mars.
+* Grid resolution is converged (ng_ii up to 128, ng_io 64 give the same boundary jumps of the mean ln a).
