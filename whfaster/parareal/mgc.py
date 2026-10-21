@@ -6,9 +6,9 @@ from ptlib import *
 import meanel
 m=np.array(mass); Mint=np.cumsum(m)[:-1]; mu=Mint+m[1:]
 class Coarse:
-    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0):
+    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0, meann=0, giant_mean=0):
         self.days=slice_days; self.T=slice_days*DAY; self.Ng=Ng; self.dt_out=dt_out; self.sec=sec
-        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng_sec or Ng; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun
+        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng_sec or Ng; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun; self.meann=meann; self.giant_mean=giant_mean
     def table(self, n, E):
         if self.live: th=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps; return th
         if n not in self.tables:
@@ -73,6 +73,13 @@ class Coarse:
     def __call__(self, E, n):
         th=self.table(n,E)
         M=self.mean_inner(E,n,th)
+        for _ in range(self.meann):          # tables (divisors, grids) at the mean semi-major axes
+            E1=E.copy(); E1[:self.ni,0]=M[:self.ni,0]
+            if self.giant_mean:              # giants' mean ln a (first order, giant-giant pairs) for the divisors
+                tg=meanel.Theory(m,E,Ng=32,pair_ng=lambda i,j: 32 if i>=self.ni else 0,gr=False)
+                E1[self.ni:,0]=tg.mean(E)[self.ni:,0]
+            th=meanel.Theory(m,E1,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps
+            M=self.mean_inner(E,n,th)
         if self.nsub:
             outs=self.outerWH(E,2*self.nsub)
             M2=self.drift_rk(M,outs)

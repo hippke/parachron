@@ -4,8 +4,8 @@ from ptlib import *
 import ptc, so2
 TERMS=[{2:-4,3:8,4:-3}]          # Earth-Mars-Jupiter
 class G3:
-    def __init__(self, days=360000, terms=TERMS, Ng=32, **kw):
-        self.G0=ptc.CoarseC(days,heun=1,**kw); self.T=days*DAY; self.terms=terms; self.Ng=Ng
+    def __init__(self, days=360000, terms=TERMS, Ng=32, base=None, **kw):
+        self.G0=ptc.CoarseC(days,heun=1,**kw); self.base=base or self.G0; self.T=days*DAY; self.terms=terms; self.Ng=Ng
     def mean_motions(self, E, g):
         d,R=ptc.lna_disp_R(self.G0,E)
         n=np.sqrt(so2.MU/np.exp(3*E[:,0]))
@@ -14,7 +14,7 @@ class G3:
             dl=wrap(g[p,1]-E[p,1]); m=np.round((n[p]*self.T-dl)/(2*np.pi)); n[p]=(dl+2*np.pi*m)/self.T
         return n
     def __call__(self, E, nslice=0):
-        g=self.G0(E); n=self.mean_motions(E,g); T=self.T
+        g=self.base(E); n=self.mean_motions(E,g); T=self.T
         for K in self.terms:
             U=so2.resonant_U2(E,K,Ng=self.Ng)
             nu=sum(k*n[p] for p,k in K.items())

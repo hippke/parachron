@@ -27,7 +27,7 @@ def pair_rates(E, i, j, Ng):
 class Pair:
     """Fourier data of pair (i,j): rate coefficients F[p] (Ng,Ng,6), displacement coefficients W[p],
     slow derivatives dF[p][(q,v)] for q in (i,j), v in (0,2,3,4,5)"""
-    def __init__(self, E, i, j, Ng=32, dslow=True, h=1e-6):
+    def __init__(self, E, i, j, Ng=32, dslow=True, h=1e-4):
         self.i,self.j,self.Ng=i,j,Ng
         n=np.sqrt(MU/np.exp(3*E[:,0])); self.n=n
         K=np.fft.fftfreq(Ng,1/Ng); self.K=K
