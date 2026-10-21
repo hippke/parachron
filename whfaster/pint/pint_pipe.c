@@ -12,6 +12,9 @@
 // boundary update (position change) is <= tol (at most Kmax). The next iteration's fine slices run speculatively
 // (in 10 chunks) and are abandoned when the window stops.
 // Prints wall-clock of the parareal run and of the serial run of the same span, and the final-state difference.
+// Environment: PINT_OUT=prefix writes the accepted boundary states (<prefix>_pr.bin) and, with serial=1, the serial
+// run (<prefix>_ser<kernel>.bin), records (t, E_tot incl. GR, E[8][6]) as in pint_long; PINT_PERT=d shifts the x of
+// all planets by d AU; PINT_SERONLY=1 runs only the serial reference; PINT_TRACE, PINT_UPDDIAG: diagnostics.
 #define _GNU_SOURCE
 #include "pint_coarse.h"
 #include "integrator_whfast512.h"

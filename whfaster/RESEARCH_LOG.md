@@ -1067,3 +1067,18 @@ N = 16, τ = 3e-6, 100 windows; medians):
   ≈ 4 % → deferred.
 * Upper bound of this scheme on 16 cores: S ≈ 16/K̄ × (T_F idle/T_F loaded = 0.84) − coarse chain (≈ 12 %) ≈ 3.0
   (τ 3e-6) / 3.4 (τ 1e-5); measured 2.95–3.05 / 3.24 → the remaining gains need K̄ < 3, i.e. K = 2 windows.
+
+### Iteration 34 — production output in the pipelined driver; ≈ 1 Gyr runs started
+`pint_pipe` can now write the trajectory: `PINT_OUT=prefix` → accepted boundary states of every window in
+`<prefix>_pr.bin` (and the serial run in `<prefix>_ser<kernel>.bin`), same records as `pint_long`, written by the
+main thread from a ring filled by the deciding slice thread (off the critical path); `PINT_PERT` (IC shift),
+`PINT_SERONLY` (serial reference only). New experiment override `PINT_ALPHAHI` (pair ratio for `ng_hi`).
+* Production path validated on the hard ICs (10 Myr, kernel 2, vs `v16t3_ser2.bin`): K histogram 173/435/16/1
+  (pint_long: 171/437/16/1); max inner frequency shift 1.1e-7 ″/yr (τ 3e-6) and 4.2e-7 (τ 1e-5); energy vs serial
+  +1.0e-11 / +1.1e-11. **10 Myr in 24.0 s (τ 3e-6) / 22.2 s (τ 1e-5)** vs 71 s serial.
+* Started on host2 (`runs/gyr/run.sh`): 62500 windows = 0.986 Gyr, asm kernel: serial (`s0`), serial with all planets
+  shifted by 1e-12 AU (`s12`, chaos twin = null spread), parareal τ 3e-6 (`p3`) and τ 1e-5 (`p10`). The serial runs
+  share cores with the parareal runs (SMT siblings 30, 31), so these are accuracy runs, not timings.
+* Rejected without implementation: splitting the 64² V–E pair task (iteration 33) — even fully chunked, three
+  sequential 64² passes (fill, FFT 64², evaluation) keep the helper chain at ≈ 0.35 ms, longer than the giants' run;
+  net ≈ +1 %.
