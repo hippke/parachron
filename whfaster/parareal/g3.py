@@ -4,7 +4,8 @@ from ptlib import *
 import ptc, so2
 TERMS=[{2:-4,3:8,4:-3}]          # Earth-Mars-Jupiter
 class G3:
-    def __init__(self, days=360000, terms=TERMS, Ng=32, base=None, **kw):
+    def __init__(self, days=360000, terms=TERMS, Ng=32, base=None, ode=0, **kw):
+        self.ode=ode
         self.G0=ptc.CoarseC(days,heun=1,**kw); self.base=base or self.G0; self.T=days*DAY; self.terms=terms; self.Ng=Ng
     def mean_motions(self, E, g):
         d,R=ptc.lna_disp_R(self.G0,E)
@@ -19,6 +20,20 @@ class G3:
             U=so2.resonant_U2(E,K,Ng=self.Ng)
             nu=sum(k*n[p] for p,k in K.items())
             p0=sum(k*E[p,1] for p,k in K.items()); e0=np.exp(1j*p0); e1=np.exp(1j*(p0+nu*T))
+            if self.ode:      # resonant term integrated numerically (phase feedback through the term's own ln a, lambda)
+                ps=[p for p in K if p<4]
+                def rhs(y):
+                    phi=y[-1]; ex=np.exp(1j*phi); out=np.zeros_like(y); dphi=nu
+                    for q,p in enumerate(ps):
+                        r=2*np.real(U[p]*ex); out[6*q:6*q+6]=r; out[6*q+1]-=1.5*n[p]*y[6*q]
+                        dphi+=K[p]*out[6*q+1]
+                    out[-1]=dphi; return out
+                y=np.zeros(6*len(ps)+1); y[-1]=p0; h=T/self.ode
+                for _ in range(self.ode):
+                    k1=rhs(y); k2=rhs(y+0.5*h*k1); k3=rhs(y+0.5*h*k2); k4=rhs(y+h*k3); y=y+h/6*(k1+2*k2+2*k3+k4)
+                for q,p in enumerate(ps):
+                    g[p,0]+=y[6*q]; g[p,1]=wrap(g[p,1]+y[6*q+1]); g[p,2:]+=y[6*q+2:6*q+6]
+                continue
             for p in K:
                 if p>=4: continue
                 A=2*U[p][0]/(1j*nu)

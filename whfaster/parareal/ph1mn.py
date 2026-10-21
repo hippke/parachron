@@ -5,16 +5,19 @@
 # noend | g3 (Earth-Mars-Jupiter 2nd-order term) | gm, ns (rejected variants)
 import sys, numpy as np, mgc, ph1eval, gfilt
 from ptlib import *
+import itertools
+W2SETS={'a':([P for P in itertools.combinations(range(6),2) if min(P)<4],[(1,2,4),(2,3,4),(1,2,3)]),
+        'p':([P for P in itertools.combinations(range(6),2) if min(P)<4],[])}
 def build(spec):
     comps=None if 'all' in spec else [0]
     mn=int(spec.split('mn')[1][0]) if 'mn' in spec else 0
     dto=float(spec.split('dt')[1].split('_')[0]) if '_dt' in spec else 360
-    CG=mgc.Coarse(360000,Ng=32,dt_out=dto,live=1,comps=comps,pair_ng=gfilt.pair_rule,heun=1,meann=mn,giant_mean=int('gm' in spec),nsec=int('ns' in spec and 'nsub' not in spec),nsub=int(spec.split('nsub')[1].split('_')[0]) if 'nsub' in spec else 0,Ng_sec=int(spec.split('ngs')[1].split('_')[0]) if 'ngs' in spec else 0,sec_ng=gfilt.sec_rule if 'un' in spec else None,gavg=float(spec.split('ga')[1].split('_')[0]) if '_ga' in spec else 0.)
+    CG=mgc.Coarse(360000,Ng=32,dt_out=dto,live=1,comps=comps,pair_ng=gfilt.pair_rule,heun=1,meann=mn,giant_mean=int('gm' in spec),nsec=int('ns' in spec and 'nsub' not in spec),nsub=int(spec.split('nsub')[1].split('_')[0]) if 'nsub' in spec else 0,Ng_sec=int(spec.split('ngs')[1].split('_')[0]) if 'ngs' in spec else 0,sec_ng=gfilt.sec_rule if 'un' in spec else None,gavg=float(spec.split('ga')[1].split('_')[0]) if '_ga' in spec else 0.,w2=W2SETS.get(spec.split('w2')[1].split('_')[0]) if '_w2' in spec else None)
     G=lambda E: CG(E,0)
     if '_L' in spec:
         L=float(spec.split('_L')[1].split('_')[0]); gf=gfilt.GF2(CG,L,end=int('noend' not in spec))
     if 'g3' in spec:
-        import g3; G=g3.G3(base=lambda E: CG(E,0))
+        import g3; G=g3.G3(base=lambda E: CG(E,0),ode=int(spec.split('ode')[1].split('_')[0]) if 'ode' in spec else 0)
     return G
 def calibrated(G, ep, nfit=100):
     """secular-matrix calibration (it. 23): per-slice z = k+ih error of the inner planets modelled as A z_inner,

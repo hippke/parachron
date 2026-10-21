@@ -6,9 +6,9 @@ from ptlib import *
 import meanel
 m=np.array(mass); Mint=np.cumsum(m)[:-1]; mu=Mint+m[1:]
 class Coarse:
-    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0, meann=0, giant_mean=0, nsec=0, sec_ng=None, gavg=0.):
+    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0, meann=0, giant_mean=0, nsec=0, sec_ng=None, gavg=0., w2=None):
         self.days=slice_days; self.T=slice_days*DAY; self.Ng=Ng; self.dt_out=dt_out; self.sec=sec
-        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng if Ng_sec is None else Ng_sec; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun; self.meann=meann; self.giant_mean=giant_mean; self.nsec=nsec; self.sec_ng=sec_ng; self.gavg=gavg
+        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng if Ng_sec is None else Ng_sec; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun; self.meann=meann; self.giant_mean=giant_mean; self.nsec=nsec; self.sec_ng=sec_ng; self.gavg=gavg; self.w2=w2; self._WS=None; self._U2=None
     def table(self, n, E):
         if self.live: th=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps; return th
         if n not in self.tables:
@@ -53,7 +53,9 @@ class Coarse:
         th=th or self.table(n,E); M=E.copy(); M[:self.ni]=th.mean(E)[:self.ni]; return M
     def osc_inner(self, M, n):
         th=self.table(n,M); Ee=M.copy()
-        for _ in range(3): Ee[:self.ni]=M[:self.ni]+th.disp(Ee)[:self.ni]
+        for _ in range(3):
+            Ee[:self.ni]=M[:self.ni]+th.disp(Ee)[:self.ni]
+            if self._WS is not None: Ee[:self.ni]+=self._WS.disp(Ee)[:self.ni]
         return Ee
     def drift(self, M, n, th0=None):
         """Kepler + first-order secular drift of the inner mean elements over one slice"""
@@ -75,6 +77,7 @@ class Coarse:
             D=np.zeros_like(X)
             D[:ni,1]=np.sqrt(mu[:ni]/np.exp(3*X[:ni,0]))+R[:ni,1]
             D[:ni,2:]=R[:ni,2:]
+            if self._U2 is not None: D[:ni]+=self._U2[:ni]
             return D
         X=M.copy()
         for q in range(self.nsub):
@@ -95,6 +98,15 @@ class Coarse:
                 nov=np.sqrt(mu/np.exp(3*E1[:,0])); nov[:self.ni]+=th.secular_rates()[:self.ni,1]
             th=meanel.Theory(m,E1,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng,n_override=nov); th.comps=self.comps
             M=self.mean_inner(E,n,th)
+        self._WS=None; self._U2=None
+        if self.w2 is not None:                  # second-order transform and secular rates (w2triple)
+            import w2triple
+            E1=E.copy(); E1[:self.ni,0]=M[:self.ni,0]
+            WS=w2triple.W2Set(E1,n=np.sqrt(mu/np.exp(3*E1[:,0])),pairs=self.w2[0],triples=self.w2[1])
+            Y=M.copy()
+            for _ in range(3):
+                Y[:self.ni]=E[:self.ni]-th.disp(Y)[:self.ni]-WS.disp(Y)[:self.ni]
+            Y[:self.ni,1]=wrap(Y[:self.ni,1]); M=Y; self._WS=WS; self._U2=WS.U2()
         if getattr(self,'mean_hook',None): M=self.mean_hook(E,th,M)
         if self.nsub:
             outs=self.outerWH(E,2*self.nsub)
