@@ -86,3 +86,19 @@ first-order theory incl. all components), `pint_long` + `freq_ana.py` (10 Myr va
   combinations, Venus–Earth 8:13) → Gate 0/4 catch this early.
 * Cost: 3-D tori are expensive; mitigated by freezing second-order parts per window (Phase 5).
 * Mercury (e = 0.2) may need more harmonics; GR × planet cross terms are negligible (≲ 1e-8 relative).
+
+## 5. Status (Oct 21, 2026, iterations 17–23)
+* Phase 0 done (gate passed). Phase 1 done, with the decisive finding that the first-order theory was not
+  "first-order accurate": small divisors from osculating mean motions, Venus–Earth secular grid too coarse,
+  Uranus/Neptune missing from the secular rates, giants' short-period terms aliased by the drift quadrature, no
+  short-period transform of λ, k, h, q, p. Fixing these (Python prototype) took the k = 2 median from 245 to ≈ 1.5–1.8
+  × noise and the k = 3 worst case from 870 to ≈ 1.6 × noise.
+* Phase 3 partly: Earth–Mars–Jupiter second-order term from first principles (`so2.py`, `g3.py`) — needed.
+* Gate 4 status: k2 ≤ 2 × noise at 6/10 epochs (target ≥ 8/10). Remaining hard epochs 3400, 4500 (Mars), 8160,
+  1030 (Venus/Earth). Tried without a systematic gain: numerical filtering of the mean elements, empirical
+  secular-matrix calibration (removes the 0.25 % secular-frequency error but not the k = 2 limit).
+* Immediate consequence even without K = 2: **every epoch now converges at k = 3** to ≤ 1.6 × noise (round 2 needed
+  the adaptive K ≥ 3 rule with mean K 3.29 and up to 6) — fixed K = 3 at full accuracy, and an adaptive rule
+  "K = 2 if the k = 2 update is small" becomes possible.
+* Next: Jacobian block attribution for the new G at the hard epochs (`jac_new.py`, `jacblock2.py`); then the C
+  port (Phase 5) with cost control — the Python prototype costs ~2 s per call; the C config B 1.0 ms.

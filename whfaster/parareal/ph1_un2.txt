@@ -1,0 +1,11 @@
+   all_mn1_g3_dt180_nsub2_un epoch     0:       163     0.636     0.847
+   all_mn1_g3_dt180_nsub2_un epoch  1030:  1.05e+03      4.85       1.2
+   all_mn1_g3_dt180_nsub2_un epoch  2000:       402      0.77      1.97
+   all_mn1_g3_dt180_nsub2_un epoch  3400:       650      11.8     0.614
+   all_mn1_g3_dt180_nsub2_un epoch  4500:  2.12e+03      12.6      1.51
+   all_mn1_g3_dt180_nsub2_un epoch  5500:       610      1.37     0.519
+   all_mn1_g3_dt180_nsub2_un epoch  6000:       614      1.68     0.637
+   all_mn1_g3_dt180_nsub2_un epoch  7000:       485     0.882      0.38
+   all_mn1_g3_dt180_nsub2_un epoch  8160:  1.52e+03      6.76       1.4
+   all_mn1_g3_dt180_nsub2_un epoch  9300:       350      1.36     0.286
+== all_mn1_g3_dt180_nsub2_un median k1..: 612 1.53 0.742 | worst: 2.12e+03 12.6 1.97 | k2<=2 at 6/10 | 937s
