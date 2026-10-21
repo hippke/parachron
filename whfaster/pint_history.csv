@@ -43,3 +43,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 29,config B N=16 10 Myr contract (7950X),16,986,K 3.77 (tau 3e-6) / 3.35 (1e-5) / 3.11 (3e-5),,,,ref,tau 3e-6 validated at N=16 (9.3e-8 arcsec/yr); 1e-5: 3.8e-7 (within single-run scatter ~3e-7); trace: K*T_F 77% of window
 30,config B staged coarse step (giants on caller; 7950X),16,986,K 3.80,0.02,,,yes,bitwise identical; 2.84-2.86x (was 2.66-2.74)
 31,config B persistent slice threads (7950X),16,986,K 3.80,0.02,,,yes,bitwise identical; 2.97-3.05x
+32,structure/knob scan N=16 (SMT 32 slices; 20/24; slice 789-1380 yr; meann; ng_hi 64; giants 180-1000 d),16-32,493-1380,K 3.43-6,,,,no,986 yr x 16 on physical cores stays optimal; mean-n no K gain; ng_hi too costly

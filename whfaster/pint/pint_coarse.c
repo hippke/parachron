@@ -17,6 +17,12 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
+    c->meann = 0;
+    // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT
+    const char* e;
+    if ((e=getenv("PINT_MEANN"))) c->meann=atoi(e);
+    if ((e=getenv("PINT_NGHI"))) c->ng_hi=atoi(e);
+    if ((e=getenv("PINT_DTOUT"))) c->dt_out_days=atof(e);
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -393,11 +399,21 @@ static void inner_correct(const struct pint_cfg* c, const double* mu, const doub
 // only the inner planets (their grids, the inner-inner pairs, GR); then the giants' grids and the inner-giant pairs.
 struct pctx {
     const struct pint_cfg* c; const double (*E_in)[6]; double (*M2)[6]; const double* mu;
-    struct tctx *x0, *x1; double disp[PINT_NI], R[PINT_NI][6];
+    struct tctx *x0, *x1; double disp[PINT_NI], R[PINT_NI][6], E1[PINT_NP][6];
     int ninner, inner_t[NTASKMAX], nouter, outer_t[NTASKMAX];
 };
 static void p_grid0(void* a, int t){ struct pctx* p=a; task_grid(p->x0,t); }
 static void p_pair0(void* a, int t){ struct pctx* p=a; pairgr_task(p->x0,t); }
+// mean-n: start tables again with the inner planets' ln a replaced by the mean ln a (the giants' grids stay valid)
+static void mean_state(const double E_in[PINT_NP][6], const double disp[PINT_NI], double E1[PINT_NP][6]){
+    memcpy(E1,E_in,sizeof(double)*PINT_NP*6);
+    for (int i=0;i<PINT_NI;i++) E1[i][0]=E_in[i][0]-disp[i];
+}
+static void p_mean(void* a, int t){ (void)t; struct pctx* p=a;
+    table_reduce(p->x0,p->disp,NULL);
+    mean_state(p->E_in,p->disp,p->E1);
+    table_setup(p->x0,p->c,(const double (*)[6])p->E1,1,PINT_NP);
+}
 static void p_pred(void* a, int t){ (void)t; struct pctx* p=a;
     table_reduce(p->x0,p->disp,p->R);
     inner_predict(p->c,p->mu,p->E_in,p->disp,p->R,p->M2);
@@ -418,6 +434,10 @@ static int coarse_staged(const struct pint_cfg* c, const double* mu, const doubl
     // the number of inner tasks of the end table equals that of the start table (same task list)
     int ni=0; for (int t=0;t<x0->ntask;t++) if (x0->tkind[t]!=1) ni++;
     struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{c->maxj+1,x0->ntask,1,PINT_NI,ni}};
+    if (c->meann){
+        struct pjob am={8,{p_grid0,p_pair0,p_mean,p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p,&p},{c->maxj+1,x0->ntask,1,PINT_NI,x0->ntask,1,PINT_NI,ni}};
+        a=am;
+    }
     pool_launch(&a);
     outer_wh(c,E_in,Mg);
     pool_join();
@@ -440,6 +460,7 @@ void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], do
     if (par && coarse_staged(c,mu,E_in,E_out)){ pint_t_total=now()-t0; return; }
     double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
     table_par(c,E_in,disp,R,par);
+    if (c->meann){ double E1[PINT_NP][6]; mean_state(E_in,disp,E1); table_par(c,(const double (*)[6])E1,disp,R,par); }
     const double t1=now();
     inner_predict(c,mu,E_in,disp,R,M2);
     outer_wh(c,E_in,M2);

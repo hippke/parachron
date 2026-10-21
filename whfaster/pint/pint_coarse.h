@@ -21,6 +21,7 @@ struct pint_cfg {
     double pcut_yr;         // drop short-period terms with period > pcut_yr from the transform (0: keep all)
     int ng_hi;              // grid for inner-inner pairs with a_i/a_j >= alpha_hi (power of two, >= ng_ii; 0: off)
     double alpha_hi;
+    int meann;              // 1: start tables rebuilt at the inner planets' mean ln a (mean motions in the small divisors)
 };
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days);
 // G: E_in -> E_out over one slice

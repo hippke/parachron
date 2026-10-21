@@ -1006,3 +1006,29 @@ steps after the window start.
 * Checked: unreachable τ (stops at K_max every window), fixed K (τ = 0), N = 4, 6, 16: no deadlock; same K histogram
   and final Δx (2.84e-4 AU) as before → same trajectory.
 * `pint_pipe 16 360000 3 100 2 1 1 3e-6 6 8 2`: **wall 3.75–3.77 s, speedup 2.97–3.05** (iteration 30: 3.98 s, 2.85).
+
+### Iteration 32 — structure and coarse-model knobs at N = 16 (all rejected)
+New trace after iteration 31: window 37.7 ms = k = 0 sweep 4.3 ms (16 × 0.26) + K̄ × ≈ 8.9 ms. The increment per
+iteration equals the **slowest** slice's fine time + one hop (all slices are on the diagonal of the chain); cores
+8–15 (second CCD) are 3–5 % slower than 0–7 under load (8.45–8.67 vs 8.04–8.22 ms).
+| variant (`pint_pipe … 3e-6 6 8 2`) | K̄ | speedup |
+|---|---|---|
+| reference N = 16 × 986 yr | 3.80 | 2.92–3.05 |
+| N = 32 × 493 yr on all 32 SMT threads (4 / 8 helpers) | 3.74 | 2.13 / 2.01 |
+| N = 24 × 657 yr | 3.92 | 2.62 |
+| N = 20 × 789 yr | 3.95 | 2.45 |
+| N = 16 × 789 yr | 3.77 | 2.85 |
+| N = 16 × 1183 yr | 4.27 | 2.80 |
+| N = 16 × 1380 yr | 4.39 | 2.70 |
+| **mean-n start tables** (`meann`, new option: start tables rebuilt at the inner planets' mean ln a) | 3.82 | 2.73 |
+| 64² grids for V–E and E–M (`ng_hi` 64) | 3.67 | 2.36 |
+| mean-n + 64² (≈ the Python "ln a, mean-n" row of iteration 21) | 3.43 | 2.04 |
+| giants' coarse step 180 d | 3.82 | 2.75 |
+| giants' coarse step 540 / 720 / 1000 d | 6.00 (never converges) | 1.96 |
+* SMT does not pay (each fine solve 1.68× slower), more or shorter slices need as many iterations; 986 yr is optimal.
+* The round-3 ingredients do not translate into fewer iterations at N = 16 with the update-based stop: the mean-n
+  rebuild (free on the parallel critical path, 0.17 ms idle) changes K̄ by nothing; with 64² close-pair grids K̄
+  drops by 10 % but the big pair tasks make the coarse step 2× slower. Stopping at K = 3 needs the k = 2 iterate
+  within τ at all 16 boundaries — the binomial growth along the window dominates, not the per-slice coarse error.
+* New `pint_cfg.meann` (default 0) and environment overrides for experiments in all drivers: `PINT_MEANN`,
+  `PINT_NGHI`, `PINT_DTOUT` (`ptc.Cfg` updated). Bitwise serial = parallel checked for all four combinations.
