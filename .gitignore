@@ -62,3 +62,6 @@ src/.bench_build_flags
 whfaster/parareal/*.pkl
 whfaster/parareal/*.npz
 whfaster/parareal/__pycache__/
+whfaster/pint/pint_test
+whfaster/pint/pint_run
+whfaster/pint/*.so
