@@ -1,0 +1,12 @@
+  noise lna: 2e-12 3e-12 1e-11 1e-11 2e-11 5e-11 4e-12 1e-12 | lam: 4e-07 1e-07 4e-07 1e-07 3e-09 2e-08 4e-10 2e-09
+/home/claude/rebound/whfaster/parareal/meanel.py:22: RuntimeWarning: invalid value encountered in sqrt
+  cE=np.cos(Ea); sE=np.sin(Ea); b=np.sqrt(1-e*e)
+slices 10 x 9856 yr; python F/slice 0.109s, G/slice 0.756s
+  k=0   lna: nan nan nan nan 1e-05 4e-05 8e-07 3e-07 | lam: nan nan nan nan 2e-02 2e-03 1e-04 5e-05
+  k=1   lna: nan nan nan nan nan nan nan nan | lam: nan nan nan nan nan nan nan nan  | pos 1.7e+00 AU
+  k=2   lna: nan nan nan nan nan nan nan nan | lam: nan nan nan nan nan nan nan nan  | pos 4.9e-01 AU
+  k=3   lna: nan nan nan nan nan nan nan nan | lam: nan nan nan nan nan nan nan nan  | pos 7.0e-01 AU
+  k=4   lna: nan nan nan nan nan nan nan nan | lam: nan nan nan nan nan nan nan nan  | pos 8.1e-01 AU
+  k=5   lna: nan nan nan nan nan nan nan nan | lam: nan nan nan nan nan nan nan nan  | pos 4.8e-01 AU
+  k=6   lna: 1e-07 5e-07 4e-06 1e-05 8e-09 2e-08 2e-09 2e-10 | lam: 4e-03 4e-03 9e-02 4e-01 4e-06 9e-06 5e-08 1e-08  | pos 4.2e-01 AU
+k_conv = None

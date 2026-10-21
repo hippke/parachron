@@ -6,14 +6,16 @@ from ptlib import *
 import meanel
 m=np.array(mass); Mint=np.cumsum(m)[:-1]; mu=Mint+m[1:]
 class Coarse:
-    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0):
+    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None):
         self.days=slice_days; self.T=slice_days*DAY; self.Ng=Ng; self.dt_out=dt_out; self.sec=sec
-        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live
+        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng_sec or Ng; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng
     def table(self, n, E):
-        if self.live: return meanel.Theory(m,E,Ng=self.Ng,inner=self.ni)
-        if n not in self.tables: self.tables[n]=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni)
+        if self.live: th=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps; return th
+        if n not in self.tables:
+            self.tables[n]=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); self.tables[n].comps=self.comps
         return self.tables[n]
-    def outerWH(self, E):
+    def outerWH(self, E, nseg=1):
+        """outer planets by WH; returns list of element arrays at nseg+1 equally spaced times (incl. start)"""
         ni=self.ni
         s=rebound.Simulation(); s.add(m=Mint[ni])
         for mm,e in zip(m[ni+1:],E[ni:]):
@@ -23,12 +25,18 @@ class Coarse:
         s.integrator="whfast512"; s.dt=self.dt_out*DAY; s.exact_finish_time=0
         s.integrator.gr_potential=1; s.integrator.corrector=17; s.integrator.kernel=2
         nst=int(round(self.days/self.dt_out)); assert abs(nst*self.dt_out-self.days)<1e-6
-        s.integrator.concatenate_steps=nst; s.steps(1)
-        out=[]
-        for o in s.orbits():
-            si=np.sin(o.inc/2)
-            out.append([np.log(o.a), o.l, o.e*np.cos(o.pomega), o.e*np.sin(o.pomega), si*np.cos(o.Omega), si*np.sin(o.Omega)])
-        return np.array(out)
+        assert nst%nseg==0
+        def els():
+            out=[]
+            for o in s.orbits():
+                si=np.sin(o.inc/2)
+                out.append([np.log(o.a), o.l, o.e*np.cos(o.pomega), o.e*np.sin(o.pomega), si*np.cos(o.Omega), si*np.sin(o.Omega)])
+            return np.array(out)
+        res=[E[ni:].copy()]
+        s.integrator.concatenate_steps=nst//nseg
+        for q in range(nseg):
+            s.steps(1); res.append(els())
+        return res if nseg>1 else res[-1]
     def mean_inner(self, E, n, th=None):
         th=th or self.table(n,E); M=E.copy(); M[:self.ni]=th.mean(E)[:self.ni]; return M
     def osc_inner(self, M, n):
@@ -39,14 +47,37 @@ class Coarse:
         """Kepler + first-order secular drift of the inner mean elements over one slice"""
         th0=th0 or self.table(n,M); ni=self.ni
         nbar=np.sqrt(mu/np.exp(3*M[:,0]))
-        R=th0.secular_rates() if self.sec else np.zeros((8,6))
+        if self.live_sec: R=meanel.Theory(m,M,Ng=self.Ng_sec,inner=ni).secular_rates()
+        else: R=th0.secular_rates() if self.sec else np.zeros((8,6))
         M2=M.copy()
         M2[:ni,1]=wrap(M[:ni,1]+(nbar[:ni]+R[:ni,1])*self.T)
         M2[:ni,2:]+=R[:ni,2:]*self.T
         return M2
+    def drift_rk(self, M, outs):
+        """RK4 over nsub substeps on the inner mean elements; outer elements from the WH samples outs
+        (2*nsub+1 samples: substep boundaries and midpoints)"""
+        ni=self.ni; h=self.T/self.nsub
+        def rate(X, q):
+            Y=X.copy(); Y[ni:]=outs[q]
+            R=meanel.secular_rates_fast(m,Y,Ng=self.Ng_sec,inner=ni)
+            D=np.zeros_like(X)
+            D[:ni,1]=np.sqrt(mu[:ni]/np.exp(3*X[:ni,0]))+R[:ni,1]
+            D[:ni,2:]=R[:ni,2:]
+            return D
+        X=M.copy()
+        for q in range(self.nsub):
+            k1=rate(X,2*q); k2=rate(X+0.5*h*k1,2*q+1); k3=rate(X+0.5*h*k2,2*q+1); k4=rate(X+h*k3,2*q+2)
+            X=X+h/6*(k1+2*k2+2*k3+k4)
+        X[:ni,1]=wrap(X[:ni,1])
+        return X
     def __call__(self, E, n):
         th=self.table(n,E)
         M=self.mean_inner(E,n,th)
-        M2=self.drift(M,n,th)
-        M2[self.ni:]=self.outerWH(E)
+        if self.nsub:
+            outs=self.outerWH(E,2*self.nsub)
+            M2=self.drift_rk(M,outs)
+            M2[self.ni:]=outs[-1]
+        else:
+            M2=self.drift(M,n,th)
+            M2[self.ni:]=self.outerWH(E)
         return self.osc_inner(M2,n+1)

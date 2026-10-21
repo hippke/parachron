@@ -68,7 +68,7 @@ def dEdv(mu, r, v, rel=1e-6):
 
 class Theory:
     """First-order short-period theory around given osculating Jacobi elements E0 (8,6)."""
-    def __init__(self, masses, E0, Ng=64, gr=True, slow_period=None, inner=None):
+    def __init__(self, masses, E0, Ng=64, gr=True, slow_period=None, inner=None, pair_ng=None):
         """inner: if set, only pairs with i < inner (at least one inner planet) and GR for i < inner"""
         self.m=np.array(masses); m=self.m; Np=len(m)-1; self.Np=Np
         Mint=np.cumsum(m)[:-1]          # interior mass for planet i (index i-1)
@@ -82,8 +82,11 @@ class Theory:
         for i in range(Np):
             for j in range(i+1,Np):
                 if inner is not None and i>=inner: continue
-                Ei=np.broadcast_to(E0[i],(Ng,Ng,6)).copy(); Ej=np.broadcast_to(E0[j],(Ng,Ng,6)).copy()
-                Ei[...,1]=lg[:,None]; Ej[...,1]=lg[None,:]
+                Ngp=Ng if pair_ng is None else pair_ng(i,j)
+                if Ngp==0: continue
+                lgp=2*np.pi*np.arange(Ngp)/Ngp; Kp=np.fft.fftfreq(Ngp,1/Ngp)
+                Ei=np.broadcast_to(E0[i],(Ngp,Ngp,6)).copy(); Ej=np.broadcast_to(E0[j],(Ngp,Ngp,6)).copy()
+                Ei[...,1]=lgp[:,None]; Ej[...,1]=lgp[None,:]
                 ri,vi=el_to_rv(self.mu[i],Ei); rj,vj=el_to_rv(self.mu[j],Ej)
                 d=rj-ri; d3=np.sum(d*d,-1)**1.5; rj2=np.sum(rj*rj,-1); rj3=rj2**1.5
                 # on interior i from exterior j
@@ -94,8 +97,8 @@ class Theory:
                                                     - 3*rj*(rdot/rj2/rj3)[...,None])
                 fi=np.einsum('...ec,...c->...e',dEdv(self.mu[i],ri,vi),ai)
                 fj=np.einsum('...ec,...c->...e',dEdv(self.mu[j],rj,vj),aj)
-                Fi=np.fft.fft2(fi,axes=(0,1))/Ng**2; Fj=np.fft.fft2(fj,axes=(0,1))/Ng**2
-                kk=K[:,None]*self.n[i]+K[None,:]*self.n[j]
+                Fi=np.fft.fft2(fi,axes=(0,1))/Ngp**2; Fj=np.fft.fft2(fj,axes=(0,1))/Ngp**2
+                kk=Kp[:,None]*self.n[i]+Kp[None,:]*self.n[j]
                 self.pairs[(i,j)]=(self._sp(Fi,kk,self.n[i],slow_period), self._sp(Fj,kk,self.n[j],slow_period),
                                    Fi[0,0].real, Fj[0,0].real)
         if gr:
@@ -119,12 +122,18 @@ class Theory:
         S=F*inv[...,None]
         S[...,1]+= -1.5*n*F[...,0]*inv**2
         return S
+    comps=None
     def disp(self, E):
         """short-period displacement (8,6) at osculating elements E (only the lambdas are used: first order)"""
+        D=self._disp(E)
+        if self.comps is not None: D[:,[c for c in range(6) if c not in self.comps]]=0
+        return D
+    def _disp(self, E):
         D=np.zeros((self.Np,6),dtype=complex)
         K=self.K
         for (i,j),(Si,Sj,_,_) in self.pairs.items():
-            ph=np.exp(1j*(K[:,None]*E[i,1]+K[None,:]*E[j,1]))
+            Kp=np.fft.fftfreq(Si.shape[0],1/Si.shape[0])
+            ph=np.exp(1j*(Kp[:,None]*E[i,1]+Kp[None,:]*E[j,1]))
             D[i]+=np.einsum('abe,ab->e',Si,ph); D[j]+=np.einsum('abe,ab->e',Sj,ph)
         for i,(Si,_) in self.single.items():
             ph=np.exp(1j*K*E[i,1]); D[i]+=np.einsum('ae,a->e',Si,ph)
@@ -141,3 +150,30 @@ class Theory:
         for (i,j),(_,_,fi0,fj0) in self.pairs.items(): R[i]+=fi0; R[j]+=fj0
         for i,(_,f0) in self.single.items(): R[i]+=f0
         return R
+
+def secular_rates_fast(masses, E, Ng=24, inner=4, gr=True):
+    """first-order secular (averaged) element rates (8,6) at elements E, only pairs with an inner planet;
+    rows >= inner are not filled (outer planets are propagated elsewhere)"""
+    m=np.asarray(masses); Np=len(m)-1
+    Mint=np.cumsum(m)[:-1]; mu=G*(Mint+m[1:])
+    R=np.zeros((Np,6))
+    lg=2*np.pi*np.arange(Ng)/Ng
+    for i in range(min(inner,Np)):
+        for j in range(i+1,Np):
+            Ei=np.broadcast_to(E[i],(Ng,Ng,6)).copy(); Ej=np.broadcast_to(E[j],(Ng,Ng,6)).copy()
+            Ei[...,1]=lg[:,None]; Ej[...,1]=lg[None,:]
+            ri,vi=el_to_rv(mu[i],Ei); rj,vj=el_to_rv(mu[j],Ej)
+            d=rj-ri; d3=np.sum(d*d,-1)**1.5; rj2=np.sum(rj*rj,-1); rj3=rj2**1.5
+            ai=G*m[j+1]*(d/d3[...,None] - rj/rj3[...,None])
+            R[i]+=np.einsum('abec,abc->e',dEdv(mu[i],ri,vi),ai)/Ng**2
+            if j<inner:
+                rdot=np.sum(rj*ri,-1)
+                aj=-G*(Mint[j]+m[j+1])/Mint[j]*m[i+1]*(d/d3[...,None] - rj/rj3[...,None] + ri/rj3[...,None]
+                                                    - 3*rj*(rdot/rj2/rj3)[...,None])
+                R[j]+=np.einsum('abec,abc->e',dEdv(mu[j],rj,vj),aj)/Ng**2
+        if gr:
+            Ei=np.broadcast_to(E[i],(Ng,6)).copy(); Ei[:,1]=lg
+            ri,vi=el_to_rv(mu[i],Ei); rr=np.linalg.norm(ri,axis=-1)
+            agr=(-6*m[0]**2/C_GR**2)*ri/rr[:,None]**4
+            R[i]+=np.einsum('aec,ac->e',dEdv(mu[i],ri,vi),agr)/Ng
+    return R

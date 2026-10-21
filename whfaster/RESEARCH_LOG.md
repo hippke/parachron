@@ -407,3 +407,45 @@ osculating (end tables); tables cached per slice boundary. Correction in osculat
 * Dominant remaining mismatch (`jac2.py`, terms (F'−G')_rc e_c, ln a rows × shear): derivatives w.r.t. the
   **eccentricity vectors** (Mars λ ← Mars k, Mars ln a ← Mars k, Venus ln a ← Earth k/h): the frozen tables have no
   slow-element dependence. Next: tables rebuilt from the actual state (“live”), then a cheap equivalent.
+
+## Iteration 4 — live tables (`parareal/prun.py --live 1`)
+Tables (transform and secular rates) rebuilt from the actual input state at every G call, so G carries the
+slow-element (e, i vector) derivatives. 10 × 986 yr: k = 1…4 max position errors **2.3e-4, 6.7e-6, 5.5e-8,
+2.7e-8 AU** (noise 3.4e-8 AU): converged at **k = 3** (criterion from here on: max position error over all boundaries
+≤ 3 × the asm-vs-C noise of the fine solver over the same span). Ablation: live secular rates only (frozen transform)
+k = 4; frozen everything k = 6. Contraction ≈ 1e-2 per iteration.
+10 × 9856 yr slices: Euler secular step unstable (Mars e grows 0.09 → 0.28 in 4 slices: 0.8 rad of g4 rotation per
+step). With RK4 (2 substeps, averaged rates on 32² grids, giant elements sampled from their WH run): k = 5–6
+(3.9e-7 AU over 100 kyr). One-slice diagnostic (`jac1.py`): Mars' **mean** a has a genuine slow phase dependence
+(∂ ln ā/∂λ ≈ 3e-4 over 10 kyr; second-order/three-body near-resonances, not in a first-order theory); its effect grows
+∝ T³ (mismatch × shear × e0), so slices of ~1 kyr are the natural size.
+
+## Iteration 5 — the cheapest coarse model that keeps k = 3 (10 × 986 yr)
+| variant | k |
+|---|---|
+| Ng = 48, all six element components transformed | 3 |
+| Ng = 32 | 3 |
+| Ng = 24 | 4 |
+| Ng = 32, transform of ln a and λ only | 3 |
+| **Ng = 32, transform of ln a only** (k, h, q, p, λ mean = osculating) | **3** |
+| + pairs with Uranus/Neptune dropped | 3 |
+| + pairs with Saturn dropped too | 4 |
+| + inner–Jupiter/Saturn pairs on 16² grids (inner–inner 32²) | **3** (config A) |
+| inner–inner 28² | 4 |
+| α/e-based adaptive grids (8–32) | diverges at k = 2 (aliasing; not pursued) |
+
+**Config A** (kept): ln a short-period transform only (d ln a/dt = 2a/μ · v·a_pert — one scalar per grid point),
+6 inner–inner pairs on 32², 8 inner–{Jupiter, Saturn} pairs on 16² (8192 grid points per table), first-order secular
+rates of λ, k, h, q, p from the same grid (mean over the grid, no FFT), Euler drift, giants by WH (180 or 360 d),
+tables rebuilt per call.
+
+## Iteration 6 — robustness of config A
+| case | k |
+|---|---|
+| 10 × 986 yr from t = 0 | 3 |
+| giants' WH step 360 d instead of 180 d | 3 |
+| 10 × 986 yr starting at t = 1 Myr | 3 |
+| 20 × 986 yr | 4 (k = 3: 5.9e-7 AU vs 3 × 1.4e-7) |
+
+Model speedups (S = N/(N r + k(1 + r))): N = 10, k = 3: 2.7 at r = 0.05, 2.3 at r = 0.1; N = 20, k = 4: 3.8 at
+r = 0.05; N = 5, k = 3: 1.5 at r = 0.05. The coarse cost r in C is the open number → iteration 7.
