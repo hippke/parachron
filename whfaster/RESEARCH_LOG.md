@@ -591,6 +591,7 @@ Same protocol as iteration 12 (serial C reference; serial asm). Frequency differ
 K = 3, ≈ 3e-7 at K = 4 (≈ WH truncation error at 6 d), ≈ 1e-7 at K = 5; energy unbiased and Brouwer-like for all K.
 
 ## Round 2 result (speedup at stated accuracy)
+*Superseded by iteration 15 (adaptive stopping rule: 2.3× on 10 cores at K = 5-level fidelity); current summary in `PINT_SUMMARY.md`.*
 Measured on one core of this host: fine slice T_F = 11.5–12.5 ms (986 yr, 6 d steps), coarse step T_G = 1.0 ms
 (r = 0.083); iteration counts measured (10 × 986-yr windows); pipelined schedule validated at N = 2 (0.77–0.86
 measured vs 0.86 predicted). Wall-clock speedup S = N/(N r + K(1 + r)), core-hours = N/S × serial:
