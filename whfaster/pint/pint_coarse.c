@@ -8,7 +8,7 @@
 #include <time.h>
 #include <pthread.h>
 #define DAY (2.*M_PI/365.25)
-#define NGMAX 64
+#define NGMAX 128
 static const double CGR = 10065.32;
 __thread double pint_t_tables=0, pint_t_outer=0, pint_t_total=0;
 __thread double pint_prof[4]={0,0,0,0};

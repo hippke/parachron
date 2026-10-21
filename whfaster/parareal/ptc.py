@@ -21,3 +21,8 @@ def lna_disp(cg, E):
     Ei=np.ascontiguousarray(E,dtype=np.float64); d=np.zeros(4)
     _lib.pint_lna_disp(ctypes.byref(cg.c),Ei.ctypes.data,d.ctypes.data,None)
     return d
+
+def lna_disp_R(cg, E):
+    Ei=np.ascontiguousarray(E,dtype=np.float64); d=np.zeros(4); R=np.zeros((4,6))
+    _lib.pint_lna_disp(ctypes.byref(cg.c),Ei.ctypes.data,d.ctypes.data,R.ctypes.data)
+    return d,R

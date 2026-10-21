@@ -6,9 +6,9 @@ from ptlib import *
 import meanel
 m=np.array(mass); Mint=np.cumsum(m)[:-1]; mu=Mint+m[1:]
 class Coarse:
-    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None):
+    def __init__(self, slice_days, Ng=64, dt_out=180, sec=1, ninner=4, sec2=0, live=0, live_sec=0, Ng_sec=None, nsub=0, comps=None, pair_ng=None, heun=0):
         self.days=slice_days; self.T=slice_days*DAY; self.Ng=Ng; self.dt_out=dt_out; self.sec=sec
-        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng_sec or Ng; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng
+        self.ni=ninner; self.tables={}; self.sec2=sec2; self.live=live; self.live_sec=live_sec; self.Ng_sec=Ng_sec or Ng; self.nsub=nsub; self.comps=comps; self.pair_ng=pair_ng; self.heun=heun
     def table(self, n, E):
         if self.live: th=meanel.Theory(m,E,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng); th.comps=self.comps; return th
         if n not in self.tables:
@@ -80,4 +80,13 @@ class Coarse:
         else:
             M2=self.drift(M,n,th)
             M2[self.ni:]=self.outerWH(E)
+            if self.heun:
+                ni=self.ni; th1=self.table(n+1,M2)
+                R0=th.secular_rates(); R1=th1.secular_rates()
+                nbar=np.sqrt(mu/np.exp(3*M[:,0]))
+                M2[:ni,1]=wrap(M[:ni,1]+(nbar[:ni]+0.5*(R0[:ni,1]+R1[:ni,1]))*self.T)
+                M2[:ni,2:]=M[:ni,2:]+0.5*(R0[:ni,2:]+R1[:ni,2:])*self.T
+                Ee=M2.copy()
+                for _ in range(3): Ee[:ni]=M2[:ni]+th1.disp(Ee)[:ni]
+                return Ee
         return self.osc_inner(M2,n+1)
