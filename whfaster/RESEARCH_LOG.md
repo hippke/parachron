@@ -786,3 +786,25 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   (1e-5 → 2–7e-7). Fits from other epochs transfer only 2–5 × (A depends on the slow state) and short fits
   (≤ 30 slices) are ill-conditioned. In production the defects of the previous converged windows are free
   (parareal computes F − G anyway); A is held fixed within a window so G stays one function per window.
+
+## Iteration 24 — second-order theory proper (`w2pair.py`, `w2triple.py`)
+* Jacobian attribution of the new G (`jac_new.py`, `jacblock2.py`): at 4500 the k = 2 limit (12) is the Mars ln a row
+  (exact row → 2.5), at 8160 (9) the Venus and Earth rows (λ, e0 and J equally). The E–M–J term removes 60–100 % of
+  the Mars ln a/ln a Jacobian mismatch; its amplitude agrees with a direct measurement (|A| 1.45e-7 vs 1.55e-7) but
+  its phase differs by ~30°; integrating it numerically (pendulum feedback) changes nothing; no other three-planet
+  term with P > 400 yr is significant (`so2_scan.py`). Empirical amplitude refits of the term: no gain.
+* Pointwise residual of the mean ln a with **live** tables (tests with frozen tables over 200 yr were misleading):
+  Mars 5.9e-8, Earth 8.9e-9, Venus 4.9e-9 at 4.5 Myr. Three-body test (Sun+Mars+Jupiter): the residual scales as
+  m_J² — second order.
+* `w2triple.TripleW2`: second-order transform W2 and secular rates U2 on the 2-D (pair) or 3-D (triple) torus by
+  grid products f2 = Σ ∂V1/∂x · W1 + 1.125 n W1_lna² and FFT division; cross-only triples + pairs combine without
+  double counting (verified: identical to the full triple); near-resonant harmonics (P > 500 yr) excluded (kept as
+  resonant terms). **Displacements of the giants must be excluded**: G already uses the giants' osculating elements
+  from their WH run, and the J–S great-inequality W1 gave wrong huge terms. Regression of the measured residual on
+  each group's predicted W2: E–M–J cross 1.01, V–E–J cross 0.98–1.18 (correct), but they explain only part of the
+  Mars residual (3.1e-8 of 5.9e-8).
+* **The second-order secular rates U2 explain the secular-matrix error exactly**: U2·T per slice at 4.5 Myr
+  = −(calibrated δz) for all four inner planets (Mars: −1.49e-5 + 5.8e-6 i vs 1.49e-5 − 4.0e-6 i), dominated by the
+  Mars–Jupiter same-pair term. With W2 + U2 (14 pairs + V–E–J, E–M–J, V–E–M triples) in the coarse step the
+  per-slice k errors drop 13–14 × (Venus 4.7e-6 → 3.7e-7, Earth 4.6e-6 → 3.5e-7, Mars 5.7e-6 → 4.1e-7), q 2–6 ×;
+  λ errors only 5–20 %.
