@@ -15,6 +15,7 @@ int main(int argc, char** argv){
     pint_sim_to_el(r,E);
     struct pint_cfg c; pint_default_cfg(&c, ss_mass, slice);
     if (argc>3) c.dt_out_days=atof(argv[3]);
+    if (argc>4) c.kernel=atoi(argv[4]);
     pint_coarse(&c,E,Eo);
     printf("E_in/E_out:\n");
     for (int i=0;i<PINT_NP;i++){ for (int e=0;e<6;e++) printf("%.17g ",Eo[i][e]); printf("\n"); }

@@ -23,3 +23,8 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 12,config A Euler K=3 10 Myr,10,986,3,0.077,,2.50,no,secular frequency bias up to 1e-5 arcsec/yr (Mars g4)
 12,config A Euler K=4 10 Myr,10,986,4,0.077,,2.00,ok,frequency shifts <=2e-7
 12,config B (Heun) K=3 10 Myr,10,986,3,0.083,1.40,2.45,yes,frequency shifts <=2.6e-7 (chaos-noise level); energy OK
+13,secant-enhanced parareal (rank 1),10,986,3,0.083,,,no,k=2 error 1.2e-6 (plain 6.9e-6) but still K=3
+13,coarse knob sweep N=20 (64^2 grids / U-N pairs / 180 d / cutoffs),20,986,3-4,,,,no,64^2 grids worse; 32^2 optimal
+14,config B Heun K=3 10 Myr second ICs,10,986,3,0.083,,2.45,partial,frequency shifts up to 3.3e-6 (10x WH error)
+14,config B Heun K=4 10 Myr second ICs,10,986,4,0.083,,1.94,yes,frequency shifts <=3.2e-7 (WH-error level)
+14,config B Heun K=5 10 Myr second ICs,10,986,5,0.083,,1.61,yes,frequency shifts <=1.2e-7

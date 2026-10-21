@@ -75,7 +75,9 @@ int main(int argc, char** argv){
     const int skern = argc>10 ? atoi(argv[10]) : 2;   // kernel of the serial run
     const int proj = argc>11 ? atoi(argv[11]) : 0;    // 1: energy projection of corrected boundary states
     const int heun = argc>12 ? atoi(argv[12]) : 0;
-    const double pert = argc>13 ? atof(argv[13]) : 0.;   // initial x perturbation of all planets [AU]     // 1: measure boundary jumps (extra fine sweeps, kernels 2 and 1)
+    const double pert = argc>13 ? atof(argv[13]) : 0.;   // initial x perturbation of all planets [AU]
+    const int calib = argc>14 ? atoi(argv[14]) : 0;      // 1: add previous window's mean defect (inner k,h,q,p) to G
+    double cal[PINT_NP][6]; memset(cal,0,sizeof cal); double cacc[PINT_NP][6]; int ccnt=0;
     FILE* fj=NULL; if (diag){ char f2[512]; snprintf(f2,sizeof f2,"%s_jumps.txt",argv[1]); fj=fopen(f2,"w"); }
     struct pint_cfg c; pint_default_cfg(&c, ss_mass, slice_days); c.heun=heun;
     char fn[512];
@@ -101,7 +103,10 @@ int main(int argc, char** argv){
     memcpy(U[0],E0,sizeof(el)); write_rec(fp,0.,E0);
     const double t0=now(); double tGtot=0; long nG=0, nF=0;
     for (int w=0; w<W; w++){
-        for (int n=0;n<N;n++){ double a=now(); pint_coarse(&c,U[n],U[n+1]); tGtot+=now()-a; nG++; memcpy(Gold[n+1],U[n+1],sizeof(el)); }
+        for (int n=0;n<N;n++){ double a=now(); pint_coarse(&c,U[n],U[n+1]); tGtot+=now()-a; nG++;
+            for (int i=0;i<PINT_NI;i++) for (int e=2;e<6;e++) U[n+1][i][e]+=cal[i][e];
+            memcpy(Gold[n+1],U[n+1],sizeof(el)); }
+        memset(cacc,0,sizeof cacc); ccnt=0;
         int k; double upd=0;
         for (k=1; k<=K+3; k++){
             if (k>K && !(xtol>0 && upd>xtol)) break;
@@ -114,10 +119,13 @@ int main(int argc, char** argv){
             memcpy(Un[k],Fv[k-1],sizeof(el));
             for (int n=k;n<N;n++){
                 el g; double a=now(); pint_coarse(&c,Un[n],g); tGtot+=now()-a; nG++;
+                for (int i=0;i<PINT_NI;i++) for (int e=2;e<6;e++) g[i][e]+=cal[i][e];
                 for (int i=0;i<PINT_NP;i++) for (int e=0;e<6;e++){
                     double d=Fv[n][i][e]-Gold[n+1][i][e]; if (e==1) d=wrapd(d);
                     Un[n+1][i][e]=g[i][e]+d;
+                    if (k==K && i<PINT_NI && e>=2) cacc[i][e]+=d;
                 }
+                if (k==K) ccnt++;
                 for (int i=0;i<PINT_NP;i++) Un[n+1][i][1]=wrapd(Un[n+1][i][1]);
                 if (proj) project_energy(Un[n+1], energy_el(Un[n]) + (EF[n]-EU[n]));
                 memcpy(Gold[n+1],g,sizeof(el));
@@ -126,6 +134,7 @@ int main(int argc, char** argv){
             memcpy(U,Un,sizeof(el)*(N+1));
         }
         fprintf(fl,"%d %d %.3e\n",w,k-1,upd);
+        if (calib && ccnt>0){ for (int i=0;i<PINT_NI;i++) for (int e=2;e<6;e++) cal[i][e]+=cacc[i][e]/ccnt; }
         if (diag){
             // jump at boundary n: U_n - F(U_{n-1}) (energy, position); reference: F with kernel 1 vs kernel 2
             static el Fd[NMAX+1];
@@ -137,7 +146,17 @@ int main(int argc, char** argv){
                 ww->gr_potential=1; ww->corrector=17; ww->kernel=1; ww->concatenate_steps=lround(slice_days/6.);
                 reb_simulation_steps(s,1); pint_sim_to_el(s,F1); reb_simulation_free(s);
                 const double eF=energy_el(Fd[n]), eU=energy_el(U[n+1]), e1=energy_el(F1);
-                fprintf(fj,"%d %d %.6e %.6e %.6e %.6e\n",w,n,(eU-eF)/fabs(eF),(e1-eF)/fabs(eF),poserr(U[n+1],Fd[n]),poserr(F1,Fd[n]));
+                fprintf(fj,"%d %d %.6e %.6e %.6e %.6e",w,n,(eU-eF)/fabs(eF),(e1-eF)/fabs(eF),poserr(U[n+1],Fd[n]),poserr(F1,Fd[n]));
+                for (int i=0;i<PINT_NI;i++){
+                    // jumps of z = k + i h and zeta = q + i p: components along (radial) and across (tangential) the vector
+                    for (int v=0; v<2; v++){
+                        const double zr=Fd[n][i][2+2*v], zi=Fd[n][i][3+2*v], az=hypot(zr,zi);
+                        const double dr=U[n+1][i][2+2*v]-zr, di=U[n+1][i][3+2*v]-zi;
+                        const double d1r=F1[i][2+2*v]-zr, d1i=F1[i][3+2*v]-zi;
+                        fprintf(fj," %.4e %.4e %.4e %.4e",(dr*zr+di*zi)/az,(di*zr-dr*zi)/az,(d1r*zr+d1i*zi)/az,(d1i*zr-d1r*zi)/az);
+                    }
+                }
+                fprintf(fj,"\n");
             }
         }
         for (int n=1;n<=N;n++) write_rec(fp,((long)w*N+n)*Tsl,U[n]);

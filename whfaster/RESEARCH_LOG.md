@@ -561,3 +561,45 @@ modelled wall-clock speedup 2.45 on 10 cores (25 % efficiency), 3.3 on 20 cores 
   The 64² failure is not a small-divisor effect (cutoff does not cure it); 32² is the sweet spot.
 * The "≤ 3 × noise" criterion depends on the noise realisation: N = 20, k = 3 gives 1.7 × (noise from boundary-
   chained references) or 3.5 × (continuous serial references) → N = 20 is borderline between K = 3 and 4.
+
+## Iteration 14 — second 10 Myr validation (different ICs: all planets' x + 1e-6 AU): K = 3 is not enough
+Same protocol as iteration 12 (serial C reference; serial asm). Frequency differences vs serial C [″/yr]:
+
+| | asm | Heun K=3 | Heun K=3 + defect calibration | Heun K=4 | Heun K=5 |
+|---|---|---|---|---|---|
+| g1 | −6e-10 | +2.5e-7 | +3.0e-7 | −1.6e-7 | +2.9e-8 |
+| g4 | +3e-10 | **−2.2e-6** | −2.0e-6 | +3.1e-8 | −2.0e-9 |
+| s1 | +6e-10 | +7.9e-7 | +4.9e-7 | +3.2e-7 | −1.2e-7 |
+| s2 = s3 | −4e-10 | **+3.3e-6** | +3.0e-6 | −8.0e-9 | −1.5e-8 |
+| s4 | −2e-10 | +1.7e-6 | +1.6e-6 | −4.3e-8 | +2.1e-8 |
+| giants | ≤ 1.5e-8 | ≤ 1.9e-8 | ≤ 2.3e-8 | ≤ 1.8e-8 | ≤ 2.8e-8 |
+
+* With these ICs Heun K = 3 shifts the inner planets' frequencies by up to 3.3e-6 ″/yr — 10× the WH truncation error
+  at 6 d (round 1: dg1 −8.8e-7, ds1 +3.4e-7). Iteration 12's K = 3 result (≤ 2.6e-7) was a favourable realisation.
+* Defect calibration (G + previous window's mean inner k, h, q, p defect) does not help → not a window-mean offset.
+* Boundary-jump statistics in z = k + ih and ζ = q + ip (40 windows, components along/across the vector): no
+  significant mean at K = 3 or 4 (e.g. Mercury ζ tangential +9e-14 ± 7e-14 per boundary at K = 4, which would move s1
+  by only ~3e-10 ″/yr); rms z jumps 1e-11 (K = 3) → 2e-12 (K = 4) for Mercury, ζ jumps ~1e-11–1e-10 at both K
+  (vs round-off 1e-15–6e-14).
+* Chaos/IC-sensitivity reference (serial, all planets' x perturbed by δ): the 10 Myr frequencies depend linearly on
+  δ: s2 shifts 1e-7, 9e-7, 9.6e-6, 9.4e-5 ″/yr for δ = 1e-9 … 1e-6 AU (all planets shift, giants included). The
+  parareal pattern differs (inner planets only, giants unaffected).
+* The deviations shrink with K and change sign between K = 4 and 5 (Mercury s1 +3.2e-7 → −1.2e-7): a
+  convergence-level effect, not a fixed bias.
+
+**Conclusion of round 2 on accuracy:** secular-frequency fidelity over 10 Myr (worst inner planet) ≈ 3e-6 ″/yr at
+K = 3, ≈ 3e-7 at K = 4 (≈ WH truncation error at 6 d), ≈ 1e-7 at K = 5; energy unbiased and Brouwer-like for all K.
+
+## Round 2 result (speedup at stated accuracy)
+Measured on one core of this host: fine slice T_F = 11.5–12.5 ms (986 yr, 6 d steps), coarse step T_G = 1.0 ms
+(r = 0.083); iteration counts measured (10 × 986-yr windows); pipelined schedule validated at N = 2 (0.77–0.86
+measured vs 0.86 predicted). Wall-clock speedup S = N/(N r + K(1 + r)), core-hours = N/S × serial:
+
+| target accuracy | K | 10 cores | 20 cores (K+1) |
+|---|---|---|---|
+| frequencies ≲ 3e-6 ″/yr, energy unbiased | 3 | **2.45×** (4.1× core-h) | 3.3× |
+| frequencies ≲ 3e-7 ″/yr (≈ WH 6 d error) | 4 | **1.94×** (5.2× core-h) | 2.8× |
+| frequencies ≲ 1e-7 ″/yr | 5 | 1.61× (6.2× core-h) | 2.45× |
+
+The user's example target ("2× with 5× the cores") is not reached at research-grade accuracy; "≈ 2× with 10× the
+cores" is (K = 4). Not yet measured on a ≥ 10-core machine (this host has 2 vCPUs): `pint/README.md`.
