@@ -12,10 +12,20 @@ subsystem; energy projection of the corrected boundary states.
 
 ## Build (needs the fork's `src/librebound.so`)
     cd ../../src && make -j OPENGL=0 SERVER=0 librebound.so && cd -
-    # edit REB= in Makefile if the repository is not at /home/claude/rebound
-    make pint_pipe pint_run pint_long pint_test
+    make pint_pipe pint_long test_par     # REB defaults to ../../src of this checkout
 
-## Measure the wall-clock speedup on a machine with >= 10 physical cores
+## Run on a machine with 16 physical cores (measured on an AMD Ryzen 9 7950X, see ../RESEARCH_LOG.md it. 28-38)
+    # arguments: N slice_days K_min windows kernel serial pin tol_AU K_max helpers parmode
+    ./pint_pipe 16 360000 3 100 1 1 1 3e-6 6 8 2    # reference accuracy: ~3.0x, frequencies within 1e-7 "/yr
+    ./pint_pipe 16 360000 3 100 1 1 1 1e-5 6 8 2    # validated by a 7-run ensemble: ~3.2x
+    PINT_OUT=run ./pint_pipe 16 360000 3 5070 1 0 1 3e-6 6 8 2   # 80 Myr, trajectory in run_pr.bin, no serial
+    # AVX2-only CPUs (no AVX-512): kernel argument 3; on the 7950X kernel 1 (assembly) is 8 % faster than 2
+Environment: `PINT_OUT` (trajectory), `PINT_PERT` (IC shift), `PINT_SERONLY`/`PINT_DT` (serial reference only, its
+step), `PINT_JR` (default 1: WHFast512 `jacobi_recursive`, removes an energy drift of +7e-17 per kernel call),
+`PINT_CHUNKS`, `PINT_TRACE`, `PINT_UPDDIAG`, coarse-step experiments `PINT_MEANN`, `PINT_NGHI`, `PINT_ALPHAHI`,
+`PINT_DTOUT`. Use physical cores only (slice n is pinned to CPU n) and an otherwise idle machine.
+
+## Old (round 2) usage on 10 cores
     ./pint_pipe 10 360000 3 20 2 1 1 3e-6 6   # recommended: 10 cores, adaptive K (>=3, stop when update <= 3e-6 AU)
     ./pint_pipe 10 360000 3 20          # fixed K=3 (faster, but secular frequencies only to ~3e-6 arcsec/yr)
     ./pint_pipe 20 360000 4 10          # 20 cores, K=4
