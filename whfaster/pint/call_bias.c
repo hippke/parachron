@@ -28,5 +28,5 @@ int main(int argc,char**argv){ JR=argc>6?atoi(argv[6]):0;
     reb_simulation_free(a); reb_simulation_free(b);
   }
   const double m=s1/M, sd=sqrt(s2/M-m*m);
-  printf("jacobi_recursive %d kernel %d corrector %2d gr %d: extra energy per call %+.2e +- %.1e\n",kern,corr,gr,m,sd/sqrt(M));
+  printf("kernel %d corrector %2d gr %d jacobi_recursive %d: extra energy per call %+.2e +- %.1e\n",kern,corr,gr,JR,m,sd/sqrt(M));
 }
