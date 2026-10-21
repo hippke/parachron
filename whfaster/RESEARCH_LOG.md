@@ -1142,3 +1142,28 @@ parareal τ 3e-6 **+8.6e-11, growing linearly** (+1.44e-11 at 10 Myr, +4.0e-11 a
   +11e-17). `test_jr.c`: 1 vs 0 agree to ≤ 8e-16 after one 10-step call for N_systems = 1, 2, 4 (C kernels 3, 4).
 * Long runs re-planned: the τ = 1e-5 Gyr run with the biased transformation was cancelled; added a serial run with the
   fix (`s0jr`) and, after the τ = 3e-6 run finishes, the τ/K_min scan and a 1 Gyr parareal run with the fix (`p3jr`).
+* 1 Gyr parareal τ 3e-6 (matrix transform, `p3`): 0.986 Gyr in 3152 s (52.5 min; three serial runs shared SMT
+  siblings, so not a timing), K̄ 3.78 (K = 3/4/5/6: 19544/38282/3854/820).
+
+### Iteration 37 — tolerance and K_min scan against the time-step error (`pint/tau_ana.py`, `runs/tau/`)
+Hard ICs, 10 Myr, `PINT_JR=1`, kernel 2; frequency errors vs the dt = 3 d serial run; "extra" = largest difference
+to the dt = 6 d serial run (whose own largest error vs dt 3 d is 5.1e-6 ″/yr, Mars g4). Single realisation.
+| run | K̄ (K histogram) | g4 | g6 | s2 | max err | extra vs dt 6 |
+|---|---|---|---|---|---|---|
+| serial dt 6 / 8 / 12 d | — | −5.1e-6 / −1.0e-5 / −2.6e-5 | −1.6e-6 / −3.2e-6 / −7.9e-6 | +1.1e-6 / +2.1e-6 / +5.7e-6 | 5.1e-6 / 1.0e-5 / 2.6e-5 | 0 / 5.2e-6 / 2.0e-5 |
+| K_min 3, τ 3e-6 (JR 0) | 3.75 | −5.1e-6 | −1.7e-6 | +1.1e-6 | 5.1e-6 | 1.2e-7 |
+| K_min 3, τ 1e-5 (JR 0) | 3.35 | −5.4e-6 | −1.7e-6 | +1.5e-6 | 5.4e-6 | 4.2e-7 |
+| K_min 3, τ 3e-5 | 3.11 (557/66/2) | −5.5e-6 | −1.7e-6 | +1.8e-6 | 5.5e-6 | 6.9e-7 |
+| K_min 3, τ 1e-4 | 3.02 (612/12/1) | −6.4e-6 | −1.7e-6 | +3.1e-6 | 6.4e-6 | 2.0e-6 |
+| K_min 3, τ 3e-4 | 3.00 | −8.4e-6 | −1.7e-6 | +6.3e-6 | 8.4e-6 | 5.2e-6 |
+| K_min 3, τ 1e-3 | 3.00 | −3.6e-6 | −1.7e-6 | −9e-8 | 3.6e-6 | 1.5e-6 |
+| K_min 2, τ 1e-4 | 3.01 (K=2: 9) | −7.2e-6 | −1.9e-6 | +4.2e-6 | 7.2e-6 | 3.1e-6 |
+| K_min 2, τ 3e-4 | **2.62** (243/377/5) | −2.3e-6 | **−1.2e-5** | −1.3e-6 | 1.2e-5 | 1.1e-5 |
+| K_min 2, τ 1e-3 | **2.11** (554/71) | −6.1e-6 | **−2.9e-5** | +2.4e-6 | 2.9e-5 | 2.8e-5 |
+Energy vs the dt = 6 d serial run: within ±1e-11 in all parareal runs.
+* With K_min = 3 the iteration count reaches its floor (3.0) at τ ≈ 1e-4; τ 3e-5 / 1e-4 add 14 % / 40 % to the
+  dt = 6 d error (i.e. "between dt 6 and 8 d"); τ = 1e-3 at the floor shows a smaller error by chance (single run).
+* K_min = 2 finally gives K̄ < 3 (2.62 at τ 3e-4, 2.11 at 1e-3), but a **Saturn g6 shift** appears (−1.2e-5,
+  −2.9e-5) that grows with τ: the k = 2 iterate still carries part of the coarse step's own giants error (WH at 360 d,
+  whose g6 error is large) — a systematic error, not noise. Accuracy ≈ dt 8–12 d, which a serial run gets for 0.75–0.5
+  of the cost; parareal at K̄ 2.1–2.6 is still ≈ 2× faster than such a serial run. To be checked with an ensemble.
