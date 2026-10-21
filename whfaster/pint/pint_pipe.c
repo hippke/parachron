@@ -14,7 +14,7 @@
 // Prints wall-clock of the parareal run and of the serial run of the same span, and the final-state difference.
 // Environment: PINT_OUT=prefix writes the accepted boundary states (<prefix>_pr.bin) and, with serial=1, the serial
 // run (<prefix>_ser<kernel>.bin), records (t, E_tot incl. GR, E[8][6]) as in pint_long; PINT_PERT=d shifts the x of
-// all planets by d AU; PINT_SERONLY=1 runs only the serial reference, PINT_DT its time step; PINT_TRACE, PINT_UPDDIAG: diagnostics.
+// all planets by d AU; PINT_SERONLY=1 runs only the serial reference, PINT_DT its time step; PINT_JR=0/1 WHFast512 jacobi_recursive (default 1); PINT_TRACE, PINT_UPDDIAG: diagnostics.
 #define _GNU_SOURCE
 #include "pint_coarse.h"
 #include "integrator_whfast512.h"
@@ -32,6 +32,8 @@
 typedef double el[PINT_NP][6];
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 #include <stdatomic.h>
+static int jr=1, nchunk=10;   // PINT_CHUNKS: kernel calls per speculative fine slice (abandonment granularity)
+static int jr_dummy=1;   // PINT_JR: WHFast512 jacobi_recursive for fine and serial runs (default 1, no energy drift per call)
 static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6, npar=0, parmode=1, M=1; static double tol=0.;   // M: slices per thread (1 or 2)
 // window state is double-buffered by window parity, so that the persistent slice threads can start window w+1 while
 // others still finish (abandon) speculative work of window w
@@ -66,11 +68,11 @@ static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
-    w->gr_potential=1; w->corrector=17; w->kernel=fkern;
+    w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=fkern;
     const long nst=lround(slice_days/6.);
-    if (tol>0. && nst%10==0){
-        w->concatenate_steps=nst/10;
-        for (int q=0;q<10;q++){
+    if (tol>0. && nchunk>1 && nst%nchunk==0){
+        w->concatenate_steps=nst/nchunk;
+        for (int q=0;q<nchunk;q++){
             const int st=atomic_load(stp);
             if (st>=0 && st<kneed){ reb_simulation_free(s); return 0; }
             reb_simulation_steps(s,1);
@@ -85,13 +87,13 @@ static struct reb_simulation* fine_sim(const el Ein){
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
-    w->gr_potential=1; w->corrector=17; w->kernel=fkern;
+    w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=fkern;
     return s;
 }
 static int fine2(const el Ea, const el Eb, el Oa, el Ob, int kneed, atomic_int* stp){
     struct reb_simulation* a=fine_sim(Ea); struct reb_simulation* b=fine_sim(Eb);
     const long nst=lround(slice_days/6.);
-    const int nch = (tol>0. && nst%10==0) ? 10 : 1;
+    const int nch = (tol>0. && nchunk>1 && nst%nchunk==0) ? nchunk : 1;
     for (int q=0;q<nch;q++){
         const int st=atomic_load(stp);
         if (nch>1 && st>=0 && st<kneed){ reb_simulation_free(a); reb_simulation_free(b); return 0; }
@@ -235,6 +237,8 @@ int main(int argc, char** argv){
     if (M<1 || M>2 || N%M){ fprintf(stderr,"slices per thread must be 1 or 2 and divide N\n"); return 1; }
     if (npar>0) pint_set_threads(npar);
     if (getenv("PINT_UPDDIAG")) upd_diag=atoi(getenv("PINT_UPDDIAG"));
+    if (getenv("PINT_JR")) jr=atoi(getenv("PINT_JR"));
+    if (getenv("PINT_CHUNKS")) nchunk=atoi(getenv("PINT_CHUNKS"));
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     pint_default_cfg(&cfg, ss_mass, slice_days);
     if (fkern!=2) cfg.kernel = fkern;
@@ -249,7 +253,7 @@ int main(int argc, char** argv){
         if (fabs(slice_days/sdt-lround(slice_days/sdt))>1e-9){ fprintf(stderr,"PINT_DT must divide the slice\n"); return 1; }
         s->dt=sdt*DAY; s->exact_finish_time=0; reb_simulation_set_integrator(s,"whfast512");
         struct reb_integrator_whfast512_state* w=s->integrator.state;
-        w->gr_potential=1; w->corrector=17; w->kernel=fkern; w->concatenate_steps=lround(slice_days/sdt);
+        w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=fkern; w->concatenate_steps=lround(slice_days/sdt);
         FILE* fs=NULL;
         if (outp){ char fn[512]; snprintf(fn,sizeof fn,"%s_ser%d.bin",outp,fkern); fs=fopen(fn,"wb"); write_rec(fs,0.,E0); }
         double t0=now();

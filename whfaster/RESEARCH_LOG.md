@@ -1108,3 +1108,31 @@ past iterates (our secant attempt, it. 13, is a crude version).
   doubles every error. → At "the accuracy of the dt = 6 d reference" there is room for larger τ.
 * dt = 24 d is broken here (Mercury g1/s1 off by 1e-2: a step–orbit resonance), unlike the 32-d ensemble statistics of
   Rein et al. (single realisation, different ICs; not pursued).
+
+### Iteration 36 — a linear energy drift in long parareal runs, traced to WHFast512's coordinate matrices (FIXED)
+The first 111 Myr of the 1 Gyr runs (iteration 34): serial runs dE/E −2.7e-12 (s0) and +1.9e-11 (s12, IC + 1e-12 AU),
+parareal τ 3e-6 **+8.6e-11, growing linearly** (+1.44e-11 at 10 Myr, +4.0e-11 at 61 Myr, +8.6e-11 at 111 Myr;
+≈ 7.7e-13 per Myr → ≈ 4e-9 over 5 Gyr). The 10 Myr ensemble (it. 33) could not see it (±9e-12 scatter).
+* Not the element ↔ Cartesian conversions of the driver: one sim → elements → sim round trip, mean over 20000 states
+  along a trajectory: dE/E −2.8e-18 ± 3.1e-18 (rms 4.5e-16).
+* **Every WHFast512 integration call adds a fixed energy offset**: serial runs with 100 calls per 986 yr drift
+  linearly by +7.1e-17 (asm) / +7.7e-17 (C) per call. Same steps in 10 calls vs 1 call, averaged over 3000 start
+  states (`cb.c`): +7.2e-17 (asm, corrector 17, GR), +1.1e-16 (C, corr. 17 or 3), +7.3e-17 (C, corr. 0), +7.4e-17
+  (C, no GR), +6.5e-17 (C, corr. 0, no GR) ± 0.6–1.5e-17. The parareal driver makes 10 calls per fine slice
+  (abandonment chunks) → 1.1e6 calls in 111 Myr × 7–8e-17 = 8e-11, as observed. The serial reference with one call
+  per slice has the same bias 10× smaller; one long call (as in the paper) has none.
+* **Cause:** at every call WHFast512 converts inertial → Jacobi and back (synchronization) with two precomputed 8 × 8
+  matrices (`mat8_inertial_to_jacobi`, `mat8_jacobi_to_inertial`) that are not exact inverses in floating point. Their
+  product (long-double evaluation) is diagonal to 1e-19 with residuals diag − 1 = [−1.37, −0.22, +0.07, −0.05, +0.45,
+  −1.37, −0.17, −0.77] × 1e-16 (Mercury … Neptune), the same for every state. Scaling planet i's x and v by (1 + e_i)
+  changes its energy by 2 e_i |U_i|; weighted by the planets' potential energies (Jupiter +0.45, Saturn −1.37
+  dominate): predicted **+7.6e-17 per call**, measured +6.5 … 7.7e-17. This affects every WHFast512 run with frequent
+  synchronizations (outputs): e.g. 5 Gyr with an output every kyr → ≈ 4e-10 of pure drift.
+* **Fix** (`src/integrator_whfast512.c`, opt-in so the default stays bitwise identical to upstream): new state field
+  `jacobi_recursive` = 1 → the conversions use REBOUND's recursive Jacobi transformations
+  (`reb_transformations_inertial_to_jacobi_posvel` / `..._jacobi_to_inertial_posvel`, per system, COM frame), whose
+  round-off depends on the state. Per-call offset (C AVX2 kernel, 15000 states): corr. 17 + GR −1.7e-17 ± 0.7e-17,
+  corr. 0 no GR +0.3e-17 ± 0.2e-17 (matrices: +1.1e-16 / +6.5e-17). The small remaining part comes with the corrector
+  (its apply/unapply pair is not an exact inverse either), ≈ 6× below the original.
+* Drivers: `PINT_JR` (default **1**) sets `jacobi_recursive` for all fine solves and serial references in
+  `pint_pipe` and `pint_long`; `PINT_CHUNKS` (default 10) = kernel calls per speculative fine slice.

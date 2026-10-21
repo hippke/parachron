@@ -17,6 +17,7 @@
 #define NMAX 256
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 typedef double el[PINT_NP][6];
+static int jr=1;   // PINT_JR: WHFast512 jacobi_recursive for fine and serial runs (default 1)
 static double slice_days;
 static double energy_sim(struct reb_simulation* s){
     // REBOUND energy + WHFast512 GR potential -3 m0^2 m_i / (c^2 r_h^2) (heliocentric r_h)
@@ -34,7 +35,7 @@ static void fine(const el Ein, el Eout){
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
-    w->gr_potential=1; w->corrector=17; w->kernel=2; w->concatenate_steps=lround(slice_days/6.);
+    w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=2; w->concatenate_steps=lround(slice_days/6.);
     reb_simulation_steps(s,1);
     pint_sim_to_el(s,Eout);
     reb_simulation_free(s);
@@ -68,6 +69,7 @@ static void project_energy(el E, double Et){
 static void write_rec(FILE* f, double t, const el E){ double e=energy_el(E); fwrite(&t,8,1,f); fwrite(&e,8,1,f); fwrite(E,8,48,f); }
 int main(int argc, char** argv){
     if (argc<7){ fprintf(stderr,"usage: pint_long out_prefix windows N slice_days threads k [serial=1] [extra_k_tol=0]\n"); return 1; }
+    if (getenv("PINT_JR")) jr=atoi(getenv("PINT_JR"));
     const char* pre=argv[1]; const int W=atoi(argv[2]), N=atoi(argv[3]); slice_days=atof(argv[4]);
     if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; }
     const int P=atoi(argv[5]), K=atoi(argv[6]); const int ser = argc>7 ? atoi(argv[7]) : 1;
@@ -91,7 +93,7 @@ int main(int argc, char** argv){
         s->dt=6.*DAY; s->exact_finish_time=0;
         reb_simulation_set_integrator(s,"whfast512");
         struct reb_integrator_whfast512_state* w=s->integrator.state;
-        w->gr_potential=1; w->corrector=17; w->kernel=skern; w->concatenate_steps=lround(slice_days/6.);
+        w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=skern; w->concatenate_steps=lround(slice_days/6.);
         el E; pint_sim_to_el(s,E); write_rec(fs,0.,E);
         double t0=now();
         for (long q=0;q<(long)W*N;q++){ reb_simulation_steps(s,1); pint_sim_to_el(s,E); write_rec(fs,(q+1)*Tsl,E); }
@@ -144,7 +146,7 @@ int main(int argc, char** argv){
                 el F1; struct reb_simulation* s=pint_el_to_sim(ss_mass,U[n]);
                 s->dt=6.*DAY; s->exact_finish_time=0; reb_simulation_set_integrator(s,"whfast512");
                 struct reb_integrator_whfast512_state* ww=s->integrator.state;
-                ww->gr_potential=1; ww->corrector=17; ww->kernel=1; ww->concatenate_steps=lround(slice_days/6.);
+                ww->gr_potential=1; ww->corrector=17; ww->jacobi_recursive=jr; ww->kernel=1; ww->concatenate_steps=lround(slice_days/6.);
                 reb_simulation_steps(s,1); pint_sim_to_el(s,F1); reb_simulation_free(s);
                 const double eF=energy_el(Fd[n]), eU=energy_el(U[n+1]), e1=energy_el(F1);
                 fprintf(fj,"%d %d %.6e %.6e %.6e %.6e",w,n,(eU-eF)/fabs(eF),(e1-eF)/fabs(eF),poserr(U[n+1],Fd[n]),poserr(F1,Fd[n]));
