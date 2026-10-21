@@ -16,7 +16,7 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
-    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1;
+    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.;
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -106,6 +106,7 @@ static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq
 // short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised):
 // disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/n^2, with F_a(k) = (Z(k) + conj Z(-k))/2,
 // F_b(k) = (Z(k) - conj Z(-k))/(2i)
+static __thread double nu_cut_t=0.;
 static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, double li, double lj, double* da, double* db){
     double complex ei[NGMAX], ej[NGMAX];
     for (int a=0;a<n;a++){ const int K=kf(a,n); ei[a]=cos(K*li)+I*sin(K*li); ej[a]=cos(K*lj)+I*sin(K*lj); }
@@ -114,7 +115,7 @@ static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, d
         const int Ka=kf(a,n); const int am=(n-a)%n;
         for (int b=0;b<n;b++){
             const double kk=Ka*ni+kf(b,n)*nj;
-            if (kk==0.) continue;
+            if (kk==0. || fabs(kk)<nu_cut_t) continue;
             const int bm=(n-b)%n;
             const double complex z=Z[a*n+b], zc=conj(Z[am*n+bm]);
             const double complex Fa=0.5*(z+zc), Fb=-0.5*I*(z-zc);
@@ -131,6 +132,7 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
     double Mint[PINT_NP], mu[PINT_NP], n[PINT_NP];
     double acc=0; for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; n[i]=sqrt(mu[i]/exp(3.*E[i][0])); }
     const int N1=c->ng_ii, N2=c->ng_io, st=N1/N2, nc = R ? 6 : 1;
+    nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
     double tp0=now();
     static __thread double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
     for (int i=0;i<PINT_NI;i++){

@@ -546,3 +546,18 @@ reference). NAFF frequency analysis of k + ih, q + ip (`pint/freq_ana.py`), diff
 **Config B = config A + Heun secular step + energy projection, K = 3 for 10 slices of 986 yr**: accuracy contract
 items 1–3 met in these tests (energy unbiased, Brouwer-like; secular frequencies at chaos-noise level);
 modelled wall-clock speedup 2.45 on 10 cores (25 % efficiency), 3.3 on 20 cores (K = 4).
+
+## Iteration 13 — attempts to reach K = 2 (N = 10) or K = 3 (N = 20) (all rejected)
+* Thread safety (bug found with `pint_pipe`): the coarse step used static scratch arrays; concurrent calls from the
+  pipelined threads raced (REBOUND "e < 1" errors). Fixed: thread-local scratch, one-time FFT twiddles. The pipelined
+  timing model checked on this host with N = 2, K = 2 (the only size 2 vCPUs allow): measured 0.77–0.86 × serial vs
+  0.86 predicted from single-thread T_F, T_G (both vCPUs behave as independent cores for this load).
+* **Secant-enhanced parareal** (`parareal/secant.py`; quasi-Newton/Krylov-parareal idea: correct (F' − G') along the
+  stored iterate differences of the same slice, no extra F/G): rank 1 with damping 0.5: k = 2 error 1.2e-6 AU (plain
+  6.9e-6), unweighted 2.4e-6; still K = 3 (needs 4e-8). With neighbour slices or full weight: worse. Not kept.
+* Knob sweep for N = 20 (`parareal/sweepN.py`, error/noise at k = 3; plain config B = 1.7): 64² inner grids 15 (!),
+  32² inner–giant grids 1.7, Uranus/Neptune pairs 1.5, giants at 180 d 1.6, Euler 3.8. Small-divisor cutoff
+  (drop terms with period > P): P = 30 yr 320 (terms with 30–100 yr periods matter), 100 yr 2.1, 300 yr 1.7.
+  The 64² failure is not a small-divisor effect (cutoff does not cure it); 32² is the sweet spot.
+* The "≤ 3 × noise" criterion depends on the noise realisation: N = 20, k = 3 gives 1.7 × (noise from boundary-
+  chained references) or 3.5 × (continuous serial references) → N = 20 is borderline between K = 3 and 4.

@@ -74,11 +74,12 @@ int main(int argc, char** argv){
     const int diag = argc>9 ? atoi(argv[9]) : 0;
     const int skern = argc>10 ? atoi(argv[10]) : 2;   // kernel of the serial run
     const int proj = argc>11 ? atoi(argv[11]) : 0;    // 1: energy projection of corrected boundary states
-    const int heun = argc>12 ? atoi(argv[12]) : 0;     // 1: measure boundary jumps (extra fine sweeps, kernels 2 and 1)
+    const int heun = argc>12 ? atoi(argv[12]) : 0;
+    const double pert = argc>13 ? atof(argv[13]) : 0.;   // initial x perturbation of all planets [AU]     // 1: measure boundary jumps (extra fine sweeps, kernels 2 and 1)
     FILE* fj=NULL; if (diag){ char f2[512]; snprintf(f2,sizeof f2,"%s_jumps.txt",argv[1]); fj=fopen(f2,"w"); }
     struct pint_cfg c; pint_default_cfg(&c, ss_mass, slice_days); c.heun=heun;
     char fn[512];
-    struct reb_simulation* r0=ss_create(6.,0); el E0; pint_sim_to_el(r0,E0); reb_simulation_free(r0);
+    struct reb_simulation* r0=ss_create(6.,pert); el E0; pint_sim_to_el(r0,E0); reb_simulation_free(r0);
     const double Tsl=slice_days*DAY;
     double tser=0;
     if (ser){

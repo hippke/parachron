@@ -18,6 +18,7 @@ struct pint_cfg {
     int maxj;               // last planet index paired with the inner planets (5 = Saturn)
     int kernel;             // WHFast512 kernel for the giants (2 = C AVX-512, 3 = C AVX2, 4 = generic)
     int heun;               // 1: secular drift with the trapezoidal rule (rates at start and at the predicted end)
+    double pcut_yr;         // drop short-period terms with period > pcut_yr from the transform (0: keep all)
 };
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days);
 // G: E_in -> E_out over one slice
