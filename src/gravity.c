@@ -74,9 +74,12 @@ struct reb_tree_group_scratch {
     size_t* pl;
     size_t* plg;
 };
-// One group: own function (with an AVX2 clone) rather than the body of an OpenMP region, whose
-// outlined code gets neither the clone nor the same vectorisation. Returns 1 if the tree is too deep.
-REB_TARGET_CLONES static int reb_gravity_tree_group_one(struct reb_simulation* const r, const size_t g, const size_t* const gidx, const size_t* const goff, const size_t* const gid, const struct reb_vec6d gb, const double G, const double softening2, const double theta, const size_t N_root, struct reb_tree_group_scratch* const sc){
+// One group: own (not inlined) function rather than the body of an OpenMP region, whose outlined
+// code is vectorised differently (0.72x on one thread). No AVX2 clone: with at most 32 particles
+// per group the AVX2 loops execute ~36 % more instructions than the default ones (measured).
+// Returns 1 if the tree is too deep.
+__attribute__((noinline)) static int reb_gravity_tree_group_one(struct reb_simulation* const r, const size_t g, const size_t* const gidx, const size_t* const goff, const size_t* const gid, const struct reb_vec6d gb, const double G, const double softening, const double theta, const size_t N_root, struct reb_tree_group_scratch* const sc){
+    const double softening2 = softening*softening; // squared here: provably >= 0, so sqrt vectorises
     struct reb_particle* const particles = r->particles;
     size_t capc = sc->capc, capp = sc->capp;
     double* cl = sc->cl;
@@ -218,7 +221,6 @@ REB_TARGET_CLONES static int reb_gravity_tree_group_one(struct reb_simulation* c
 static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
     const size_t N = r->N;
     const double G = r->G;
-    const double softening2 = r->softening*r->softening;
     const double theta = sqrt(r->opening_angle2);
     const size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
     size_t Gs = r->tree_group_size > REB_TREE_GROUP_MAX ? REB_TREE_GROUP_MAX : r->tree_group_size;
@@ -257,7 +259,7 @@ static void reb_gravity_tree_group_walk(struct reb_simulation* const r){
 #pragma omp for schedule(dynamic, 4)
         for (size_t g=0; g<ng; g++){
             if (too_deep) continue;
-            if (reb_gravity_tree_group_one(r, g, gidx, goff, gid, gb, G, softening2, theta, N_root, &sc)) too_deep = 1;
+            if (reb_gravity_tree_group_one(r, g, gidx, goff, gid, gb, G, r->softening, theta, N_root, &sc)) too_deep = 1;
         }
         free(sc.cl); free(sc.pl); free(sc.plg);
 #ifdef QUADRUPOLE
