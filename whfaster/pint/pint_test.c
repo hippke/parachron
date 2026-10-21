@@ -20,7 +20,7 @@ int main(int argc, char** argv){
     for (int i=0;i<PINT_NP;i++){ for (int e=0;e<6;e++) printf("%.17g ",Eo[i][e]); printf("\n"); }
     double tt=0, ta=0, to=0; double best=1e9;
     for (int k=0;k<reps;k++){ pint_coarse(&c,E,Eo); tt+=pint_t_total; ta+=pint_t_tables; to+=pint_t_outer; if (pint_t_total<best) best=pint_t_total; }
-    extern double pint_prof[4];
+    extern __thread double pint_prof[4];
     printf("profile per G call: grid r,v,dE/dv %.3f ms, pair loops %.3f ms, FFT %.3f ms, eval %.3f ms\n",1e3*pint_prof[0]/(reps+1),1e3*pint_prof[1]/(reps+1),1e3*pint_prof[2]/(reps+1),1e3*pint_prof[3]/(reps+1));
     printf("G: mean %.3f ms (tables %.3f ms, giants WH %.3f ms), min %.3f ms\n", 1e3*tt/reps, 1e3*ta/reps, 1e3*to/reps, 1e3*best);
     // fine slice

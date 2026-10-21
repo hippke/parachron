@@ -26,5 +26,5 @@ void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double
 void pint_sim_to_el(struct reb_simulation* r, double E[PINT_NP][6]);
 struct reb_simulation* pint_el_to_sim(const double* masses, const double E[PINT_NP][6]);
 // diagnostics: time spent in parts of the last pint_coarse call (seconds)
-extern double pint_t_tables, pint_t_outer, pint_t_total;
+extern __thread double pint_t_tables, pint_t_outer, pint_t_total;
 #endif

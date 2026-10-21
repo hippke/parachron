@@ -6,16 +6,17 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <pthread.h>
 #define DAY (2.*M_PI/365.25)
 #define NGMAX 64
 static const double CGR = 10065.32;
-double pint_t_tables=0, pint_t_outer=0, pint_t_total=0;
-double pint_prof[4]={0,0,0,0};
+__thread double pint_t_tables=0, pint_t_outer=0, pint_t_total=0;
+__thread double pint_prof[4]={0,0,0,0};
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
-    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 0;
+    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1;
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -76,9 +77,11 @@ static void dEdv(double mu, const double* r, const double* v, double D[6][3], in
     }
 }
 // in-place radix-2 complex FFT (forward, e^{-i}), n power of two (<= NGMAX), stride s; cached twiddles
-static double complex tw[NGMAX+1][NGMAX/2]; static int tw_ok[NGMAX+1];
+static double complex tw[NGMAX+1][NGMAX/2];
+static pthread_once_t tw_once = PTHREAD_ONCE_INIT;
+static void tw_init(void){ for (int n=2;n<=NGMAX;n<<=1) for (int j=0;j<n/2;j++) tw[n][j]=cos(-2.*M_PI*j/n)+I*sin(-2.*M_PI*j/n); }
 static void fft1(double complex* a, int n, int s){
-    if (!tw_ok[n]){ for (int j=0;j<n/2;j++) tw[n][j]=cos(-2.*M_PI*j/n)+I*sin(-2.*M_PI*j/n); tw_ok[n]=1; }
+    pthread_once(&tw_once, tw_init);
     double complex t[NGMAX];
     for (int i=0,j=0;i<n;i++){
         t[j]=a[i*s];
@@ -129,7 +132,7 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
     double acc=0; for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; n[i]=sqrt(mu[i]/exp(3.*E[i][0])); }
     const int N1=c->ng_ii, N2=c->ng_io, st=N1/N2, nc = R ? 6 : 1;
     double tp0=now();
-    static double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
+    static __thread double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
     for (int i=0;i<PINT_NI;i++){
         double Eg[6]; memcpy(Eg,E[i],sizeof Eg);
         for (int g=0; g<N1; g++){
@@ -144,7 +147,7 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
         for (int g=0; g<N2; g++){ Eg[1]=2.*M_PI*g/N2; el_to_rv(mu[j],Eg,rj[j][g],vdum); }
     }
     double tp1=now(); pint_prof[0]+=tp1-tp0; double tl=0, tf=0, te=0;
-    static double complex fi[NGMAX*NGMAX], fg[NGMAX*NGMAX];
+    static __thread double complex fi[NGMAX*NGMAX], fg[NGMAX*NGMAX];
     for (int i=0;i<PINT_NI;i++){
         for (int j=i+1;j<=c->maxj;j++){
             const int inner_j = j<PINT_NI;
