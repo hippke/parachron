@@ -816,3 +816,8 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   k2 / noise per epoch 0.68, 1.49, 2.52, 11.4, 9.0, 1.36, 1.41, 0.87, 9.32, 1.22 — median 1.45, k2 ≤ 2 at 6/10
   (1030: 4.9 → 1.5; 2000 0.8 → 2.5), k3 worst 1.61. The three hard epochs (3400, 4500 Mars; 8160 Venus/Earth)
   remain at 9–11.
+* Cost reduction of the second-order parts (E–M–J term U and U2): **frozen per window** (computed at the window
+  start) is bad (k1 × 3–13, epoch 0 k2 0.7 → 27: U ∝ e e^{−iϖ} rotates by ~50° over a window); **frozen per slice**
+  (computed at the first coarse evaluation of each slice, reused in later iterations) is as good as live
+  (k2 per epoch 0.68, 1.7, 2.52, 11.5, 8.9, 1.25, 1.3, 0.89, 9.3, 0.9; k3 worst 2.7). So the expensive
+  second-order coefficients cost only during the k = 0 coarse sweep.

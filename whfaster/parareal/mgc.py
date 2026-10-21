@@ -101,8 +101,10 @@ class Coarse:
             th=meanel.Theory(m,E1,Ng=self.Ng,inner=self.ni,pair_ng=self.pair_ng,n_override=nov); th.comps=self.comps
             M=self.mean_inner(E,n,th)
         self._WS=None; self._U2=None
-        if self.w2 is not None and getattr(self,'freeze_U2',0) and getattr(self,'_U2frozen',None) is not None:
-            self._U2=self._U2frozen.copy()
+        fkey=f"{E[4,1]:.3f}{E[3,1]:.3f}" if getattr(self,'freeze_U2',0)==2 else 'w'
+        if not hasattr(self,'_U2cache'): self._U2cache={}
+        if self.w2 is not None and getattr(self,'freeze_U2',0) and fkey in self._U2cache:
+            self._U2=self._U2cache[fkey].copy()
         elif self.w2 is not None:                  # second-order transform and secular rates (w2triple)
             import w2triple
             E1=E.copy(); E1[:self.ni,0]=M[:self.ni,0]
@@ -124,7 +126,7 @@ class Coarse:
             opt=self.w2[3] if len(self.w2)>3 else ''
             if 'noU' in opt: self._U2=None
             if 'nolamU' in opt and self._U2 is not None: self._U2[:,1]=0
-            if getattr(self,'freeze_U2',0): self._U2frozen=None if self._U2 is None else self._U2.copy()
+            if getattr(self,'freeze_U2',0) and self._U2 is not None: self._U2cache[fkey]=self._U2.copy()
         if getattr(self,'mean_hook',None): M=self.mean_hook(E,th,M)
         if self.nsub:
             outs=self.outerWH(E,2*self.nsub)

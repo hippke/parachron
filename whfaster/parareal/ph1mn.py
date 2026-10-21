@@ -22,11 +22,11 @@ def build(spec):
     dto=float(spec.split('dt')[1].split('_')[0]) if '_dt' in spec else 360
     CG=mgc.Coarse(360000,Ng=32,dt_out=dto,live=1,comps=comps,pair_ng=gfilt.pair_rule,heun=1,meann=mn,giant_mean=int('gm' in spec),nsec=int('ns' in spec and 'nsub' not in spec),nsub=int(spec.split('nsub')[1].split('_')[0]) if 'nsub' in spec else 0,Ng_sec=int(spec.split('ngs')[1].split('_')[0]) if 'ngs' in spec else 0,sec_ng=gfilt.sec_rule if 'un' in spec else None,gavg=float(spec.split('ga')[1].split('_')[0]) if '_ga' in spec else 0.,w2=W2SETS.get(spec.split('w2')[1].split('_')[0]) if '_w2' in spec else None)
     G=lambda E: CG(E,0)
-    if 'frz' in spec: CG.freeze_U2=1
+    if 'frz' in spec: CG.freeze_U2=2 if 'frzs' in spec else 1
     if '_L' in spec:
         L=float(spec.split('_L')[1].split('_')[0]); gf=gfilt.GF2(CG,L,end=int('noend' not in spec))
     if 'g3' in spec:
-        import g3; G=g3.G3(base=lambda E: CG(E,0),freeze=int('frz' in spec),ode=int(spec.split('ode')[1].split('_')[0]) if 'ode' in spec else 0)
+        import g3; G=g3.G3(base=lambda E: CG(E,0),freeze=(2 if 'frzs' in spec else 1) if 'frz' in spec else 0,ode=int(spec.split('ode')[1].split('_')[0]) if 'ode' in spec else 0)
     return G
 def calibrated(G, ep, nfit=100):
     """secular-matrix calibration (it. 23): per-slice z = k+ih error of the inner planets modelled as A z_inner,

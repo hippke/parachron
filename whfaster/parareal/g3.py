@@ -17,7 +17,7 @@ class G3:
     def __call__(self, E, nslice=0):
         g=self.base(E); n=self.mean_motions(E,g); T=self.T
         for K in self.terms:
-            key=str(K)
+            key=str(K)+(f"{E[4,1]:.3f}{E[3,1]:.3f}" if self.freeze==2 else '')
             if self.freeze and key in self._Ucache: U=self._Ucache[key]
             else:
                 U=so2.resonant_U2(E,K,Ng=self.Ng); self._Ucache[key]=U
