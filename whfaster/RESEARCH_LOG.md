@@ -994,3 +994,15 @@ worker thread is gone. Serial path refactored into the same pieces (`table_setup
 * `pint_pipe 16 360000 3 100 2 1 1 3e-6 6 h 2` (7950X): h = 8: **wall 3.98 s, speedup 2.84–2.86** (was 4.14–4.21 s,
   2.66–2.74); h = 4: 2.81–2.82; h = 2: 2.61. Coarse busy 2.43 → 2.06 core-s. Final Δx unchanged (2.84e-4 AU), i.e.
   the same trajectory bit for bit.
+
+### Iteration 31 — persistent slice threads, windows handed over without a join (KEPT, bitwise identical)
+`pint_pipe` created 16 threads per window and joined all of them, including threads still finishing an abandoned
+speculative fine chunk (≤ 0.83 ms). Now the slice threads persist over all windows; the window state (U, semaphores,
+stop flag, update maxima) is double-buffered by window parity. At the decision the last slice prepares the other
+parity's state, posts `win_start` (slice 0 starts the next window immediately) and a `win_done` barrier (a thread may
+finish k = K_max before the decision and must not touch the next window's semaphores before they are re-initialised).
+Threads still in abandoned work join the next window's chain when they are done; slice n is needed only n coarse
+steps after the window start.
+* Checked: unreachable τ (stops at K_max every window), fixed K (τ = 0), N = 4, 6, 16: no deadlock; same K histogram
+  and final Δx (2.84e-4 AU) as before → same trajectory.
+* `pint_pipe 16 360000 3 100 2 1 1 3e-6 6 8 2`: **wall 3.75–3.77 s, speedup 2.97–3.05** (iteration 30: 3.98 s, 2.85).

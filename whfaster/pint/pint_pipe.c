@@ -28,8 +28,10 @@ typedef double el[PINT_NP][6];
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 #include <stdatomic.h>
 static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6, npar=0, parmode=1; static double tol=0.;
-static atomic_int stop_at;               // iteration at which the current window stopped (-1: running)
-static double upd_max[KMAX+1]; static pthread_mutex_t upd_mx=PTHREAD_MUTEX_INITIALIZER;
+// window state is double-buffered by window parity, so that the persistent slice threads can start window w+1 while
+// others still finish (abandon) speculative work of window w
+static atomic_int stop_at[2];            // iteration at which the window stopped (-1: running)
+static double upd_max[2][KMAX+1]; static pthread_mutex_t upd_mx=PTHREAD_MUTEX_INITIALIZER;
 static double poserr_el(const double A[PINT_NP][6], const double B[PINT_NP][6]);
 static struct pint_cfg cfg;
 static double energy_sim(struct reb_simulation* s){
@@ -51,7 +53,7 @@ static void project_energy(el E, double Et){
     pint_sim_to_el(s,E); reb_simulation_free(s);
 }
 // fine slice; returns 0 if abandoned because the window stopped at an iteration < kneed
-static int fine(const el Ein, el Eout, int kneed){
+static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
     struct reb_simulation* s=pint_el_to_sim(ss_mass,Ein);
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
@@ -61,7 +63,7 @@ static int fine(const el Ein, el Eout, int kneed){
     if (tol>0. && nst%10==0){
         w->concatenate_steps=nst/10;
         for (int q=0;q<10;q++){
-            const int st=atomic_load(&stop_at);
+            const int st=atomic_load(stp);
             if (st>=0 && st<kneed){ reb_simulation_free(s); return 0; }
             reb_simulation_steps(s,1);
         }
@@ -75,70 +77,88 @@ static double poserr_el(const double A[PINT_NP][6], const double B[PINT_NP][6]){
     reb_simulation_free(a); reb_simulation_free(b); return m;
 }
 static double wrapd(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
-static el U[KMAX+1][NMAX+1];
-static sem_t ready[KMAX+1][NMAX+1];
+static el U[2][KMAX+1][NMAX+1];
+static sem_t ready[2][KMAX+1][NMAX+1], win_start[2], win_done[2];
+static int W, khist[KMAX+1]; static el Ecur;
+// prepare the state of a window (parity p) that starts from Ecur
+static void window_init(int p){
+    for (int k=0;k<=KMAX;k++){ memcpy(U[p][k][0],Ecur,sizeof(el)); upd_max[p][k]=0; for (int n=0;n<=N;n++){ sem_destroy(&ready[p][k][n]); sem_init(&ready[p][k][n],0,0); } }
+    sem_destroy(&win_done[p]); sem_init(&win_done[p],0,0);
+    atomic_store(&stop_at[p],-1);
+}
 static double tbusyF[NMAX], tbusyG[NMAX];
 // optional event trace (env PINT_TRACE=file): per thread (window, k, n, type, t_start, t_end); type 0 = coarse+update,
 // 1 = fine completed, 2 = fine abandoned, 3 = waiting for the start state
 typedef struct { int w,k,type; double t0,t1; } tev;
-static tev* trace[NMAX]; static int ntr[NMAX], trace_on=0, cur_w=0; static double trace_t0;
+static tev* trace[NMAX]; static int ntr[NMAX], trace_on=0; static double trace_t0;
 #define TRACE_MAX 200000
-static void tr(int n,int k,int type,double t0,double t1){ if (trace_on && ntr[n]<TRACE_MAX) trace[n][ntr[n]++]=(tev){cur_w,k,type,t0-trace_t0,t1-trace_t0}; }
+static void tr(int w,int n,int k,int type,double t0,double t1){ if (trace_on && ntr[n]<TRACE_MAX) trace[n][ntr[n]++]=(tev){w,k,type,t0-trace_t0,t1-trace_t0}; }
 static void* slice_thread(void* arg){
     const int n=(int)(long)arg;
     if (pin){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(n % CPU_SETSIZE, &cs); pthread_setaffinity_np(pthread_self(), sizeof cs, &cs); }
-    el Fprev, Gold; double EFprev=0, EUprev=0; int have_F=0;
+    el Fprev, Gold;
     const int kend = tol>0. ? Kmax : K;
+    for (int w=0; w<W; w++){
+    const int p=w&1; el (*Up)[NMAX+1]=U[p]; sem_t (*rdy)[NMAX+1]=ready[p]; atomic_int* stp=&stop_at[p];
+    if (n==0 && w>0) sem_wait(&win_start[p]);
+    double EFprev=0, EUprev=0; int have_F=0;
     for (int k=0;k<=kend;k++){
-        { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
-        { double tw=now(); if (n>0) sem_wait(&ready[k][n]); tr(n,k,3,tw,now()); }
-        { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
+        { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
+        { double tw=now(); if (n>0) sem_wait(&rdy[k][n]); tr(w,n,k,3,tw,now()); }
+        { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
         double t0=now();
         el g;
         // G is not needed for boundaries that are already exact (n <= k-1): skip it (saves coarse time on the chain)
-        if (k==0 || n>k-1) pint_coarse_par(&cfg,U[k][n],g, npar>0 && (parmode==2 || k==0));
+        if (k==0 || n>k-1) pint_coarse_par(&cfg,Up[k][n],g, npar>0 && (parmode==2 || k==0));
         if (k==0 || n<k-1){
-            if (k==0) memcpy(U[0][n+1],g,sizeof(el)); else memcpy(U[k][n+1],U[k-1][n+1],sizeof(el));
+            if (k==0) memcpy(Up[0][n+1],g,sizeof(el)); else memcpy(Up[k][n+1],Up[k-1][n+1],sizeof(el));
         } else if (n==k-1){
-            memcpy(U[k][n+1],Fprev,sizeof(el));    // exact
+            memcpy(Up[k][n+1],Fprev,sizeof(el));    // exact
         } else {
             if (!have_F) break;                   // cannot happen unless the window stopped
             for (int i=0;i<PINT_NP;i++) for (int e=0;e<6;e++){
                 double d=Fprev[i][e]-Gold[i][e]; if (e==1) d=wrapd(d);
-                U[k][n+1][i][e]=g[i][e]+d;
+                Up[k][n+1][i][e]=g[i][e]+d;
             }
-            for (int i=0;i<PINT_NP;i++) U[k][n+1][i][1]=wrapd(U[k][n+1][i][1]);
-            project_energy(U[k][n+1], energy_el(U[k][n]) + (EFprev-EUprev));
+            for (int i=0;i<PINT_NP;i++) Up[k][n+1][i][1]=wrapd(Up[k][n+1][i][1]);
+            project_energy(Up[k][n+1], energy_el(Up[k][n]) + (EFprev-EUprev));
         }
         memcpy(Gold,g,sizeof(el));
         if (tol>0. && k>0){
-            const double u = n>=k-1 ? poserr_el(U[k][n+1],U[k-1][n+1]) : 0.;
-            pthread_mutex_lock(&upd_mx); if (u>upd_max[k]) upd_max[k]=u; pthread_mutex_unlock(&upd_mx);
+            const double u = n>=k-1 ? poserr_el(Up[k][n+1],Up[k-1][n+1]) : 0.;
+            pthread_mutex_lock(&upd_mx); if (u>upd_max[p][k]) upd_max[p][k]=u; pthread_mutex_unlock(&upd_mx);
         }
-        double t1=now(); tbusyG[n]+=t1-t0; tr(n,k,0,t0,t1);
-        if (n<N-1) sem_post(&ready[k][n+1]);
+        double t1=now(); tbusyG[n]+=t1-t0; tr(w,n,k,0,t0,t1);
+        if (n<N-1) sem_post(&rdy[k][n+1]);
         else {
             // last slice: all updates of iteration k are known -> decide
-            int stop = (tol>0.) ? ((k>=K && upd_max[k]<=tol) || k==Kmax) : (k==K);
+            int stop = (tol>0.) ? ((k>=K && upd_max[p][k]<=tol) || k==Kmax) : (k==K);
             if (stop){
-                atomic_store(&stop_at,k);
-                for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&ready[kk][q]);   // release waiting threads
+                // every thread has entered this window, so none uses the other parity's state any more: prepare the
+                // next window there before releasing anybody
+                khist[k]++; memcpy(Ecur,Up[k][N],sizeof(el));
+                if (w+1<W) window_init(p^1);
+                atomic_store(stp,k);
+                for (int q=0;q<N;q++) sem_post(&win_done[p]);
+                for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&rdy[kk][q]);   // release waiting threads
+                if (w+1<W) sem_post(&win_start[p^1]);
             }
-            sem_post(&ready[k][N]);
         }
         have_F=0;
         if (k<kend && n>=k){     // fine slice for the next iteration (speculative when adaptive)
-            if (fine(U[k][n],Fprev,k+1)){ EUprev=energy_el(U[k][n]); EFprev=energy_el(Fprev); have_F=1; tr(n,k,1,t1,now()); }
-            else tr(n,k,2,t1,now());
+            if (fine(Up[k][n],Fprev,k+1,stp)){ EUprev=energy_el(Up[k][n]); EFprev=energy_el(Fprev); have_F=1; tr(w,n,k,1,t1,now()); }
+            else tr(w,n,k,2,t1,now());
         }
         tbusyF[n]+=now()-t1;
+    }
+    sem_wait(&win_done[p]);    // a thread can finish k = Kmax before the window is decided
     }
     return NULL;
 }
 int main(int argc, char** argv){
     if (argc<5){ fprintf(stderr,"usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1]\n"); return 1; }
     N=atoi(argv[1]); slice_days=atof(argv[2]);
-    if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; } K=atoi(argv[3]); const int W=atoi(argv[4]);
+    if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; } K=atoi(argv[3]); W=atoi(argv[4]);
     if (argc>5) fkern=atoi(argv[5]);
     const int ser = argc>6 ? atoi(argv[6]) : 1;
     if (argc>7) pin=atoi(argv[7]);
@@ -148,7 +168,6 @@ int main(int argc, char** argv){
     if (argc>11) parmode=atoi(argv[11]);
     if (npar>0) pint_set_threads(npar);
     if (Kmax>KMAX-1) Kmax=KMAX-1;
-    int khist[KMAX+1]={0};
     pint_default_cfg(&cfg, ss_mass, slice_days);
     if (fkern!=2) cfg.kernel = fkern;
     struct reb_simulation* r0=ss_create(6.,0); el E0; pint_sim_to_el(r0,E0); reb_simulation_free(r0);
@@ -161,21 +180,15 @@ int main(int argc, char** argv){
         double t0=now(); for (long q=0;q<(long)W*N;q++) reb_simulation_steps(s,1); tser=now()-t0;
         pint_sim_to_el(s,Eser); reb_simulation_free(s);
     }
-    el Ecur; memcpy(Ecur,E0,sizeof(el));
+    memcpy(Ecur,E0,sizeof(el));
     const char* trf=getenv("PINT_TRACE");
     if (trf){ trace_on=1; for (int n=0;n<N;n++) trace[n]=malloc(TRACE_MAX*sizeof(tev)); }
     const double t0=now(); trace_t0=t0;
-    for (int w=0;w<W;w++){
-        cur_w=w;
-        for (int k=0;k<=KMAX;k++){ memcpy(U[k][0],Ecur,sizeof(el)); upd_max[k]=0; for (int n=0;n<=N;n++) sem_init(&ready[k][n],0,0); }
-        atomic_store(&stop_at,-1);
-        pthread_t th[NMAX];
-        for (int n=0;n<N;n++) pthread_create(&th[n],NULL,slice_thread,(void*)(long)n);
-        for (int n=0;n<N;n++) pthread_join(th[n],NULL);
-        const int ks=atomic_load(&stop_at);
-        khist[ks]++;
-        memcpy(Ecur,U[ks][N],sizeof(el));
-    }
+    for (int p=0;p<2;p++){ sem_init(&win_start[p],0,0); sem_init(&win_done[p],0,0); for (int k=0;k<=KMAX;k++) for (int n=0;n<=N;n++) sem_init(&ready[p][k][n],0,0); }
+    window_init(0);
+    pthread_t th[NMAX];
+    for (int n=0;n<N;n++) pthread_create(&th[n],NULL,slice_thread,(void*)(long)n);
+    for (int n=0;n<N;n++) pthread_join(th[n],NULL);
     const double tpr=now()-t0;
     if (trf){ FILE* f=fopen(trf,"w"); for (int n=0;n<N;n++) for (int i=0;i<ntr[n];i++) fprintf(f,"%d %d %d %d %.7f %.7f\n",trace[n][i].w,n,trace[n][i].k,trace[n][i].type,trace[n][i].t0,trace[n][i].t1); fclose(f); }
     double sF=0,sG=0; for (int n=0;n<N;n++){ sF+=tbusyF[n]; sG+=tbusyG[n]; }

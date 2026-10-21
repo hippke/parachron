@@ -42,3 +42,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 28,config B + 8 helpers mode 2 (7950X),12-16,986,K 3.47-3.80,0.03,,,ref,N=16 best 2.66-2.74x; N=14 2.50; N=12 2.37-2.39
 29,config B N=16 10 Myr contract (7950X),16,986,K 3.77 (tau 3e-6) / 3.35 (1e-5) / 3.11 (3e-5),,,,ref,tau 3e-6 validated at N=16 (9.3e-8 arcsec/yr); 1e-5: 3.8e-7 (within single-run scatter ~3e-7); trace: K*T_F 77% of window
 30,config B staged coarse step (giants on caller; 7950X),16,986,K 3.80,0.02,,,yes,bitwise identical; 2.84-2.86x (was 2.66-2.74)
+31,config B persistent slice threads (7950X),16,986,K 3.80,0.02,,,yes,bitwise identical; 2.97-3.05x
