@@ -1,4 +1,5 @@
 # ensemble of IC realisations: secular-frequency shifts of parareal runs vs their serial reference
+#   python3 ens_ana.py prefix pert1,pert2,... variant1,variant2,... [serial_pattern_with_{p}]
 import numpy as np, sys
 from scipy.optimize import minimize_scalar
 AS=180/np.pi*3600
@@ -16,7 +17,8 @@ names=[f"g{i+1}" for i in range(8)]+[f"s{i+1}" for i in range(8)]
 pre=sys.argv[1]; perts=sys.argv[2].split(','); variants=sys.argv[3].split(',')
 D={v:[] for v in variants}; dE={v:[] for v in variants}
 for p in perts:
-    fs,Es=freqs(f"{pre}{p}_{variants[0]}_ser2.bin" if p!='v16' else "runs/p9/v16t3_ser2.bin")
+    serpat=sys.argv[4] if len(sys.argv)>4 else None     # optional serial-reference pattern with {p}
+    fs,Es=freqs(serpat.format(p=p) if serpat else (f"{pre}{p}_{variants[0]}_ser2.bin" if p!='v16' else "runs/p9/v16t3_ser2.bin"))
     for v in variants:
         fn=f"{pre}{p}_{v}_pr.bin" if p!='v16' else f"runs/p9/v16{v}_pr.bin"
         fp,Ep=freqs(fn); D[v].append(fp-fs); dE[v].append((Ep[-1]-Es[-1])/abs(Es[0]))
@@ -24,3 +26,4 @@ for v in variants:
     A=np.array(D[v]); inner=[0,1,2,3,8,9,10,11]
     print(f"== {v}: {len(A)} realisations; |shift| max inner {np.abs(A[:,inner]).max():.2e}, rms inner {np.sqrt((A[:,inner]**2).mean()):.2e}, rms giants {np.sqrt((A[:,[4,5,6,7,12,13,14,15]]**2).mean()):.2e}; energy at end vs serial: "+" ".join(f"{x:+.1e}" for x in dE[v]))
     print("   mean ± sem per inner frequency: "+"  ".join(f"{names[q]} {A[:,q].mean():+.1e}±{A[:,q].std(ddof=1)/np.sqrt(len(A)):.0e}" for q in inner))
+    print("   mean ± sem giants: "+"  ".join(f"{names[q]} {A[:,q].mean():+.1e}±{A[:,q].std(ddof=1)/np.sqrt(len(A)):.0e}" for q in [4,5,6,7,12,14,15]))

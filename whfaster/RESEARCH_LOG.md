@@ -1167,3 +1167,24 @@ Energy vs the dt = 6 d serial run: within ±1e-11 in all parareal runs.
   −2.9e-5) that grows with τ: the k = 2 iterate still carries part of the coarse step's own giants error (WH at 360 d,
   whose g6 error is large) — a systematic error, not noise. Accuracy ≈ dt 8–12 d, which a serial run gets for 0.75–0.5
   of the cost; parareal at K̄ 2.1–2.6 is still ≈ 2× faster than such a serial run. To be checked with an ensemble.
+
+### Iteration 38 — bias ensemble of the candidate settings; giants' coarse step 180 d for K_min = 2
+**1 Gyr with the fix** (`p3jr`, τ 3e-6, kernel 1, `PINT_JR=1`): 0.986 Gyr in 3046 s (shared machine), and
+**K̄ 3.61** (K = 3/4/5/6: 25134/36360/994/12) vs 3.78 (19544/38282/3854/820) with the matrix transformation — the
+per-call energy offsets also raised the convergence floor (the k ≥ 4 updates stalled at ≈ 1e-7 AU, it. 33), so the
+fix is also a speed-up. Energy at 187 Myr: p3jr +1.2e-11 (serial runs +0.5e-11, −1.0e-11; old p3 +1.4e-10).
+**Ensemble** (`runs/ens2/`, 6 IC realisations of it. 33, 10 Myr, JR 1, kernel 2; shifts vs the serial run of the same
+ICs; `ens_ana.py … "runs/p9/e{p}_t3_ser2.bin"`):
+| setting | K̄ (6 runs) | inner rms / max ["/yr] | inner means | Saturn g6 mean ± sem | giants rms |
+|---|---|---|---|---|---|
+| K_min 3, τ 3e-5 | 3.10–3.15 | 3.1e-7 / 7.3e-7 | all < 1σ | −7.0e-8 ± 0.8e-8 | 2.6e-8 |
+| K_min 3, τ 1e-4 | 3.01–3.04 | 5.4e-7 / 1.5e-6 | g1 +6e-8 (2σ), g2 +1e-8 (2.7σ) | −8.7e-8 ± 1.0e-8 | 3.3e-8 |
+| K_min 2, τ 3e-4 | 2.57–2.63 | 1.9e-6 / 5.1e-6 | < 1σ | **−9.0e-6 ± 2e-6** | 3.4e-6 |
+| K_min 2, τ 3e-4, giants 180 d | **2.53–2.60** | 1.5e-6 / 3.3e-6 | s4 −8e-7 (1.7σ) | +4.7e-7 ± 0.7e-7 | 1.8e-7 |
+Energy vs serial: within ±1e-11 everywhere.
+* With K_min 3 the parareal error stays unbiased in the inner planets and adds a small systematic Saturn g6 shift
+  (−7…−9e-8, i.e. 5 % of the dt = 6 d g6 error).
+* The K_min 2 Saturn bias comes from the coarse giants' step: at 180 d it shrinks 20× (→ 30 % of the dt = 6 d g6
+  error) and K̄ even drops a little (2.56). Inner rms 1.5e-6 ≈ 0.3 × the dt = 6 d error → **"between dt 6 and 8 d"
+  accuracy with K̄ ≈ 2.56** (vs 3.78 at the reference setting). Its cost (giants' run twice as long on the coarse
+  chain) is measured in the timing runs.
