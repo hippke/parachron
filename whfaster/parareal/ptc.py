@@ -26,3 +26,10 @@ def lna_disp_R(cg, E):
     Ei=np.ascontiguousarray(E,dtype=np.float64); d=np.zeros(4); R=np.zeros((4,6))
     _lib.pint_lna_disp(ctypes.byref(cg.c),Ei.ctypes.data,d.ctypes.data,R.ctypes.data)
     return d,R
+_lib.pint_disp6.argtypes=[ctypes.POINTER(Cfg),ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p]
+def disp6(cg, E, n_div=None):
+    """all-component first-order displacement (4,6) of the inner planets (C); n_div: mean motions for the divisors"""
+    Ei=np.ascontiguousarray(E,dtype=np.float64); d=np.zeros((4,6))
+    nd=None if n_div is None else np.ascontiguousarray(n_div,dtype=np.float64)
+    _lib.pint_disp6(ctypes.byref(cg.c),Ei.ctypes.data,None if nd is None else nd.ctypes.data,d.ctypes.data)
+    return d

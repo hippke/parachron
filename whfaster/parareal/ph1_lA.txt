@@ -1,0 +1,11 @@
+   mn1_g3_dt180_nsub2_un_ga120_w2k_frzs epoch     0:  2.15e+03      4.21     0.598
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 2.15e+03 4.21 0.598 | worst: 2.15e+03 4.21 0.598 | k2<=2 at 0/1 | 146s
+   mn1_g3_dt180_nsub2_un_ga120_w2k_frzs epoch  1030:  3.95e+03      76.8      1.16
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 3.95e+03 76.8 1.16 | worst: 3.95e+03 76.8 1.16 | k2<=2 at 0/1 | 143s
+   mn1_g3_dt180_nsub2_un_ga120_w2k_frzs epoch  2000:       438      7.28     0.702
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 438 7.28 0.702 | worst: 438 7.28 0.702 | k2<=2 at 0/1 | 147s
+   mn1_g3_dt180_nsub2_un_ga120_w2k_frzs epoch  3400:  1.45e+03        15      0.53
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 1.45e+03 15 0.53 | worst: 1.45e+03 15 0.53 | k2<=2 at 0/1 | 144s
+   mn1_g3_dt180_nsub2_un_ga120_w2k_frzs epoch  4500:  2.16e+03      13.8     0.322
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 2.16e+03 13.8 0.322 | worst: 2.16e+03 13.8 0.322 | k2<=2 at 0/1 | 144s
+== mn1_g3_dt180_nsub2_un_ga120_w2k_frzs median k1..: 2.15e+03 13.8 0.598 | worst: 3.95e+03 76.8 1.16 | k2<=2 at 0/5

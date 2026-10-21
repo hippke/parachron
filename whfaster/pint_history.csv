@@ -35,3 +35,7 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 16,empirical E-M-J three-body term in G,10,986,mixed,~0.09,,,no,term identified (P=1836 yr amp 2.2e-7); fit too crude
 21,mean-n tables + all comps + E-M-J term + giants 180 d (Python),10,986,k2 median 3.5,,,,research,k3 worst 1.6
 22,+ RK4 secular (giants sampled) + Uranus/Neptune secular (Python),10,986,k2 median 1.8 (6/10 <=2),,,,research,k3 worst 1.6
+23,+ giants averaging (ga120) + filter / calibration variants (Python),10,986,k2 <=2 5-6/10,,,,research,no systematic gain
+24,+ second-order secular rates U2 (Python),10,986,k2 median 1.45 (6/10 <=2),,,,research,W2 transform harmful (inconsistent)
+25,continuous pipelining simulators (config B),var,986,fine/slice 3.2-6,0.09,,1.4-2.2,no,windowed pipeline better at P=10
+26,improved G in C (all-component pass 2.13 ms),10,986,K~2.4 expected,0.2-0.4,,1.4-1.9,no,break-even needs r~0.12

@@ -840,3 +840,32 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   config B (r ≲ 0.12 for K̄ = 2.4). Cost-reduction options: run the k = 0 prediction sweep with config B and use the
   improved G only from k = 1 on (its evaluations on the k = 0 iterates run in parallel with the fine solves; the
   per-slice frozen second-order coefficients are computed there, off the critical path).
+* Variant: k = 0 prediction sweep with config B (cheap), improved G from k = 1 on: k2 ≤ 2 at 1/10 (worst 443) — the
+  k = 0 prediction quality is essential for K = 2; the improved G must be on the critical path.
+
+## Iteration 26 — Phase 5: cost of the improved coarse step in C (`pint/pint_disp6.c`)
+* C implementation of the all-component first-order transform (ln a, λ with shear, k, h, q, p; same grids as config
+  B with ng_hi = 64; optional mean motions for the divisors), validated against the Python theory (relative
+  agreement 1e-10 for ln a, λ, k, h; 1e-7 for q, p).
+* Cost (one core, idle): config B G call 1.01 ms; one ln a transform pass 0.45 ms; **one all-component pass
+  2.13 ms**. The improved G needs at least two such passes (start, end) plus the mean-n evaluation, the giants at
+  180 d and the RK4 secular drift: ≥ 4.8 ms → **r ≥ 0.40** (config B: 0.084). Optimisations in reach (analytic
+  dE/dv, packed real FFTs, pruned evaluation) might halve it → r ≈ 0.2–0.25.
+* Speedup model S = N/(N r + K̄(1 + r)), N = 10: config B adaptive (K̄ 3.29, r 0.084) 2.3; improved G (K̄ ≈ 2.4)
+  at r = 0.40: 1.4; at r = 0.20: 1.9; break-even needs r ≈ 0.12. **At ≈ 10 cores the round-3 coarse step does not
+  pay in wall-clock time** — the accuracy gain is real, but the coarse cost enters N times through the serial
+  k = 0 sweep.
+
+## Round 3 result (iterations 17–26)
+* The first-order mean-element theory of round 2 was far from first-order accurate. Fixed: small divisors from
+  mean (not osculating) mean motions, all-component transform, Venus–Earth secular grid (≥ 48²), Uranus/Neptune in
+  the secular rates, giants' 60-yr term aliasing (giants at 180 d, averaged forcing), Earth–Mars–Jupiter
+  second-order resonant term, second-order secular rates (Mars–Jupiter dominated; explains the 0.25 % secular
+  frequency error exactly). Python prototype: **k = 2 at ≤ 2 × noise for 6/10 test windows (median 1.45 × noise,
+  config B: 0/10, median 245), k = 3 ≤ 1.6–2.7 × noise for all windows (config B worst 870)**.
+* Not achieved: Gate 4 (8/10). The three hard windows (Mars at 3.4 and 4.5 Myr, Venus/Earth at 8.2 Myr) need the
+  complete second-order short-period theory; the partial W2 (14 pairs + 3 triples, Y-form) made things worse
+  because the mean ↔ osculating maps must be complete and consistent at second order.
+* Not worth it at 10 cores: the improved coarse step costs r ≈ 0.2–0.4 in C (iteration 26); continuous
+  pipelining (iteration 25) does not remove the startup term efficiently. **Config B with the adaptive rule remains
+  the production configuration (≈ 2.3× on 10 cores).** Round-4 directions: `RESEARCH_PLAN_R4.md`.

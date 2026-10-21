@@ -1,0 +1,6 @@
+   all_mn1_g3_dt180_nsub2_un_ga120_w2k epoch  5500:       611      1.36      1.28
+   all_mn1_g3_dt180_nsub2_un_ga120_w2k epoch  6000:       616      1.41     0.539
+   all_mn1_g3_dt180_nsub2_un_ga120_w2k epoch  7000:       616      0.87      1.49
+   all_mn1_g3_dt180_nsub2_un_ga120_w2k epoch  8160:  2.15e+03      9.32      1.05
+   all_mn1_g3_dt180_nsub2_un_ga120_w2k epoch  9300:       358      1.22     0.977
+== all_mn1_g3_dt180_nsub2_un_ga120_w2k median k1..: 616 1.36 1.05 | worst: 2.15e+03 9.32 1.49 | k2<=2 at 4/5 | 1241s
