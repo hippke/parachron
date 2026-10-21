@@ -27,3 +27,8 @@ tools/kepler_grid_old
 whfaster.bundle
 patches/
 parareal/cal_*.npy
+parareal/*.log
+parareal/mars_err_*.npy
+parareal/serr_*.npy
+parareal/jacG_*.npz
+parareal/oracle_lna_*.npz
