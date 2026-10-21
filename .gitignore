@@ -59,3 +59,6 @@ utsc_nfs/
 
 # benchmarks/perf/run.py build-flag marker
 src/.bench_build_flags
+whfaster/parareal/*.pkl
+whfaster/parareal/*.npz
+whfaster/parareal/__pycache__/
