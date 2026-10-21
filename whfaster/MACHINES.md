@@ -9,13 +9,17 @@ Written Oct 21, 2026. Use these machines for all whfaster / parareal timing runs
 | access | `ssh root@23.239.118.238` (key-based, no password; hostname `host2`) |
 | CPU | AMD Ryzen 9 7950X, 16 cores / 32 threads, 1 socket, AVX-512 (f, dq, bw, vl, cd, ifma, vbmi) |
 | memory / OS | 93 GB, Ubuntu 24.04.4 LTS, gcc 13.3.0, `perf` installed |
-| Python | python3 present, **no numpy** (Python analysis such as `freq_ana.py` and `ph1eval.py` runs on the local machine) |
-| repo | `/home/ubuntu/rebound`, branch `whfaster` |
+| Python | python3 3.12; **installed by the agent (Oct 21, 2026, apt): `python3-numpy` 1.26.4, `python3-scipy` 1.11.4** — enough for `freq_ana.py`, `ens_ana.py`, `tau_ana.py`, `gyr_ana.py` |
+| repo | `/home/ubuntu/rebound`, branch `whfaster` (pull only, no push credentials); second worktree `/home/ubuntu/rb2` (detached at `origin/whfaster`) for building while jobs run from the first |
+| data | run outputs in `whfaster/pint/runs/` (`p9/`, `dt/`, `tau/`, `ens2/`, `gyr/` ≈ 2 GB of ~1 Gyr trajectories, `timing/`) — not in git |
 | load | idle (load average ≈ 0); dedicated to these tests |
 
 Use it for anything that needs more than a few cores, and for all speedup numbers that are compared with the
 earlier 7950X results in `RESEARCH_LOG.md` (Phase 8). WHFast512 uses the AVX-512 assembly kernel here.
-Fine slice ≈ 7.0 ms, serial reference for `pint_pipe ... 100` windows ≈ 11.3 s.
+Fine slice ≈ 7.0 ms idle (C kernel; asm 6.6 ms), ≈ 8.3 ms with all 16 cores busy (clock); serial reference for
+`pint_pipe ... 100` windows ≈ 11.3 s (C) / 10.5 s (asm). CPUs 0–15 are the physical cores, 16–31 their SMT siblings.
+Governor `powersave` (amd-pstate), not changed. Pitfall: `pkill -f <pattern>` over ssh kills its own shell when the
+pattern appears in the command line — kill by PID.
 
 ## Local workstation (development, Python, small runs)
 | | |
