@@ -16,7 +16,8 @@ subsystem; energy projection of the corrected boundary states.
     make pint_pipe pint_run pint_long pint_test
 
 ## Measure the wall-clock speedup on a machine with >= 10 physical cores
-    ./pint_pipe 10 360000 3 20          # 10 threads (one per core), K=3, 20 windows = 197 kyr, + serial run
+    ./pint_pipe 10 360000 3 20 2 1 1 3e-6 6   # recommended: 10 cores, adaptive K (>=3, stop when update <= 3e-6 AU)
+    ./pint_pipe 10 360000 3 20          # fixed K=3 (faster, but secular frequencies only to ~3e-6 arcsec/yr)
     ./pint_pipe 20 360000 4 10          # 20 cores, K=4
     # AVX2-only CPUs (no AVX-512, e.g. Intel client parts): add the kernel argument 3
     ./pint_pipe 10 360000 3 20 3
@@ -26,7 +27,8 @@ amplified by shear; statistically equivalent to a serial run — see iteration 1
 siblings), a quiet machine, and fixed frequency if possible.
 
 Model (measured here on one core of a 2.1 GHz Xeon: fine slice 11.5–12.5 ms, coarse step 1.0 ms, r = 0.083):
-S = N / (N r + K (1 + r)) → 2.45 on 10 cores (K = 3), 3.3 on 20 cores (K = 4), 1.4 on 5 cores.
+S = N / (N r + K (1 + r)) → with the adaptive rule (mean K = 3.3, secular frequencies within ~1e-7 arcsec/yr of the
+serial run over 10 Myr): 2.3 on 10 cores; fixed K = 3: 2.45 (frequencies only to ~3e-6); fixed K = 4: 1.9.
 
 ## Other programs
 * `pint_test` — coarse-step check and timing (r = G/F).

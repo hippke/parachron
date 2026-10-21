@@ -279,3 +279,8 @@ Next steps, ranked:
 4. Validation at scale: bias ensembles (≥ 1e9 steps), 50 Myr frequency analysis on several ICs, and finally
    instability statistics with parareal ensembles on a cluster.
 5. A cheaper coarse step (analytic ∂E/∂v for the secular rates, vectorised pair loops): r 0.083 → ~0.05 (+10 %).
+
+**Update (iteration 15):** parameters are on a flat optimum (slice length, grids, giants' step, pairs: ≤ ±10 %);
+the gain is an adaptive iteration count per window (stop when the largest boundary update ≤ 3e-6 AU): mean K = 3.3
+with frequency fidelity ≤ 1e-7 ″/yr over 10 Myr → modelled **2.3× on 10 cores** at research-grade accuracy
+(implemented in `pint_pipe`). Fixed a silent step-rounding bug in the giants' WH run.

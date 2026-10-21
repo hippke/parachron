@@ -3,7 +3,10 @@
 // forms U^k_{n+1} = G(U^k_n) + F(U^{k-1}_n) - G(U^{k-1}_n) (+ energy projection), hands it to thread n+1, and then
 // runs the fine slice F(U^k_n) for the next iteration. Wall time ~ N T_G + K (T_F + T_G) per window.
 // Windows are chained (the next window starts from the converged end state).
-//   usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1]
+//   usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1] [tol_AU=0] [Kmax=6]
+// tol > 0: adaptive iteration count per window: at least K iterations, stop at the first iteration whose largest
+// boundary update (position change) is <= tol (at most Kmax). The next iteration's fine slices run speculatively
+// (in 10 chunks) and are abandoned when the window stops.
 // Prints wall-clock of the parareal run and of the serial run of the same span, and the final-state difference.
 #define _GNU_SOURCE
 #include "pint_coarse.h"
@@ -21,7 +24,11 @@
 #define KMAX 12
 typedef double el[PINT_NP][6];
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
-static double slice_days; static int fkern=2, K, N, pin=1;
+#include <stdatomic.h>
+static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6; static double tol=0.;
+static atomic_int stop_at;               // iteration at which the current window stopped (-1: running)
+static double upd_max[KMAX+1]; static pthread_mutex_t upd_mx=PTHREAD_MUTEX_INITIALIZER;
+static double poserr_el(const double A[PINT_NP][6], const double B[PINT_NP][6]);
 static struct pint_cfg cfg;
 static double energy_sim(struct reb_simulation* s){
     double E=reb_simulation_energy(s); const double c=10065.32, m0=s->particles[0].m;
@@ -41,13 +48,29 @@ static void project_energy(el E, double Et){
     }
     pint_sim_to_el(s,E); reb_simulation_free(s);
 }
-static void fine(const el Ein, el Eout){
+// fine slice; returns 0 if abandoned because the window stopped at an iteration < kneed
+static int fine(const el Ein, el Eout, int kneed){
     struct reb_simulation* s=pint_el_to_sim(ss_mass,Ein);
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
-    w->gr_potential=1; w->corrector=17; w->kernel=fkern; w->concatenate_steps=lround(slice_days/6.);
-    reb_simulation_steps(s,1); pint_sim_to_el(s,Eout); reb_simulation_free(s);
+    w->gr_potential=1; w->corrector=17; w->kernel=fkern;
+    const long nst=lround(slice_days/6.);
+    if (tol>0. && nst%10==0){
+        w->concatenate_steps=nst/10;
+        for (int q=0;q<10;q++){
+            const int st=atomic_load(&stop_at);
+            if (st>=0 && st<kneed){ reb_simulation_free(s); return 0; }
+            reb_simulation_steps(s,1);
+        }
+    } else { w->concatenate_steps=nst; reb_simulation_steps(s,1); }
+    pint_sim_to_el(s,Eout); reb_simulation_free(s);
+    return 1;
+}
+static double poserr_el(const double A[PINT_NP][6], const double B[PINT_NP][6]){
+    struct reb_simulation* a=pint_el_to_sim(ss_mass,A); struct reb_simulation* b=pint_el_to_sim(ss_mass,B);
+    double m=0; for (int i=1;i<=PINT_NP;i++){ double d[3]={a->particles[i].x-b->particles[i].x,a->particles[i].y-b->particles[i].y,a->particles[i].z-b->particles[i].z}; for(int x=0;x<3;x++) if (fabs(d[x])>m) m=fabs(d[x]); }
+    reb_simulation_free(a); reb_simulation_free(b); return m;
 }
 static double wrapd(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 static el U[KMAX+1][NMAX+1];
@@ -56,17 +79,20 @@ static double tbusyF[NMAX], tbusyG[NMAX];
 static void* slice_thread(void* arg){
     const int n=(int)(long)arg;
     if (pin){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(n % CPU_SETSIZE, &cs); pthread_setaffinity_np(pthread_self(), sizeof cs, &cs); }
-    el Fprev, Gold; double EFprev=0, EUprev=0;
-    for (int k=0;k<=K;k++){
+    el Fprev, Gold; double EFprev=0, EUprev=0; int have_F=0;
+    const int kend = tol>0. ? Kmax : K;
+    for (int k=0;k<=kend;k++){
+        { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
         if (n>0) sem_wait(&ready[k][n]);
+        { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
         double t0=now();
         el g; pint_coarse(&cfg,U[k][n],g);
         if (k==0 || n<k-1){
-            // iteration 0: coarse prediction; slices n < k-1 are already exact: pass through (U^k_{n+1} = U^{k-1}_{n+1})
             if (k==0) memcpy(U[0][n+1],g,sizeof(el)); else memcpy(U[k][n+1],U[k-1][n+1],sizeof(el));
         } else if (n==k-1){
             memcpy(U[k][n+1],Fprev,sizeof(el));    // exact
         } else {
+            if (!have_F) break;                   // cannot happen unless the window stopped
             for (int i=0;i<PINT_NP;i++) for (int e=0;e<6;e++){
                 double d=Fprev[i][e]-Gold[i][e]; if (e==1) d=wrapd(d);
                 U[k][n+1][i][e]=g[i][e]+d;
@@ -75,11 +101,24 @@ static void* slice_thread(void* arg){
             project_energy(U[k][n+1], energy_el(U[k][n]) + (EFprev-EUprev));
         }
         memcpy(Gold,g,sizeof(el));
+        if (tol>0. && k>0){
+            const double u = n>=k-1 ? poserr_el(U[k][n+1],U[k-1][n+1]) : 0.;
+            pthread_mutex_lock(&upd_mx); if (u>upd_max[k]) upd_max[k]=u; pthread_mutex_unlock(&upd_mx);
+        }
         double t1=now(); tbusyG[n]+=t1-t0;
-        if (n<N-1) sem_post(&ready[k][n+1]); else sem_post(&ready[k][N]);
-        if (k<K && n>=k){     // fine slice for the next iteration (slices n < k are exact already)
-            fine(U[k][n],Fprev);
-            EUprev=energy_el(U[k][n]); EFprev=energy_el(Fprev);
+        if (n<N-1) sem_post(&ready[k][n+1]);
+        else {
+            // last slice: all updates of iteration k are known -> decide
+            int stop = (tol>0.) ? ((k>=K && upd_max[k]<=tol) || k==Kmax) : (k==K);
+            if (stop){
+                atomic_store(&stop_at,k);
+                for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&ready[kk][q]);   // release waiting threads
+            }
+            sem_post(&ready[k][N]);
+        }
+        have_F=0;
+        if (k<kend && n>=k){     // fine slice for the next iteration (speculative when adaptive)
+            if (fine(U[k][n],Fprev,k+1)){ EUprev=energy_el(U[k][n]); EFprev=energy_el(Fprev); have_F=1; }
         }
         tbusyF[n]+=now()-t1;
     }
@@ -92,6 +131,10 @@ int main(int argc, char** argv){
     if (argc>5) fkern=atoi(argv[5]);
     const int ser = argc>6 ? atoi(argv[6]) : 1;
     if (argc>7) pin=atoi(argv[7]);
+    if (argc>8) tol=atof(argv[8]);
+    if (argc>9) Kmax=atoi(argv[9]);
+    if (Kmax>KMAX-1) Kmax=KMAX-1;
+    int khist[KMAX+1]={0};
     pint_default_cfg(&cfg, ss_mass, slice_days);
     if (fkern!=2) cfg.kernel = fkern;
     struct reb_simulation* r0=ss_create(6.,0); el E0; pint_sim_to_el(r0,E0); reb_simulation_free(r0);
@@ -107,14 +150,18 @@ int main(int argc, char** argv){
     el Ecur; memcpy(Ecur,E0,sizeof(el));
     const double t0=now();
     for (int w=0;w<W;w++){
-        for (int k=0;k<=K;k++){ memcpy(U[k][0],Ecur,sizeof(el)); for (int n=0;n<=N;n++) sem_init(&ready[k][n],0,0); }
+        for (int k=0;k<=KMAX;k++){ memcpy(U[k][0],Ecur,sizeof(el)); upd_max[k]=0; for (int n=0;n<=N;n++) sem_init(&ready[k][n],0,0); }
+        atomic_store(&stop_at,-1);
         pthread_t th[NMAX];
         for (int n=0;n<N;n++) pthread_create(&th[n],NULL,slice_thread,(void*)(long)n);
         for (int n=0;n<N;n++) pthread_join(th[n],NULL);
-        memcpy(Ecur,U[K][N],sizeof(el));
+        const int ks=atomic_load(&stop_at);
+        khist[ks]++;
+        memcpy(Ecur,U[ks][N],sizeof(el));
     }
     const double tpr=now()-t0;
     double sF=0,sG=0; for (int n=0;n<N;n++){ sF+=tbusyF[n]; sG+=tbusyG[n]; }
+    printf("iterations per window:"); double km=0; for (int k=0;k<=KMAX;k++) if (khist[k]){ printf(" K=%d: %d",k,khist[k]); km+=k*khist[k]; } printf(" (mean %.2f)\n",km/W);
     printf("pipelined parareal: N=%d threads, K=%d, %d windows of %d x %.0f d: wall %.3f s, busy fine %.3f s, coarse %.3f s (core-s)\n",
            N,K,W,N,slice_days,tpr,sF,sG);
     if (ser){

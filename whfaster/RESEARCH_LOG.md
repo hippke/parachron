@@ -603,3 +603,52 @@ measured vs 0.86 predicted). Wall-clock speedup S = N/(N r + K(1 + r)), core-hou
 
 The user's example target ("2× with 5× the cores") is not reached at research-grade accuracy; "≈ 2× with 10× the
 cores" is (K = 4). Not yet measured on a ≥ 10-core machine (this host has 2 vCPUs): `pint/README.md`.
+
+## Iteration 15 — bug check, parameter search, adaptive stopping rule (KEPT)
+**Bugs.** Fixed earlier and verified in the code: thread-unsafe static scratch in `pint_coarse` (thread-local now,
+one-time FFT twiddles), Euler secular bias (Heun default), garbled calibration update in `pint_long`, slicing bug in
+`secant.py`. Found and fixed now: a giants' step that does not divide the slice was silently rounded (`lround`), so G
+integrated the giants over the wrong time span (the "540 d diverges" result of iteration 13 was this bug; correctly
+done, 540 d converges but slowly: 5.6e-5 AU at k = 4). The step is now adjusted to divide the slice exactly; the
+drivers reject slice lengths that are not multiples of 6 d.
+
+**Parameter search** (`parareal/sweep2.py`): error/noise after k iterations for 10 × slice windows started at 10 epochs
+of the 10 Myr serial run (0 … 9.3 Myr, including the slow windows at 1.03 and 3.4 Myr); measured r; modelled
+10-core speedup at the mean (adaptive) and maximum (fixed) K needed to reach ≤ 2 × noise:
+
+| configuration | r | K per epoch | S(mean K) | S(max K) |
+|---|---|---|---|---|
+| default (986 yr, giants 360 d, 32²/16², maxj 5, Heun) | 0.093 | 3,5,3,4,4,3,3,3,4,3 | 2.10 | 1.56 |
+| 821-yr slices | 0.096 | mean 3.6 | 2.04 | 1.55 |
+| 1183-yr slices | 0.080 | mean 4.2 | 1.87 | 1.20 |
+| 1380-yr slices | 0.074 | mean 3.6 | 2.17 | 1.63 |
+| 1183 yr, giants 300 d | 0.082 | mean 4.5 | 1.76 | 1.19 |
+| 1183 yr, 64² inner grids | 0.201 | mean 3.6 | 1.58 | 1.25 |
+
+One-at-a-time from the default (5 epochs, ≤ 1 × noise): inner–giant grids 8² worse (mean K 5.8), 32² no gain, inner
+grids 16² much worse (6.8), 64² faster convergence (k = 3: 43 vs 870 × noise) but r = 0.23; Uranus/Neptune pairs,
+giants' step 240/300/450 d, slice lengths 657–1380 yr: all within the epoch-to-epoch scatter (±5–10 % in S).
+→ **The default is on a flat optimum; no parameter gives a significant gain.** The spread in K between windows (3 for
+most, 5 for a few) is the dominant cost, i.e. the iteration count should be chosen per window.
+
+**Stopping rule** (`parareal/stoprule.py`): the largest boundary update (known during the run) predicts the true
+error: stop at the first k ≥ 3 with update ≤ τ: τ = 1e-5 AU → mean K 3.3 but one window at 14 × noise; τ = 3e-6 →
+mean 3.7, worst 2.5 × noise; τ = 1e-6 → mean 4.0, worst 1.6 ×.
+10 Myr validation on the hard ICs of iteration 14 (`pint_long … xtol`):
+
+| run | mean K (histogram K=3/4/5) | max frequency shift [″/yr] | energy vs serial at 10 Myr |
+|---|---|---|---|
+| fixed K = 3 | 3 | 3.3e-6 | −3.0e-12 |
+| fixed K = 4 | 4 | 3.2e-7 | +2.5e-13 |
+| fixed K = 5 | 5 | 1.2e-7 | +8.0e-12 |
+| **adaptive τ = 3e-6 AU** | **3.29** (710/285/5) | **8.6e-8** | +2.2e-12 |
+| adaptive τ = 1e-6 AU | 3.64 (370/616/14) | 2.5e-7 | −1.3e-12 |
+
+(asm vs C: frequencies ≤ 1.5e-8, energy +5.3e-12.) Shifts below ~2e-7 are at the scatter level of this measurement;
+both rules give fixed-K = 4/5 fidelity at a lower mean cost. Kept: **τ = 3e-6 AU, K_min = 3, K_max = 6**.
+Implemented in `pint_pipe` (args 8–9): the next iteration's fine slices run speculatively in 10 chunks and are
+abandoned as soon as the last slice decides to stop; checked with N = 4 and 10, τ = 3e-6 and an unreachable τ (stops
+at K_max, no deadlock).
+
+Modelled wall-clock speedup at research-grade accuracy (frequency shifts ≲ 1e-7–3e-7 ″/yr, energy unbiased),
+S = N/(N r + K̄(1 + r)), r = 0.083: **10 cores 2.3× (K̄ = 3.3)**, vs 1.94× (fixed K = 4) and 1.6× (fixed K = 5).

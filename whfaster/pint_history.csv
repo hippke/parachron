@@ -28,3 +28,6 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 14,config B Heun K=3 10 Myr second ICs,10,986,3,0.083,,2.45,partial,frequency shifts up to 3.3e-6 (10x WH error)
 14,config B Heun K=4 10 Myr second ICs,10,986,4,0.083,,1.94,yes,frequency shifts <=3.2e-7 (WH-error level)
 14,config B Heun K=5 10 Myr second ICs,10,986,5,0.083,,1.61,yes,frequency shifts <=1.2e-7
+15,parameter sweep (slice 657-1380 yr; giants 240-450 d; grids 8-64; maxj 4-7),10,986,3-5 per window,0.074-0.23,,1.6-2.2,no,flat optimum at default
+15,adaptive stop tau=3e-6 AU (Kmin 3 Kmax 6) 10 Myr hard ICs,10,986,3.29 mean,0.083,,2.32,yes,frequency shifts <=8.6e-8; energy OK
+15,adaptive stop tau=1e-6 AU,10,986,3.64 mean,0.083,,2.13,ok,frequency shifts <=2.5e-7
