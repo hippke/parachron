@@ -1,0 +1,13 @@
+target error/noise <= 1.0; epochs [0, 1030, 3400, 6000, 8160]
+default                    r=0.091 worst err/noise k=1..: 3.8e+05 1.9e+04 8.7e+02 14 0.73 0.84 | K per epoch [4, 5, 4, 4, 5] mean 4.4 -> S(mean K)=1.75 S(max K)=1.57
+ng_io=8                    r=0.083 worst err/noise k=1..: 2.3e+06 2.2e+05 9.3e+03 3.2e+02 31 0.76 | K per epoch [6, 5, 6, 6, 6] mean 5.8 -> S(mean K)=1.41 S(max K)=1.36
+ng_io=32                   r=0.112 worst err/noise k=1..: 3.8e+05 1.9e+04 8.7e+02 14 1.1 1.1 | K per epoch [4, 5, 4, 4, 6] mean 4.6 -> S(mean K)=1.60 S(max K)=1.28
+ng_ii=16                   r=0.052 worst err/noise k=1..: 4.1e+07 1.4e+07 3.9e+06 4.8e+05 2.9e+04 5.1e+03 | K per epoch [6, 7, 7, 7, 7] mean 6.8 -> S(mean K)=1.30 S(max K)=1.27
+ng_ii=64                   r=0.229 worst err/noise k=1..: 3.2e+05 3.5e+03 43 2.4 0.68 1.2 | K per epoch [4, 5, 4, 3, 5] mean 4.2 -> S(mean K)=1.34 S(max K)=1.19
+maxj=6                     r=0.098 worst err/noise k=1..: 3.9e+05 2e+04 9e+02 14 0.77 0.81 | K per epoch [4, 5, 4, 4, 5] mean 4.4 -> S(mean K)=1.72 S(max K)=1.55
+maxj=7                     r=0.102 worst err/noise k=1..: 3.9e+05 2e+04 9e+02 14 0.67 1.1 | K per epoch [4, 5, 4, 4, 5] mean 4.4 -> S(mean K)=1.70 S(max K)=1.53
+maxj=4                     r=0.097 worst err/noise k=1..: 8.7e+05 5.7e+04 1.1e+03 12 0.85 0.81 | K per epoch [5, 5, 4, 5, 5] mean 4.8 -> S(mean K)=1.60 S(max K)=1.55
+dt_out=240                 r=0.100 worst err/noise k=1..: 3.8e+05 1.9e+04 8.7e+02 14 0.53 0.93 | K per epoch [4, 5, 4, 4, 5] mean 4.4 -> S(mean K)=1.71 S(max K)=1.54
+dt_out=300                 r=0.087 worst err/noise k=1..: 3.8e+05 1.9e+04 8.7e+02 13 0.56 0.87 | K per epoch [3, 5, 4, 4, 5] mean 4.2 -> S(mean K)=1.84 S(max K)=1.59
+dt_out=450                 r=0.098 worst err/noise k=1..: 5e+05 1.9e+04 8.4e+02 14 0.7 0.8 | K per epoch [4, 5, 4, 5, 5] mean 4.6 -> S(mean K)=1.66 S(max K)=1.54
+euler                      r=0.076 worst err/noise k=1..: 4.2e+05 1.8e+04 8.1e+02 14 0.75 0.76 | K per epoch [4, 5, 4, 4, 5] mean 4.4 -> S(mean K)=1.82 S(max K)=1.63

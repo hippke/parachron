@@ -69,6 +69,7 @@ static void write_rec(FILE* f, double t, const el E){ double e=energy_el(E); fwr
 int main(int argc, char** argv){
     if (argc<7){ fprintf(stderr,"usage: pint_long out_prefix windows N slice_days threads k [serial=1] [extra_k_tol=0]\n"); return 1; }
     const char* pre=argv[1]; const int W=atoi(argv[2]), N=atoi(argv[3]); slice_days=atof(argv[4]);
+    if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; }
     const int P=atoi(argv[5]), K=atoi(argv[6]); const int ser = argc>7 ? atoi(argv[7]) : 1;
     const double xtol = argc>8 ? atof(argv[8]) : 0.;
     const int diag = argc>9 ? atoi(argv[9]) : 0;

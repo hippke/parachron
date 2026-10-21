@@ -47,6 +47,7 @@ static void* worker(void* arg){
 int main(int argc, char** argv){
     const int N = argc>1 ? atoi(argv[1]) : 10;
     slice_days = argc>2 ? atof(argv[2]) : 360000.;
+    if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; }
     const int P = argc>3 ? atoi(argv[3]) : 2;
     const int kmax = argc>4 ? atoi(argv[4]) : 5;
     const double dt_out = argc>5 ? atof(argv[5]) : 360.;

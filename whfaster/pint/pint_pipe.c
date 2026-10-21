@@ -87,7 +87,8 @@ static void* slice_thread(void* arg){
 }
 int main(int argc, char** argv){
     if (argc<5){ fprintf(stderr,"usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1]\n"); return 1; }
-    N=atoi(argv[1]); slice_days=atof(argv[2]); K=atoi(argv[3]); const int W=atoi(argv[4]);
+    N=atoi(argv[1]); slice_days=atof(argv[2]);
+    if (fabs(slice_days/6.-lround(slice_days/6.))>1e-9){ fprintf(stderr,"slice length must be a multiple of the 6 d step\n"); return 1; } K=atoi(argv[3]); const int W=atoi(argv[4]);
     if (argc>5) fkern=atoi(argv[5]);
     const int ser = argc>6 ? atoi(argv[6]) : 1;
     if (argc>7) pin=atoi(argv[7]);

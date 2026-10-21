@@ -233,11 +233,12 @@ static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], doubl
         reb_simulation_add_fmt(s,"m a e inc Omega pomega l", m[j+1], exp(e[0]), ecc, 2.*asin(si), Om, pom, e[1]);
     }
     reb_simulation_move_to_com(s);
-    s->dt=c->dt_out_days*DAY; s->exact_finish_time=0;
+    // number of giant steps: the step is adjusted (<= dt_out_days) so that the steps cover the slice exactly
+    const long nst=(long)ceil(c->slice_days/c->dt_out_days-1e-9);
+    s->dt=c->slice_days/nst*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
     w->gr_potential=1; w->corrector=17; w->kernel=c->kernel;
-    const long nst=lround(c->slice_days/c->dt_out_days);
     w->concatenate_steps=nst;
     reb_simulation_steps(s,1);
     for (int j=PINT_NI;j<PINT_NP;j++){

@@ -1,0 +1,5 @@
+target error/noise <= 1.0; epochs [0, 1030, 3400, 6000, 8160]
+days=240000                r=0.129 worst err/noise k=1..: 9.6e+04 1.7e+04 9.4e+02 4.2 1.8 1.4 | K per epoch [4, 5, 3, 7, 4] mean 4.6 -> S(mean K)=1.54 S(max K)=1.09
+days=300000                r=0.109 worst err/noise k=1..: 4e+05 1.9e+04 1.5e+02 2.4 0.81 0.94 | K per epoch [3, 5, 4, 4, 4] mean 4.0 -> S(mean K)=1.81 S(max K)=1.51
+days=432000                r=0.075 worst err/noise k=1..: 3.5e+05 2e+04 8.1e+02 20 0.9 0.72 | K per epoch [4, 5, 3, 3, 5] mean 4.0 -> S(mean K)=1.98 S(max K)=1.63
+days=300000,dt_out=300     r=0.105 worst err/noise k=1..: 4e+05 1.9e+04 1.4e+02 2 0.81 0.95 | K per epoch [3, 5, 4, 4, 4] mean 4.0 -> S(mean K)=1.83 S(max K)=1.52
