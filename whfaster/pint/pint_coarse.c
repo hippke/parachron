@@ -222,44 +222,82 @@ static void task_gr(struct tctx* x, int t){
     }
     x->tda[t]=creal(s);
 }
-// ---- helper pool (fork-join over task indices) ----
+// ---- helper pool (fork-join over task indices); workers spin briefly before sleeping (wake-up latency of sleeping
+// threads is ~0.1 ms, comparable to a table pass) ----
+#include <stdatomic.h>
+#include <immintrin.h>
+static int spin_iters=-1;   // PINT_SPIN env (default 20000 pause instructions, ~0.3-0.6 ms), 0: sleep at once
+static int get_spin(void){ if (spin_iters<0){ const char* e=getenv("PINT_SPIN"); spin_iters= e? atoi(e) : 20000; } return spin_iters; }
+#define SPIN_ITERS get_spin()
 static pthread_mutex_t pool_mx=PTHREAD_MUTEX_INITIALIZER, pool_busy=PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER, pool_done=PTHREAD_COND_INITIALIZER;
-static int pool_n=0, pool_gen=0, pool_active=0;
-static void (*pool_fn)(void*,int); static void* pool_arg; static int pool_ntask; static int pool_next;
+static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER;
+static int pool_n=0; static atomic_int pool_gen=0, pool_next=0, pool_active=0;
+static void (*volatile pool_fn)(void*,int); static void* volatile pool_arg; static volatile int pool_ntask;
 static void pool_run_tasks(void){
-    for (;;){
-        pthread_mutex_lock(&pool_mx); const int t=pool_next<pool_ntask ? pool_next++ : -1; pthread_mutex_unlock(&pool_mx);
-        if (t<0) break;
-        pool_fn(pool_arg,t);
-    }
+    for (;;){ const int t=atomic_fetch_add(&pool_next,1); if (t>=pool_ntask) break; pool_fn(pool_arg,t); }
 }
 static void* pool_worker(void* a){
-    (void)a; int gen=0;
+    int gen=(int)(long)a;          // generation at creation (no job can be in flight then)
     for (;;){
-        pthread_mutex_lock(&pool_mx);
-        while (pool_gen==gen) pthread_cond_wait(&pool_cv,&pool_mx);
-        gen=pool_gen; pthread_mutex_unlock(&pool_mx);
+        int spins=0;
+        while (atomic_load_explicit(&pool_gen,memory_order_acquire)==gen && spins<SPIN_ITERS){ _mm_pause(); spins++; }
+        if (atomic_load(&pool_gen)==gen){
+            pthread_mutex_lock(&pool_mx);
+            while (atomic_load(&pool_gen)==gen) pthread_cond_wait(&pool_cv,&pool_mx);
+            pthread_mutex_unlock(&pool_mx);
+        }
+        gen=atomic_load(&pool_gen);
         pool_run_tasks();
-        pthread_mutex_lock(&pool_mx); if (--pool_active==0) pthread_cond_signal(&pool_done); pthread_mutex_unlock(&pool_mx);
+        atomic_fetch_sub_explicit(&pool_active,1,memory_order_release);
+    }
+    return NULL;
+}
+// persistent worker for the giants' WH run (concurrent with the start tables)
+static atomic_int og_gen=0, og_done=0; static void (*volatile og_fn)(void*); static void* volatile og_arg;
+static pthread_mutex_t og_mx=PTHREAD_MUTEX_INITIALIZER, og_busy=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t og_cv=PTHREAD_COND_INITIALIZER;
+static int og_started=0;
+static void* og_worker(void* a){
+    int gen=(int)(long)a;
+    for (;;){
+        int spins=0;
+        while (atomic_load_explicit(&og_gen,memory_order_acquire)==gen && spins<SPIN_ITERS){ _mm_pause(); spins++; }
+        if (atomic_load(&og_gen)==gen){
+            pthread_mutex_lock(&og_mx); while (atomic_load(&og_gen)==gen) pthread_cond_wait(&og_cv,&og_mx); pthread_mutex_unlock(&og_mx);
+        }
+        gen=atomic_load(&og_gen);
+        og_fn(og_arg);
+        atomic_store_explicit(&og_done,gen,memory_order_release);
     }
     return NULL;
 }
 void pint_set_threads(int nhelpers){
     pthread_mutex_lock(&pool_busy);
-    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,NULL); pthread_detach(th); }
+    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen)); pthread_detach(th); }
     if (nhelpers>pool_n) pool_n=nhelpers;
+    if (nhelpers>0 && !og_started){ pthread_t th; pthread_create(&th,NULL,og_worker,(void*)(long)atomic_load(&og_gen)); pthread_detach(th); og_started=1; }
     pthread_mutex_unlock(&pool_busy);
 }
 // run fn(arg, 0..ntask-1); on the pool if par and the pool is free, else serially in the caller
 static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
     if (!par || pool_n==0 || pthread_mutex_trylock(&pool_busy)!=0){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
-    pthread_mutex_lock(&pool_mx);
-    pool_fn=fn; pool_arg=arg; pool_ntask=ntask; pool_next=0; pool_active=pool_n; pool_gen++;
-    pthread_cond_broadcast(&pool_cv); pthread_mutex_unlock(&pool_mx);
+    pool_fn=fn; pool_arg=arg; pool_ntask=ntask;
+    atomic_store(&pool_next,0); atomic_store(&pool_active,pool_n);
+    pthread_mutex_lock(&pool_mx); atomic_fetch_add_explicit(&pool_gen,1,memory_order_release); pthread_cond_broadcast(&pool_cv); pthread_mutex_unlock(&pool_mx);
     pool_run_tasks();
-    pthread_mutex_lock(&pool_mx); while (pool_active>0) pthread_cond_wait(&pool_done,&pool_mx); pthread_mutex_unlock(&pool_mx);
+    while (atomic_load_explicit(&pool_active,memory_order_acquire)>0) _mm_pause();
     pthread_mutex_unlock(&pool_busy);
+}
+// start fn(arg) on the giants' worker; returns the generation to wait for, or 0 if it ran in the caller
+static int og_start(void (*fn)(void*), void* arg){
+    if (!og_started || pthread_mutex_trylock(&og_busy)!=0){ fn(arg); return 0; }
+    og_fn=fn; og_arg=arg;
+    pthread_mutex_lock(&og_mx); const int g=atomic_fetch_add_explicit(&og_gen,1,memory_order_release)+1; pthread_cond_broadcast(&og_cv); pthread_mutex_unlock(&og_mx);
+    return g;
+}
+static void og_wait(int g){
+    if (!g) return;
+    while (atomic_load_explicit(&og_done,memory_order_acquire)!=g) _mm_pause();
+    pthread_mutex_unlock(&og_busy);
 }
 static void grid_task(void* a, int t){ task_grid((struct tctx*)a, t); }
 static void pairgr_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) task_gr(x,t); else task_pair(x,t); }
@@ -334,7 +372,7 @@ static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], doubl
 }
 struct outer_arg { const struct pint_cfg* c; const double (*E)[6]; double (*Eo)[6]; };
 static void outer_task(void* a, int t){ (void)t; struct outer_arg* o=a; outer_wh(o->c,o->E,o->Eo); }
-static void* outer_thread(void* a){ outer_task(a,0); return NULL; }
+static void outer_fn(void* a){ outer_task(a,0); }
 void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
 void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){ pint_coarse_par(c,E_in,E_out,0); }
 void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){
@@ -344,8 +382,8 @@ void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], do
     for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
     double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
     // the giants' WH run is independent of the start tables: run it concurrently when parallel
-    double Mg[PINT_NP][6]; struct outer_arg oa={c,E_in,Mg}; pthread_t oth; int othr=0;
-    if (par && pool_n>0){ othr = pthread_create(&oth,NULL,outer_thread,&oa)==0; }
+    double Mg[PINT_NP][6]; struct outer_arg oa={c,E_in,Mg}; int othr=0, og=0;
+    if (par && pool_n>0){ og=og_start(outer_fn,&oa); othr=1; }
     table_par(c,E_in,disp,R,par);
     const double t1=now();
     const double T=c->slice_days*DAY;
@@ -357,7 +395,7 @@ void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], do
         M2[i][1]=wrap(E_in[i][1]+(nbar+R[i][1])*T);
         for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+R[i][e]*T;
     }
-    if (othr){ pthread_join(oth,NULL); for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6); }
+    if (othr){ og_wait(og); for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6); }
     else outer_wh(c,E_in,M2);
     const double t2=now();
     double disp1[PINT_NI];

@@ -906,3 +906,17 @@ difference 6.6e-4 AU after 1.58 Myr vs 7.7e-5 AU after 1.18 Myr at 3e-6 — need
 * Measured here only on 2 vCPUs (1 helper: 0.99 → 0.78–0.82 ms). Cost split (serial): two table passes 0.73 ms,
   giants' run 0.35 ms → with enough helpers the k = 0 step is bounded by the giants' run (≈ 0.35–0.45 ms, ≈ 2.3×
   faster). Expected on the 7950X (N = 16, K̄ 3.45): start-up term 1.9 → ≈ 0.8, model S ≈ 2.8 → ≈ 3.3.
+
+### Phase 8, user run 3 (7950X, N = 16, 100 windows, tol 3e-6; K̄ 3.80: 26/68/6 at K = 3/4/5)
+| variant | wall | speedup |
+|---|---|---|
+| baseline (new build, skips unneeded G) | 4.74–4.78 s | 2.36–2.38 |
+| 8 helpers, k = 0 sweep only (mode 1) | 4.79 s | 2.37 |
+| **8 helpers, all iterations (mode 2)** | **4.27 s** | **2.65** (coarse busy 5.17 → 3.19 core-s) |
+| 15 helpers, mode 1 | 4.78 s | 2.37 |
+Final position difference identical in all runs (2.84e-4 AU after 1.58 Myr; tol 1e-5 gave 6.6e-4 — same order, i.e.
+round-off divergence, not the tolerance). Mode 1 gave nothing: sleeping helpers need ~0.1 ms to wake up, and the
+step has 4 fork-join rounds plus a thread creation for the giants' run. Fix (iteration 27b): persistent giants
+worker, lock-free task counter, workers spin `PINT_SPIN` pause instructions (default 20000) before sleeping.
+Here (2 vCPUs, oversubscribed) spinning hurts (1.10 ms) and `PINT_SPIN=0` is best (0.68 ms vs 1.03 serial); to be
+measured on the 7950X.
