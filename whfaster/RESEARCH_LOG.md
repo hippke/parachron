@@ -869,3 +869,21 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
 * Not worth it at 10 cores: the improved coarse step costs r ≈ 0.2–0.4 in C (iteration 26); continuous
   pipelining (iteration 25) does not remove the startup term efficiently. **Config B with the adaptive rule remains
   the production configuration (≈ 2.3× on 10 cores).** Round-4 directions: `RESEARCH_PLAN_R4.md`.
+
+## Phase 8 — first many-core measurement (user, AMD Ryzen 9 7950X, 16 cores, AVX-512; Oct 21, 2026)
+`./pint_pipe N 360000 3 20 2 1 1 3e-6 6` (adaptive rule, 20 windows from t = 0):
+
+| N (threads) | K̄ | wall | serial | speedup | fine busy | coarse busy | final Δpos |
+|---|---|---|---|---|---|---|---|
+| 10 | 3.50 (10× K=3, 10× K=4) | 0.772 s | 1.407 s | **1.82** | 5.06 core-s | 0.76 core-s | 1.2e-5 AU |
+| 16 | 3.90 (2× K=3, 18× K=4) | 0.957 s | 2.273 s | **2.37** | 10.15 core-s | 1.32 core-s | 2.6e-5 AU |
+
+Analysis:
+* Fine slice 7.0 ms (serial 1.407 s / 200 slices) vs 12 ms on the 2.1 GHz Xeon; coarse ≈ 0.84 ms per call
+  (0.76 core-s / ~20·10·4.5 calls) → **r ≈ 0.12** on Zen 4 (0.084 on the Xeon): the AVX-512 fine kernel gains more
+  from the faster core than the scalar coarse step.
+* Model S = N/(N r + K̄(1 + r)) with the measured K̄ and r = 0.12: N = 10 → 1.95 (measured 1.82, 93 %), N = 16 →
+  2.54 (measured 2.37, 93 %). The pipelined model holds on real many-core hardware within ~7 %.
+* K̄ is higher than in the 10 Myr runs (3.29): the first 20 windows from t = 0 are harder than average, and
+  16-slice windows need more iterations (binomial growth, iteration 25).
+* The coarse cost is now the main lever: N r is 1.2 (N = 10) and 1.9 (N = 16) of the 5–6 units of wall time.
