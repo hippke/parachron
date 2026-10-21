@@ -1082,3 +1082,29 @@ main thread from a ring filled by the deciding slice thread (off the critical pa
 * Rejected without implementation: splitting the 64² V–E pair task (iteration 33) — even fully chunked, three
   sequential 64² passes (fill, FFT 64², evaluation) keep the helper chain at ≈ 0.35 ms, longer than the giants' run;
   net ≈ +1 %.
+
+### Iteration 35 — the accuracy budget: parareal error vs the WH time-step error
+Literature check (new): Rein, Brown & Kanda 2025 (arXiv 2507.04987, "On the statistical convergence of N-body
+simulations of the Solar System"): fixed-step symplectic integrations give physical secular frequencies and
+instability rates for dt up to 32 d in 5 Gyr ensembles. → The right yardstick for parareal is the integrator's own
+time-step error, and the fair comparison is a serial run with a larger (cheaper) step. No 2024–26 parareal work on
+planetary N-body found; GParareal/nnGParareal (Gattiglio, Grigoryeva, Tamborrino, arXiv 2405.12182) learn F − G from
+past iterates (our secant attempt, it. 13, is a crude version).
+**Serial references at dt = 3, 8, 12, 24 d** (hard ICs, 10 Myr, kernel 2, `pint_pipe_dt` = `pint_pipe` with
+`PINT_SERONLY PINT_DT`; `runs/dt/`), frequencies vs dt = 3 d ["/yr]:
+| run | g1 | g2 | g4 (Mars) | g6 | s1 | s2 | s4 | cost |
+|---|---|---|---|---|---|---|---|---|
+| serial dt 6 d | +1.9e-7 | −3.3e-7 | **−5.05e-6** | −1.55e-6 | +3.8e-7 | +1.10e-6 | +2.17e-6 | 1 |
+| serial dt 8 d | +2.4e-7 | −7.1e-7 | −1.02e-5 | −3.23e-6 | +1.4e-6 | +2.15e-6 | +4.40e-6 | 0.75 |
+| serial dt 12 d | +2.1e-6 | −1.5e-6 | −2.55e-5 | −7.93e-6 | −2.9e-6 | +5.73e-6 | +1.09e-5 | 0.5 |
+| serial dt 24 d | +9.4e-3 | +2.6e-3 | +2.9e-4 | −3.1e-5 | −1.3e-2 | +5.4e-4 | −2.3e-4 | 0.25 |
+| parareal τ 3e-6 | +1.8e-7 | −3.2e-7 | −5.01e-6 | −1.60e-6 | +2.8e-7 | +1.03e-6 | +2.16e-6 | 1/3.0 |
+| parareal τ 1e-5 | +3.9e-7 | −3.0e-7 | −5.37e-6 | −1.71e-6 | +2.2e-7 | +1.52e-6 | +2.40e-6 | 1/3.24 |
+| parareal τ 3e-5 | +1.8e-7 | −3.5e-7 | −5.50e-6 | −1.70e-6 | +4.9e-7 | +1.83e-6 | +2.63e-6 | — |
+* The WH error at 6 d scales as dt² (8 d/6 d: 2.0 = (64−9)/(36−9)) and is larger than the round-1 estimate:
+  Mars g4 ≈ −5e-6 (−6.7e-6 extrapolated to dt → 0), g6 ≈ −1.6e-6, s2 ≈ +1.1e-6. It is a systematic bias.
+* Parareal adds, at τ = 3e-6 / 1e-5 / 3e-5, at most 6 % / 7 % / 9 % to the largest error (g4) and is unbiased (ensemble,
+  iteration 33) — per frequency up to 0.6× of the dt = 6 d error for s2 at τ 3e-5. A serial run at 8 d (1.33× faster)
+  doubles every error. → At "the accuracy of the dt = 6 d reference" there is room for larger τ.
+* dt = 24 d is broken here (Mercury g1/s1 off by 1e-2: a step–orbit resonance), unlike the 32-d ensemble statistics of
+  Rein et al. (single realisation, different ICs; not pursued).

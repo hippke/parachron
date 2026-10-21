@@ -14,7 +14,7 @@
 // Prints wall-clock of the parareal run and of the serial run of the same span, and the final-state difference.
 // Environment: PINT_OUT=prefix writes the accepted boundary states (<prefix>_pr.bin) and, with serial=1, the serial
 // run (<prefix>_ser<kernel>.bin), records (t, E_tot incl. GR, E[8][6]) as in pint_long; PINT_PERT=d shifts the x of
-// all planets by d AU; PINT_SERONLY=1 runs only the serial reference; PINT_TRACE, PINT_UPDDIAG: diagnostics.
+// all planets by d AU; PINT_SERONLY=1 runs only the serial reference, PINT_DT its time step; PINT_TRACE, PINT_UPDDIAG: diagnostics.
 #define _GNU_SOURCE
 #include "pint_coarse.h"
 #include "integrator_whfast512.h"
@@ -244,9 +244,12 @@ int main(int argc, char** argv){
     el Eser; double tser=0;
     if (ser){
         struct reb_simulation* s=pint_el_to_sim(ss_mass,E0);
-        s->dt=6.*DAY; s->exact_finish_time=0; reb_simulation_set_integrator(s,"whfast512");
+        // PINT_DT: time step of the serial reference [d] (default 6; must divide the slice)
+        const double sdt = getenv("PINT_DT") ? atof(getenv("PINT_DT")) : 6.;
+        if (fabs(slice_days/sdt-lround(slice_days/sdt))>1e-9){ fprintf(stderr,"PINT_DT must divide the slice\n"); return 1; }
+        s->dt=sdt*DAY; s->exact_finish_time=0; reb_simulation_set_integrator(s,"whfast512");
         struct reb_integrator_whfast512_state* w=s->integrator.state;
-        w->gr_potential=1; w->corrector=17; w->kernel=fkern; w->concatenate_steps=lround(slice_days/6.);
+        w->gr_potential=1; w->corrector=17; w->kernel=fkern; w->concatenate_steps=lround(slice_days/sdt);
         FILE* fs=NULL;
         if (outp){ char fn[512]; snprintf(fn,sizeof fn,"%s_ser%d.bin",outp,fkern); fs=fopen(fn,"wb"); write_rec(fs,0.,E0); }
         double t0=now();
