@@ -821,3 +821,22 @@ Diagnosis with oracles first (`parareal/oracle_lna.py`, `jacblock.py`):
   (computed at the first coarse evaluation of each slice, reused in later iterations) is as good as live
   (k2 per epoch 0.68, 1.7, 2.52, 11.5, 8.9, 1.25, 1.3, 0.89, 9.3, 0.9; k3 worst 2.7). So the expensive
   second-order coefficients cost only during the k = 0 coarse sweep.
+* ln a-only transform with all other improvements: k2 ≤ 2 at 1/10 (worst 104) — the all-component transform is
+  required for K = 2 (but k3 ≤ 2.1 × noise at all epochs even without it).
+
+## Iteration 25 — Phase 7: continuous pipelining instead of windows (simulated with the real numerics)
+* Long windows (config B, 40 slices, `longwin.py`): k = 3 converges only the first 10 boundaries, k = 4 all 40
+  (≤ 1.5 × noise) — the binomial growth of the parareal error with distance from the last exact boundary. With the
+  improved Python G (30 slices): k = 2 up to boundary 10–23, k = 3 all 30.
+* Throughput bound of a continuously pipelined parareal: S ≤ min(P / (K(1 + r)), 1/r) — the coarse chain of the
+  final iterate is serial (1/r ≈ 11 for config B).
+* Event-driven simulators with the real F and G computed in simulated-time order (`pint_sim.py`: iterate-indexed
+  sliding window, block entry, gated fine work; `pint_sim2.py`: asynchronous latest-iterate policy with a
+  finalisation rule "predecessor final and the fine solve used was on an iterate within tol of its final value").
+  Config B, P = 10, 80 slices: S = 1.4–2.2 at err ≤ 2–5 × noise (fine solves per slice 3.2–6, coarse updates per
+  slice up to 37) — **not better than the windowed pipeline** (2.3 modelled). Every change of a slice's start state
+  after its iterations began costs iterations; the windowed synchronous scheme is the efficient one at P ≈ 10.
+* Consequence for the coarse step: in S = N/(N r + K(1 + r)) the improved G pays only if it is nearly as cheap as
+  config B (r ≲ 0.12 for K̄ = 2.4). Cost-reduction options: run the k = 0 prediction sweep with config B and use the
+  improved G only from k = 1 on (its evaluations on the k = 0 iterates run in parallel with the fine solves; the
+  per-slice frozen second-order coefficients are computed there, off the critical path).

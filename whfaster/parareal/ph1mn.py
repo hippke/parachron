@@ -62,6 +62,10 @@ if __name__=='__main__':
         elif DIAG:
             print(spec)
             for ep in (EPS or ph1eval.EP): diag(G,ep)
+        elif 'mix' in spec:     # k = 0 sweep with config B (C), improved G afterwards
+            import ptc
+            R=np.array([ph1eval.evaluate(build(spec),spec,eps=[ep],verbose=True,G0=ptc.CoarseC(360000,heun=1))[0] for ep in (EPS or ph1eval.EP)])
+            print(f"== {spec} median k1..: "+" ".join(f"{x:.3g}" for x in np.median(R,0))+" | worst: "+" ".join(f"{x:.3g}" for x in R.max(0))+f" | k2<=2 at {np.sum(R[:,1]<=2)}/{len(R)}",flush=True)
         elif 'frz' in spec:     # per-window frozen second-order quantities: fresh G per window (epoch)
             R=np.array([ph1eval.evaluate(build(spec),spec,eps=[ep],verbose=True)[0] for ep in (EPS or ph1eval.EP)])
             print(f"== {spec} median k1..: "+" ".join(f"{x:.3g}" for x in np.median(R,0))+" | worst: "+" ".join(f"{x:.3g}" for x in R.max(0))+f" | k2<=2 at {np.sum(R[:,1]<=2)}/{len(R)}",flush=True)

@@ -5,13 +5,15 @@ from ptlib import *
 D=np.load('phase0_jac.npz'); EP=[0,1030,2000,3400,4500,5500,6000,7000,8160,9300]; N=10; days=360000
 def F(E): return to_el(prop(from_el(E),days,6))
 _Fcache={}
-def evaluate(G, label, KM=3, eps=None, verbose=True):
+def evaluate(G, label, KM=3, eps=None, verbose=True, G0=None):
+    """G0: optional cheap coarse propagator for the k = 0 prediction sweep (G is then evaluated on the k = 0
+    iterates in parallel for the first correction)"""
     eps=eps or EP; R=[]; t0=time.time()
     for ep in eps:
         ref=D[f'ref{ep}']; noise=float(D[f'noise{ep}']); E0=ref[0]
         U=[E0]
-        for n in range(N): U.append(G(U[-1]))
-        Gold=[None]+U[1:]; row=[]
+        for n in range(N): U.append((G0 or G)(U[-1]))
+        Gold=[None]+(U[1:] if G0 is None else [G(U[n]) for n in range(N)]); row=[]
         for k in range(KM):
             Fv=[]
             for n in range(N):
