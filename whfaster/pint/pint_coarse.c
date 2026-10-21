@@ -125,104 +125,183 @@ static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, d
     }
     *da=sa*nrm; *db=sb*nrm;
 }
-// first-order ln a short-period displacements of the inner planets (disp[i]) and, if R != NULL, the
-// secular (grid-mean) element rates R[i][0..5] of the inner planets, from the elements E
-static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6]){
-    const double* m=c->masses;
+// ---------------------------------------------------------------------------------------------------------------
+// table(): first-order ln a short-period displacements (disp) and secular rates (R) of the inner planets.
+// Organised as independent tasks (grids per planet; one task per inner-inner pair / per packed pair of giants; GR per
+// planet) whose results are reduced in the fixed serial order, so that the result is bitwise independent of the
+// number of threads. With a helper pool (pint_set_threads) the tasks of one call run on several cores.
+#define NTASKMAX 32
+struct tctx {
+    const struct pint_cfg* c; const double (*E)[6]; int nc;
     double Mint[PINT_NP], mu[PINT_NP], n[PINT_NP];
-    double acc=0; for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; n[i]=sqrt(mu[i]/exp(3.*E[i][0])); }
-    const int N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii), N2=c->ng_io, st=N1/N2, nc = R ? 6 : 1;
-    const int Nlo=c->ng_ii;
+    int N1, N2, Nlo;
+    double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
+    // tasks
+    int ntask; int ti[NTASKMAX], tj0[NTASKMAX], tj1[NTASKMAX], tkind[NTASKMAX];   // kind 0 inner pair, 1 giants, 2 GR, 3 grid
+    double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];
+};
+static void task_grid(struct tctx* x, int p){
+    const struct pint_cfg* c=x->c;
+    if (p<PINT_NI){
+        double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg);
+        for (int g=0; g<x->N1; g++){ Eg[1]=2.*M_PI*g/x->N1; el_to_rv(x->mu[p],Eg,x->ri[p][g],x->vi[p][g]); dEdv(x->mu[p],x->ri[p][g],x->vi[p][g],x->Di[p][g],x->nc); }
+    } else if (p<=c->maxj){
+        double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg); double vdum[3];
+        for (int g=0; g<x->N2; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
+    }
+}
+static void task_pair(struct tctx* x, int t){
+    const struct pint_cfg* c=x->c; const double* m=c->masses; const double (*E)[6]=x->E; const int nc=x->nc;
+    static __thread double complex buf[NGMAX*NGMAX];
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
-    double tp0=now();
-    static __thread double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
-    for (int i=0;i<PINT_NI;i++){
-        double Eg[6]; memcpy(Eg,E[i],sizeof Eg);
-        for (int g=0; g<N1; g++){
-            Eg[1]=2.*M_PI*g/N1;
-            el_to_rv(mu[i],Eg,ri[i][g],vi[i][g]);
-            dEdv(mu[i],ri[i][g],vi[i][g],Di[i][g],nc);
-        }
-        disp[i]=0; if (R) for (int e=0;e<6;e++) R[i][e]=0;
-    }
-    for (int j=PINT_NI;j<=c->maxj;j++){
-        double Eg[6]; memcpy(Eg,E[j],sizeof Eg); double vdum[3];
-        for (int g=0; g<N2; g++){ Eg[1]=2.*M_PI*g/N2; el_to_rv(mu[j],Eg,rj[j][g],vdum); }
-    }
-    double tp1=now(); pint_prof[0]+=tp1-tp0; double tl=0, tf=0, te=0;
-    static __thread double complex fi[NGMAX*NGMAX], fg[NGMAX*NGMAX];
-    for (int i=0;i<PINT_NI;i++){
-        for (int j=i+1;j<=c->maxj;j++){
-            const int inner_j = j<PINT_NI;
-            const int hi = inner_j && c->ng_hi>0 && exp(E[i][0]-E[j][0])>=c->alpha_hi;
-            const int Ng = inner_j ? (hi ? N1 : Nlo) : N2, si = inner_j ? N1/Ng : st;
-            const int giant_slot = inner_j ? 0 : (j-PINT_NI)&1;     // giants: two grids packed per FFT
-            double complex* buf = inner_j ? fi : fg;
-            double Ri[6]={0}, Rj[6]={0}; double tq0=now();
-            const double pf=inner_j ? -(Mint[j]+m[j+1])/Mint[j]*m[i+1] : 0.;
-            for (int a=0;a<Ng;a++){
-                const double* r1=ri[i][a*si]; const double* D1=Di[i][a*si][0];
-                for (int b=0;b<Ng;b++){
-                    const double* r2 = inner_j ? ri[j][b*si] : rj[j][b];
-                    const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
-                    const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
-                    const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
-                    double ai[3];
-                    for (int x=0;x<3;x++) ai[x]=m[j+1]*(d[x]*id3-r2[x]*irj3);
-                    const double f=D1[0]*ai[0]+D1[1]*ai[1]+D1[2]*ai[2];
-                    if (R) for (int e=0;e<6;e++){ const double* De=Di[i][a*si][e]; Ri[e]+=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2]; }
-                    if (inner_j){
-                        const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
-                        double aj[3];
-                        for (int x=0;x<3;x++) aj[x]=pf*(d[x]*id3-r2[x]*irj3+r1[x]*irj3-3.*r2[x]*(rdot/rj2*irj3));
-                        const double* D2=Di[j][b*si][0];
-                        const double g=D2[0]*aj[0]+D2[1]*aj[1]+D2[2]*aj[2];
-                        buf[a*Ng+b]=f+I*g;
-                        if (R) for (int e=0;e<6;e++){ const double* De=Di[j][b*si][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
-                    } else {
-                        if (giant_slot==0) buf[a*Ng+b]=f; else buf[a*Ng+b]+=I*f;
-                    }
+    const int i=x->ti[t];
+    const int jlo=x->tj0[t], jhi=x->tj1[t];
+    const int inner_j = x->tkind[t]==0;
+    for (int s=0;s<2;s++) for (int e=0;e<6;e++) x->tRi[t][s][e]=0;
+    for (int e=0;e<6;e++) x->tRj[t][e]=0;
+    int Ng=0;
+    for (int j=jlo;j<=jhi;j++){
+        const int hi = inner_j && c->ng_hi>0 && exp(E[i][0]-E[j][0])>=c->alpha_hi;
+        Ng = inner_j ? (hi ? x->N1 : x->Nlo) : x->N2; const int si = inner_j ? x->N1/Ng : x->N1/x->N2;
+        const int slot=j-jlo;
+        double Ri[6]={0}, Rj[6]={0};
+        const double pf=inner_j ? -(x->Mint[j]+m[j+1])/x->Mint[j]*m[i+1] : 0.;
+        for (int a=0;a<Ng;a++){
+            const double* r1=x->ri[i][a*si]; const double* D1=x->Di[i][a*si][0];
+            for (int b=0;b<Ng;b++){
+                const double* r2 = inner_j ? x->ri[j][b*(x->N1/Ng)] : x->rj[j][b];
+                const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
+                const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
+                const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
+                double ai[3];
+                for (int q=0;q<3;q++) ai[q]=m[j+1]*(d[q]*id3-r2[q]*irj3);
+                const double f=D1[0]*ai[0]+D1[1]*ai[1]+D1[2]*ai[2];
+                if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[i][a*si][e]; Ri[e]+=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2]; }
+                if (inner_j){
+                    const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
+                    double aj[3];
+                    for (int q=0;q<3;q++) aj[q]=pf*(d[q]*id3-r2[q]*irj3+r1[q]*irj3-3.*r2[q]*(rdot/rj2*irj3));
+                    const double* D2=x->Di[j][b*si][0];
+                    const double g=D2[0]*aj[0]+D2[1]*aj[1]+D2[2]*aj[2];
+                    buf[a*Ng+b]=f+I*g;
+                    if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[j][b*si][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
+                } else {
+                    if (slot==0) buf[a*Ng+b]=f; else buf[a*Ng+b]+=I*f;
                 }
             }
-            if (R) for (int e=0;e<6;e++){ R[i][e]+=Ri[e]/(Ng*Ng); if (inner_j) R[j][e]+=Rj[e]/(Ng*Ng); }
-            double tq1=now(); tl+=tq1-tq0;
-            if (inner_j){
-                fft2(buf,Ng);
-                double tq2=now(); tf+=tq2-tq1;
-                double da,db; sp_eval_pair(buf,Ng,n[i],n[j],E[i][1],E[j][1],&da,&db);
-                disp[i]+=da; disp[j]+=db;
-                te+=now()-tq2;
-            } else if (giant_slot==1 || j==c->maxj){
-                fft2(buf,Ng);
-                double tq2=now(); tf+=tq2-tq1;
-                const int j0 = giant_slot==1 ? j-1 : j;
-                double da,db;
-                sp_eval_pair(buf,Ng,n[i],n[j0],E[i][1],E[j0][1],&da,&db); disp[i]+=da;
-                if (giant_slot==1){ sp_eval_pair(buf,Ng,n[i],n[j],E[i][1],E[j][1],&da,&db); disp[i]+=db; }
-                te+=now()-tq2;
-            }
         }
-        // GR single-planet term (1-D, N1 points)
-        double complex f1[NGMAX]; double Rg[6]={0};
-        const double pre=-6.*m[0]*m[0]/(CGR*CGR);
-        for (int a=0;a<N1;a++){
-            const double* r1=ri[i][a];
-            const double rr=sqrt(r1[0]*r1[0]+r1[1]*r1[1]+r1[2]*r1[2]), r4=rr*rr*rr*rr;
-            double ag[3]; for (int x=0;x<3;x++) ag[x]=pre*r1[x]/r4;
-            double f=0; for (int x=0;x<3;x++) f+=Di[i][a][0][x]*ag[x];
-            f1[a]=f;
-            if (R) for (int e=0;e<6;e++){ double s=0; for (int x=0;x<3;x++) s+=Di[i][a][e][x]*ag[x]; Rg[e]+=s; }
-        }
-        if (R) for (int e=0;e<6;e++) R[i][e]+=Rg[e]/N1;
-        fft1(f1,N1,1);
-        double complex s=0.;
-        for (int a=0;a<N1;a++){
-            const int K=kf(a,N1); if (K==0) continue;
-            s += f1[a]/N1*(cos(K*E[i][1])+I*sin(K*E[i][1]))/(I*K*n[i]);
-        }
-        disp[i]+=creal(s);
+        for (int e=0;e<6;e++){ x->tRi[t][slot][e]=Ri[e]; if (inner_j) x->tRj[t][e]=Rj[e]; }
     }
-    pint_prof[1]+=tl; pint_prof[2]+=tf; pint_prof[3]+=te;
+    x->tNg[t]=Ng;
+    fft2(buf,Ng);
+    double da,db;
+    if (inner_j){ sp_eval_pair(buf,Ng,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=db; }
+    else {
+        sp_eval_pair(buf,Ng,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=0;
+        if (jhi>jlo){ sp_eval_pair(buf,Ng,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
+    }
+}
+static void task_gr(struct tctx* x, int t){
+    const double* m=x->c->masses; const int i=x->ti[t]; const int N1=x->N1;
+    double complex f1[NGMAX]; double Rg[6]={0};
+    const double pre=-6.*m[0]*m[0]/(CGR*CGR);
+    for (int a=0;a<N1;a++){
+        const double* r1=x->ri[i][a];
+        const double rr=sqrt(r1[0]*r1[0]+r1[1]*r1[1]+r1[2]*r1[2]), r4=rr*rr*rr*rr;
+        double ag[3]; for (int q=0;q<3;q++) ag[q]=pre*r1[q]/r4;
+        double f=0; for (int q=0;q<3;q++) f+=x->Di[i][a][0][q]*ag[q];
+        f1[a]=f;
+        if (x->nc>1) for (int e=0;e<6;e++){ double s=0; for (int q=0;q<3;q++) s+=x->Di[i][a][e][q]*ag[q]; Rg[e]+=s; }
+    }
+    for (int e=0;e<6;e++) x->tRj[t][e]=Rg[e];
+    fft1(f1,N1,1);
+    double complex s=0.;
+    for (int a=0;a<N1;a++){
+        const int K=kf(a,N1); if (K==0) continue;
+        s += f1[a]/N1*(cos(K*x->E[i][1])+I*sin(K*x->E[i][1]))/(I*K*x->n[i]);
+    }
+    x->tda[t]=creal(s);
+}
+// ---- helper pool (fork-join over task indices) ----
+static pthread_mutex_t pool_mx=PTHREAD_MUTEX_INITIALIZER, pool_busy=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER, pool_done=PTHREAD_COND_INITIALIZER;
+static int pool_n=0, pool_gen=0, pool_active=0;
+static void (*pool_fn)(void*,int); static void* pool_arg; static int pool_ntask; static int pool_next;
+static void pool_run_tasks(void){
+    for (;;){
+        pthread_mutex_lock(&pool_mx); const int t=pool_next<pool_ntask ? pool_next++ : -1; pthread_mutex_unlock(&pool_mx);
+        if (t<0) break;
+        pool_fn(pool_arg,t);
+    }
+}
+static void* pool_worker(void* a){
+    (void)a; int gen=0;
+    for (;;){
+        pthread_mutex_lock(&pool_mx);
+        while (pool_gen==gen) pthread_cond_wait(&pool_cv,&pool_mx);
+        gen=pool_gen; pthread_mutex_unlock(&pool_mx);
+        pool_run_tasks();
+        pthread_mutex_lock(&pool_mx); if (--pool_active==0) pthread_cond_signal(&pool_done); pthread_mutex_unlock(&pool_mx);
+    }
+    return NULL;
+}
+void pint_set_threads(int nhelpers){
+    pthread_mutex_lock(&pool_busy);
+    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,NULL); pthread_detach(th); }
+    if (nhelpers>pool_n) pool_n=nhelpers;
+    pthread_mutex_unlock(&pool_busy);
+}
+// run fn(arg, 0..ntask-1); on the pool if par and the pool is free, else serially in the caller
+static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
+    if (!par || pool_n==0 || pthread_mutex_trylock(&pool_busy)!=0){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
+    pthread_mutex_lock(&pool_mx);
+    pool_fn=fn; pool_arg=arg; pool_ntask=ntask; pool_next=0; pool_active=pool_n; pool_gen++;
+    pthread_cond_broadcast(&pool_cv); pthread_mutex_unlock(&pool_mx);
+    pool_run_tasks();
+    pthread_mutex_lock(&pool_mx); while (pool_active>0) pthread_cond_wait(&pool_done,&pool_mx); pthread_mutex_unlock(&pool_mx);
+    pthread_mutex_unlock(&pool_busy);
+}
+static void grid_task(void* a, int t){ task_grid((struct tctx*)a, t); }
+static void pairgr_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) task_gr(x,t); else task_pair(x,t); }
+static void table_par(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6], int par){
+    static __thread struct tctx* x=NULL; if (!x) x=malloc(sizeof *x);
+    x->c=c; x->E=E; x->nc= R ? 6 : 1;
+    const double* m=c->masses; double acc=0;
+    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; x->Mint[i]=acc; x->mu[i]=x->Mint[i]+m[i+1]; x->n[i]=sqrt(x->mu[i]/exp(3.*E[i][0])); }
+    x->N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii); x->N2=c->ng_io; x->Nlo=c->ng_ii;
+    nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
+    run_tasks(grid_task,x,c->maxj+1,par);
+    // task list in the serial loop order
+    int nt=0;
+    for (int i=0;i<PINT_NI;i++){
+        for (int j=i+1;j<=c->maxj;j++){
+            if (j<PINT_NI){ x->ti[nt]=i; x->tj0[nt]=j; x->tj1[nt]=j; x->tkind[nt]=0; nt++; }
+            else if (((j-PINT_NI)&1)==0){ x->ti[nt]=i; x->tj0[nt]=j; x->tj1[nt]= j+1<=c->maxj ? j+1 : j; x->tkind[nt]=1; nt++; }
+        }
+        x->ti[nt]=i; x->tkind[nt]=2; nt++;
+    }
+    x->ntask=nt;
+    run_tasks(pairgr_task,x,nt,par);
+    // reduction in the serial order
+    for (int i=0;i<PINT_NI;i++){ disp[i]=0; if (R) for (int e=0;e<6;e++) R[i][e]=0; }
+    for (int t=0;t<nt;t++){
+        const int i=x->ti[t];
+        if (x->tkind[t]==0){
+            const int j=x->tj0[t]; const double Ng=x->tNg[t];
+            if (R) for (int e=0;e<6;e++){ R[i][e]+=x->tRi[t][0][e]/(Ng*Ng); R[j][e]+=x->tRj[t][e]/(Ng*Ng); }
+            disp[i]+=x->tda[t]; disp[j]+=x->tdb[t];
+        } else if (x->tkind[t]==1){
+            const double Ng=x->tNg[t];
+            for (int j=x->tj0[t]; j<=x->tj1[t]; j++) if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRi[t][j-x->tj0[t]][e]/(Ng*Ng);
+            disp[i]+=x->tda[t]; if (x->tj1[t]>x->tj0[t]) disp[i]+=x->tdb[t];
+        } else {
+            if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRj[t][e]/x->N1;
+            disp[i]+=x->tda[t];
+        }
+    }
+}
+static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6]){
+    table_par(c,E,disp,R,0);
 }
 static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], double Eo[PINT_NP][6]){
     const double* m=c->masses;
@@ -253,13 +332,21 @@ static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], doubl
     }
     reb_simulation_free(s);
 }
-void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){
+struct outer_arg { const struct pint_cfg* c; const double (*E)[6]; double (*Eo)[6]; };
+static void outer_task(void* a, int t){ (void)t; struct outer_arg* o=a; outer_wh(o->c,o->E,o->Eo); }
+static void* outer_thread(void* a){ outer_task(a,0); return NULL; }
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
+void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){ pint_coarse_par(c,E_in,E_out,0); }
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){
     const double t0=now();
     const double* m=c->masses;
     double Mint[PINT_NP], mu[PINT_NP]; double acc=0;
     for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
     double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
-    table(c,E_in,disp,R);
+    // the giants' WH run is independent of the start tables: run it concurrently when parallel
+    double Mg[PINT_NP][6]; struct outer_arg oa={c,E_in,Mg}; pthread_t oth; int othr=0;
+    if (par && pool_n>0){ othr = pthread_create(&oth,NULL,outer_thread,&oa)==0; }
+    table_par(c,E_in,disp,R,par);
     const double t1=now();
     const double T=c->slice_days*DAY;
     memcpy(M2,E_in,sizeof M2);
@@ -270,18 +357,19 @@ void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double
         M2[i][1]=wrap(E_in[i][1]+(nbar+R[i][1])*T);
         for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+R[i][e]*T;
     }
-    outer_wh(c,E_in,M2);
+    if (othr){ pthread_join(oth,NULL); for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6); }
+    else outer_wh(c,E_in,M2);
     const double t2=now();
     double disp1[PINT_NI];
     if (c->heun){
         double R1[PINT_NI][6];
-        table(c,M2,disp1,R1);
+        table_par(c,M2,disp1,R1,par);
         for (int i=0;i<PINT_NI;i++){
             const double lna=M2[i][0], nbar=sqrt(mu[i]/exp(3.*lna));
             M2[i][1]=wrap(E_in[i][1]+(nbar+0.5*(R[i][1]+R1[i][1]))*T);
             for (int e=2;e<6;e++) M2[i][e]=E_in[i][e]+0.5*(R[i][e]+R1[i][e])*T;
         }
-    } else table(c,M2,disp1,NULL);
+    } else table_par(c,M2,disp1,NULL,par);
     memcpy(E_out,M2,sizeof M2);
     for (int i=0;i<PINT_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
     const double t3=now();

@@ -30,6 +30,9 @@ void pint_sim_to_el(struct reb_simulation* r, double E[PINT_NP][6]);
 struct reb_simulation* pint_el_to_sim(const double* masses, const double E[PINT_NP][6]);
 // diagnostics: time spent in parts of the last pint_coarse call (seconds)
 void pint_lna_disp(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6]);
+// parallel variant: par != 0 runs the tables on the helper pool (pint_set_threads) when it is free
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
+void pint_set_threads(int nhelpers);
 void pint_disp6(const struct pint_cfg* c, const double E[PINT_NP][6], const double* n_div, double disp[PINT_NI][6]);
 extern __thread double pint_t_tables, pint_t_outer, pint_t_total;
 #endif

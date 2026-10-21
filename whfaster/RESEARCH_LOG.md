@@ -887,3 +887,22 @@ Analysis:
 * K̄ is higher than in the 10 Myr runs (3.29): the first 20 windows from t = 0 are harder than average, and
   16-slice windows need more iterations (binomial growth, iteration 25).
 * The coarse cost is now the main lever: N r is 1.2 (N = 10) and 1.9 (N = 16) of the 5–6 units of wall time.
+
+### Phase 8, user run 2 (100 windows)
+| N | tol | K̄ | wall | serial | speedup | model (r = 0.12) |
+|---|---|---|---|---|---|---|
+| 12 | 3e-6 | 3.47 (54/45/1 at K=3/4/5) | 4.09 s | 8.46 s | **2.07** | 2.26 |
+| 16 | 1e-5 | 3.45 (57/41/2) | 4.49 s | 11.26 s | **2.51** | 2.78 |
+Model/measured ≈ 0.90–0.92. The N r start-up term is 1.4–1.9 of ≈ 5.5 units of wall time. (tol 1e-5 final
+difference 6.6e-4 AU after 1.58 Myr vs 7.7e-5 AU after 1.18 Myr at 3e-6 — needs the frequency check before use.)
+
+## Iteration 27 — parallel coarse step (`pint_coarse_par`, `pint_set_threads`; `pint_pipe` args 10–11)
+* The coarse step is split into tasks: grids per planet, one task per inner–inner pair and per packed pair of giants,
+  GR per planet; the giants' WH run (≈ 1/3 of the step) runs concurrently with the start tables. Results are reduced
+  in the serial order → **bitwise identical** to the serial step (`test_par.c`).
+* Driver: `pint_pipe ... [helpers] [parmode]`: a pool of helper threads used in the k = 0 sweep (mode 1, when the
+  other cores are mostly idle) or in all iterations (mode 2). Also: the coarse step is skipped for slices whose
+  start is already exact (n ≤ k − 1) — it was computed and discarded on the critical path.
+* Measured here only on 2 vCPUs (1 helper: 0.99 → 0.78–0.82 ms). Cost split (serial): two table passes 0.73 ms,
+  giants' run 0.35 ms → with enough helpers the k = 0 step is bounded by the giants' run (≈ 0.35–0.45 ms, ≈ 2.3×
+  faster). Expected on the 7950X (N = 16, K̄ 3.45): start-up term 1.9 → ≈ 0.8, model S ≈ 2.8 → ≈ 3.3.

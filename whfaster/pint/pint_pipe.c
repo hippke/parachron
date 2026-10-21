@@ -3,7 +3,9 @@
 // forms U^k_{n+1} = G(U^k_n) + F(U^{k-1}_n) - G(U^{k-1}_n) (+ energy projection), hands it to thread n+1, and then
 // runs the fine slice F(U^k_n) for the next iteration. Wall time ~ N T_G + K (T_F + T_G) per window.
 // Windows are chained (the next window starts from the converged end state).
-//   usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1] [tol_AU=0] [Kmax=6]
+//   usage: pint_pipe N slice_days K windows [fine_kernel=2] [serial=1] [pin=1] [tol_AU=0] [Kmax=6] [helpers=0] [parmode=1]
+// helpers > 0: the coarse step's tables (and the giants' run) are spread over a pool of helper threads, in the
+// k = 0 sweep only (parmode 1) or in every iteration (parmode 2); results are bitwise identical.
 // tol > 0: adaptive iteration count per window: at least K iterations, stop at the first iteration whose largest
 // boundary update (position change) is <= tol (at most Kmax). The next iteration's fine slices run speculatively
 // (in 10 chunks) and are abandoned when the window stops.
@@ -25,7 +27,7 @@
 typedef double el[PINT_NP][6];
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 #include <stdatomic.h>
-static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6; static double tol=0.;
+static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6, npar=0, parmode=1; static double tol=0.;
 static atomic_int stop_at;               // iteration at which the current window stopped (-1: running)
 static double upd_max[KMAX+1]; static pthread_mutex_t upd_mx=PTHREAD_MUTEX_INITIALIZER;
 static double poserr_el(const double A[PINT_NP][6], const double B[PINT_NP][6]);
@@ -86,7 +88,9 @@ static void* slice_thread(void* arg){
         if (n>0) sem_wait(&ready[k][n]);
         { const int st=atomic_load(&stop_at); if (st>=0 && k>st) break; }
         double t0=now();
-        el g; pint_coarse(&cfg,U[k][n],g);
+        el g;
+        // G is not needed for boundaries that are already exact (n <= k-1): skip it (saves coarse time on the chain)
+        if (k==0 || n>k-1) pint_coarse_par(&cfg,U[k][n],g, npar>0 && (parmode==2 || k==0));
         if (k==0 || n<k-1){
             if (k==0) memcpy(U[0][n+1],g,sizeof(el)); else memcpy(U[k][n+1],U[k-1][n+1],sizeof(el));
         } else if (n==k-1){
@@ -133,6 +137,9 @@ int main(int argc, char** argv){
     if (argc>7) pin=atoi(argv[7]);
     if (argc>8) tol=atof(argv[8]);
     if (argc>9) Kmax=atoi(argv[9]);
+    if (argc>10) npar=atoi(argv[10]);
+    if (argc>11) parmode=atoi(argv[11]);
+    if (npar>0) pint_set_threads(npar);
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     int khist[KMAX+1]={0};
     pint_default_cfg(&cfg, ss_mass, slice_days);
@@ -162,8 +169,8 @@ int main(int argc, char** argv){
     const double tpr=now()-t0;
     double sF=0,sG=0; for (int n=0;n<N;n++){ sF+=tbusyF[n]; sG+=tbusyG[n]; }
     printf("iterations per window:"); double km=0; for (int k=0;k<=KMAX;k++) if (khist[k]){ printf(" K=%d: %d",k,khist[k]); km+=k*khist[k]; } printf(" (mean %.2f)\n",km/W);
-    printf("pipelined parareal: N=%d threads, K=%d, %d windows of %d x %.0f d: wall %.3f s, busy fine %.3f s, coarse %.3f s (core-s)\n",
-           N,K,W,N,slice_days,tpr,sF,sG);
+    printf("pipelined parareal: N=%d threads (+%d coarse helpers, mode %d), K=%d, %d windows of %d x %.0f d: wall %.3f s, busy fine %.3f s, coarse %.3f s (core-s)\n",
+           N,npar,parmode,K,W,N,slice_days,tpr,sF,sG);
     if (ser){
         struct reb_simulation* a=pint_el_to_sim(ss_mass,Ecur); struct reb_simulation* b=pint_el_to_sim(ss_mass,Eser);
         double m=0; for (int i=1;i<=PINT_NP;i++){ double d[3]={a->particles[i].x-b->particles[i].x,a->particles[i].y-b->particles[i].y,a->particles[i].z-b->particles[i].z}; for(int x=0;x<3;x++) if (fabs(d[x])>m) m=fabs(d[x]); }
