@@ -1032,3 +1032,38 @@ iteration equals the **slowest** slice's fine time + one hop (all slices are on 
   within τ at all 16 boundaries — the binomial growth along the window dominates, not the per-slice coarse error.
 * New `pint_cfg.meann` (default 0) and environment overrides for experiments in all drivers: `PINT_MEANN`,
   `PINT_NGHI`, `PINT_DTOUT` (`ptc.Cfg` updated). Bitwise serial = parallel checked for all four combinations.
+
+### Iteration 33 — tolerance ensemble, paired fine solves, kernels, and what binds the stopping rule
+**Ensemble** (`runs/p9/ens.sh`, `pint/ens_ana.py`): 7 IC realisations (all planets x + δ, δ = 5e-7 … 3e-6, −1e-6),
+10 Myr, N = 16, `pint_long` with Heun + energy projection; secular-frequency shifts vs the serial run of the same ICs:
+| τ | K̄ | inner rms / max [″/yr] | giants rms | mean shift per frequency | energy at 10 Myr vs serial |
+|---|---|---|---|---|---|
+| 3e-6 | 3.75–3.80 | 6.6e-8 / 2.4e-7 | 1.0e-8 | all within 1σ of 0 | −9e-12 … +6e-12 |
+| 1e-5 | 3.35–3.42 | 1.4e-7 / 3.8e-7 | 2.7e-8 | ≤ 1.7σ (g1 +6.9e-8 ± 4e-8, s2 +1.2e-7 ± 8e-8) | −7e-12 … +8e-12 |
+Both are far below the WH truncation error at 6 d (g1 ≈ 9e-7, s1 ≈ 3.4e-7 ″/yr) and show no significant bias.
+→ **τ = 1e-5 is validated as a fast setting** (pipeline: K̄ 3.45, **speedup 3.24**); τ = 3e-6 stays the default.
+
+**Paired fine solves** (`pint_pipe` arg 12 `M = 2`: a thread owns two consecutive slices and steps both in one
+`reb_integrator_whfast512_steps_pair` call): on the 7950X the paired kernel gives no throughput (2 × 30000 steps
+7.01 ms vs 60000 single 7.15 ms; 2 × 60000 → ×1.02), unlike the Xeon (×1.23). N = 32 × 493 yr, M = 2: 2.24–2.36.
+Option kept (may pay on Intel AVX-512), not used.
+**Kernels on the 7950X:** the assembly kernel (1) is 8 % faster than the C AVX-512 kernel (2): serial 10.49 vs
+11.39 s; pipeline 3.53 vs 3.86 s (same speedup 2.97). Production on this machine: kernel 1.
+
+**What binds the stopping rule** (`PINT_UPDDIAG=1/2`: per-planet and per-element maxima of the boundary updates,
+N = 16, τ = 3e-6, 100 windows; medians):
+| k | worst planet (count) | Venus λ·a | Venus |Δz|·a | Venus a·Δln a |
+|---|---|---|---|---|
+| 2 | Ven 45, Mar 35, Ear 11, Mer 8 | 2.5e-4 | 1.2e-6 | 1.4e-8 |
+| 3 | Ven 42, Mar 34, Ear 18 | 3.7e-6 | 4.2e-8 | 2.9e-10 |
+| 4 | Ven 37, Mar 22, Ear 13 | 1.3e-7 | 1.3e-9 | 1.1e-11 |
+* Always the inner planets (giants ≤ 1e-7 at k = 3) and always **the phase λ**: it is the Kepler-shear image of the
+  ln a error, δλ ≈ 1.5 n T δln a (Venus: 1.5 × 10.2/yr × 986 yr × 2.9e-10 ≈ 4.4e-6). The e/i vectors are 100× smaller,
+  so a secular-matrix calibration (it. 23) cannot help. A relative (per-a) position criterion would not either.
+* What helps is a better short-period ln a model of Venus–Earth: mean-n + 64² grid for **V–E only**
+  (`PINT_ALPHAHI=0.7`) gives K̄ 3.80 → 3.43 (τ 3e-6) and 3.45 → 3.15 (τ 1e-5; 84 % of windows at the K_min = 3
+  floor; 128² = 64²), but the single 64² task appears three times in sequence on the coarse critical path (parallel
+  step 0.43 ms) → speedup 2.34. Would need the 64² pair task split into row/FFT/eval chunks; estimated net gain
+  ≈ 4 % → deferred.
+* Upper bound of this scheme on 16 cores: S ≈ 16/K̄ × (T_F idle/T_F loaded = 0.84) − coarse chain (≈ 12 %) ≈ 3.0
+  (τ 3e-6) / 3.4 (τ 1e-5); measured 2.95–3.05 / 3.24 → the remaining gains need K̄ < 3, i.e. K = 2 windows.
