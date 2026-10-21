@@ -284,3 +284,10 @@ Next steps, ranked:
 the gain is an adaptive iteration count per window (stop when the largest boundary update ≤ 3e-6 AU): mean K = 3.3
 with frequency fidelity ≤ 1e-7 ″/yr over 10 Myr → modelled **2.3× on 10 cores** at research-grade accuracy
 (implemented in `pint_pipe`). Fixed a silent step-rounding bug in the giants' WH run.
+
+**Update (iteration 16, diagnosis for a better theory):** remaining residuals of the first-order mean ln a are
+(a) Venus–Earth/Earth–Mars high-harmonic aliasing on the 32² grid (fixable with 64² for those pairs, but the extra
+cost outweighs the convergence gain) and (b) for Mars a 1836-yr, 2.2e-7 term from the Earth–Mars–Jupiter three-body
+near-resonance 4λ_E − 8λ_M + 3λ_J (+ϖ), second order in the masses. A better theory pays off substantially only if
+it makes k = 2 converge (100–10⁴ × smaller k = 2 error): full second-order Lie-series theory with this term kept as
+resonant dynamics and second-order mean motions. Empirical fitting of the term from previous windows does not work.

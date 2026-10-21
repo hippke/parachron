@@ -31,3 +31,5 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 15,parameter sweep (slice 657-1380 yr; giants 240-450 d; grids 8-64; maxj 4-7),10,986,3-5 per window,0.074-0.23,,1.6-2.2,no,flat optimum at default
 15,adaptive stop tau=3e-6 AU (Kmin 3 Kmax 6) 10 Myr hard ICs,10,986,3.29 mean,0.083,,2.32,yes,frequency shifts <=8.6e-8; energy OK
 15,adaptive stop tau=1e-6 AU,10,986,3.64 mean,0.083,,2.13,ok,frequency shifts <=2.5e-7
+16,ng_hi=64 for V-E and E-M pairs (aliasing fix),10,986,3.6 mean,0.154,,1.76,no,residual Venus 7x smaller; cost outweighs gain
+16,empirical E-M-J three-body term in G,10,986,mixed,~0.09,,,no,term identified (P=1836 yr amp 2.2e-7); fit too crude

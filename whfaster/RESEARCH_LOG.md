@@ -652,3 +652,31 @@ at K_max, no deadlock).
 
 Modelled wall-clock speedup at research-grade accuracy (frequency shifts ≲ 1e-7–3e-7 ″/yr, energy unbiased),
 S = N/(N r + K̄(1 + r)), r = 0.083: **10 cores 2.3× (K̄ = 3.3)**, vs 1.94× (fixed K = 4) and 1.6× (fixed K = 5).
+
+## Iteration 16 — diagnosis for a better mean-element theory (`parareal/resid_sample.py`, `resid_spec.py`, `res3b.py`)
+Fine run of 10 kyr sampled every 6 d; first-order mean ln a of the inner planets (osculating − C transform, live
+tables) analysed for residual frequencies, matched to combinations of mean motions.
+* **Short-period residual** (rms over 300 yr: Mercury 1.7e-9, Venus 3.6e-8, Earth 2.6e-8, Mars 7e-8): Venus and
+  Earth show a comb at (5+j) n_V − j n_E (P ≈ 0.09–0.12 yr), i.e. high harmonics of the Venus–Earth pair (α = 0.72)
+  aliased by the 32² grid. New option `ng_hi`/`alpha_hi` (finer grid only for inner pairs with α ≥ 0.6, i.e. V–E and
+  E–M): residual Venus 3.6e-8 → 5.2e-9, Earth 2.6e-8 → 9.2e-9 (Mars unchanged, see below). Parareal (10 epochs):
+  worst error/noise at k = 3 870 → 42, k = 4 14 → 2.6, but r 0.093 → 0.154 and the per-window K at the 2 × noise
+  target unchanged (floor-limited) → S(mean K) 2.11 → 1.76. Not kept (option left in, default off).
+* **Long-period residual (the dominant one for Mars):** an oscillation of Mars' mean (and osculating) ln a with
+  P = 1836 yr, amplitude 2.2e-7 (Earth 1.4e-8, giants none). The only low-order match is the **Earth–Mars–Jupiter
+  three-body near-resonance 4λ_E − 8λ_M + 3λ_J (+ ϖ, first order in e)** — second order in the masses, frequency
+  5.4e-4/yr = a small difference of large numbers. Over a 986-yr slice it changes Mars' mean ln a by up to 7e-7
+  (→ λ error ~2e-3 rad, the bulk of Mars' coarse error) and its phase derivative (~8 × 2e-7) is the "genuine Mars
+  mean-a phase dependence" of iteration 4. A first-order pairwise theory cannot contain it.
+* Test with the term added to G (amplitude/phase fitted from the 30 preceding boundaries, frequency from the mean
+  motions): mixed, no systematic gain (e.g. epoch 2000: k = 3 2.5 → 2.7; 4500: 10 → 5; 9300: 0.7 → 0.5). The
+  frequency is extremely sensitive (osculating mean motions give a 100 % error; first-order mean ones ~5 %), and the
+  fitted amplitudes scatter 7e-9 … 1.6e-7 between epochs — an empirical fit from 1-kyr samples is too crude.
+
+**What the diagnosis implies.** Typical windows reach the noise floor at k = 3; at k = 2 they are 1e2–1e4 × noise.
+A better theory therefore helps only (i) by ~10 %, by making the few hard windows converge like the others, or
+(ii) substantially, if it makes k = 2 converge — which needs a 100–10⁴ × smaller k = 2 error, i.e. an inner-planet
+coarse map exact to second order *including* the Earth–Mars–Jupiter near-resonant term as resonant dynamics (its
+period ≈ 2 slices, so it cannot be averaged away) and with the frequency taken from second-order mean motions.
+That is a full second-order (Lie-series) theory with three-planet terms — a multi-week project with uncertain
+payoff; ranked as the main open research item in the plan.

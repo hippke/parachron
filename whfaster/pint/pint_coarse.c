@@ -16,7 +16,7 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
-    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.;
+    c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -131,7 +131,8 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
     const double* m=c->masses;
     double Mint[PINT_NP], mu[PINT_NP], n[PINT_NP];
     double acc=0; for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; n[i]=sqrt(mu[i]/exp(3.*E[i][0])); }
-    const int N1=c->ng_ii, N2=c->ng_io, st=N1/N2, nc = R ? 6 : 1;
+    const int N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii), N2=c->ng_io, st=N1/N2, nc = R ? 6 : 1;
+    const int Nlo=c->ng_ii;
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
     double tp0=now();
     static __thread double ri[PINT_NI][NGMAX][3], vi[PINT_NI][NGMAX][3], Di[PINT_NI][NGMAX][6][3], rj[PINT_NP][NGMAX][3];
@@ -153,7 +154,8 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
     for (int i=0;i<PINT_NI;i++){
         for (int j=i+1;j<=c->maxj;j++){
             const int inner_j = j<PINT_NI;
-            const int Ng = inner_j ? N1 : N2, si = inner_j ? 1 : st;
+            const int hi = inner_j && c->ng_hi>0 && exp(E[i][0]-E[j][0])>=c->alpha_hi;
+            const int Ng = inner_j ? (hi ? N1 : Nlo) : N2, si = inner_j ? N1/Ng : st;
             const int giant_slot = inner_j ? 0 : (j-PINT_NI)&1;     // giants: two grids packed per FFT
             double complex* buf = inner_j ? fi : fg;
             double Ri[6]={0}, Rj[6]={0}; double tq0=now();
@@ -161,7 +163,7 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
             for (int a=0;a<Ng;a++){
                 const double* r1=ri[i][a*si]; const double* D1=Di[i][a*si][0];
                 for (int b=0;b<Ng;b++){
-                    const double* r2 = inner_j ? ri[j][b] : rj[j][b];
+                    const double* r2 = inner_j ? ri[j][b*si] : rj[j][b];
                     const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
                     const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
                     const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
@@ -173,10 +175,10 @@ static void table(const struct pint_cfg* c, const double E[PINT_NP][6], double d
                         const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
                         double aj[3];
                         for (int x=0;x<3;x++) aj[x]=pf*(d[x]*id3-r2[x]*irj3+r1[x]*irj3-3.*r2[x]*(rdot/rj2*irj3));
-                        const double* D2=Di[j][b][0];
+                        const double* D2=Di[j][b*si][0];
                         const double g=D2[0]*aj[0]+D2[1]*aj[1]+D2[2]*aj[2];
                         buf[a*Ng+b]=f+I*g;
-                        if (R) for (int e=0;e<6;e++){ const double* De=Di[j][b][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
+                        if (R) for (int e=0;e<6;e++){ const double* De=Di[j][b*si][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
                     } else {
                         if (giant_slot==0) buf[a*Ng+b]=f; else buf[a*Ng+b]+=I*f;
                     }
@@ -304,4 +306,9 @@ struct reb_simulation* pint_el_to_sim(const double* masses, const double E[PINT_
     }
     reb_simulation_move_to_com(s);
     return s;
+}
+// diagnostics: first-order ln a short-period displacements of the inner planets at E (live tables) and the
+// secular rates (R may be NULL)
+void pint_lna_disp(const struct pint_cfg* c, const double E[PINT_NP][6], double disp[PINT_NI], double R[PINT_NI][6]){
+    table(c,E,disp,R);
 }

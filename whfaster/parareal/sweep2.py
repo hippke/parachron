@@ -17,7 +17,7 @@ def F(E,days,kernel=2): return to_el(prop(from_el(E),days,6,kernel=kernel))
 def run(cfg):
     days=cfg.get('days',360000); N=int(cfg.get('N',10))
     G=ptc.CoarseC(days,dt_out=cfg.get('dt_out',360),ng_ii=int(cfg.get('ng_ii',32)),ng_io=int(cfg.get('ng_io',16)),
-                  maxj=int(cfg.get('maxj',5)),heun=int(cfg.get('heun',1)))
+                  maxj=int(cfg.get('maxj',5)),heun=int(cfg.get('heun',1)),ng_hi=int(cfg.get('ng_hi',0)),alpha_hi=cfg.get('alpha_hi',0.6))
     worst=np.zeros(KMAX); tF=[]; tG=[]; per={}
     for ep in EPOCHS:
         E0=SERX[ep]; ref=[E0]; ref1=[E0]
