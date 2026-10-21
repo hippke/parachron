@@ -26,3 +26,4 @@ tools/kepler_grid_new
 tools/kepler_grid_old
 whfaster.bundle
 patches/
+parareal/cal_*.npy
