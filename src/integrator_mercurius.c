@@ -602,8 +602,9 @@ double reb_integrator_mercurius_calculate_dcrit_for_particle(struct reb_simulati
 }
 
 #define REB_MERCURIUS_BLOCK 32
-void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_simulation* r){
-    struct reb_integrator_mercurius_state* mercurius = r->integrator.state;
+// Encounter mode, serial: forces of the star and (1-L) times the mutual forces of the particles in the encounter
+// (heliocentric coordinates; the star feels no acceleration).
+static void reb_mercurius_encounter_forces_serial(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
     struct reb_particle* const particles = r->particles;
     const double G = r->G;
     const double softening2 = r->softening*r->softening;
@@ -617,11 +618,6 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
     // Pairs farther apart than the changeover region have L = 1 exactly for the default
     // changeover function (see the WH-mode acceleration), so their force (1-L) is exactly zero.
     const int L_default = (_L == reb_integrator_mercurius_L_mercury);
-#ifdef OPENMP
-    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_onesided((double)encounter_N*(double)encounter_N_active))
-#endif // OPENMP
-    {
     particles[0].ax = 0; // map[0] is always 0 
     particles[0].ay = 0; 
     particles[0].az = 0; 
@@ -750,9 +746,24 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
             }
         }
     }
-    }
+}
+
 #ifdef OPENMP
-    else {
+// Encounter mode, parallel: each particle sums its partners (one-sided), bitwise identical to the serial loops.
+static void reb_mercurius_encounter_forces_parallel(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+    struct reb_particle* const particles = r->particles;
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const int _testparticle_type   = r->testparticle_type;
+    double (*_L) (const struct reb_simulation* const r, double d, double dcrit) = mercurius->L;
+    const double m0 = r->particles[0].m;
+    const double* const dcrit = mercurius->dcrit;
+    const size_t encounter_N = mercurius->encounter_N;
+    const size_t encounter_N_active = mercurius->encounter_N_active;
+    size_t* map = mercurius->encounter_map;
+    // Pairs farther apart than the changeover region have L = 1 exactly for the default
+    // changeover function (see the WH-mode acceleration), so their force (1-L) is exactly zero.
+    const int L_default = (_L == reb_integrator_mercurius_L_mercury);
     // One-sided parallel loop, bitwise identical to the serial loop above: the serial half-pair
     // loop adds to each encounter particle the star term first, then its partners in ascending
     // order (own row j < k, then later rows i > k), then (type 1) the test-particle back-reaction;
@@ -830,11 +841,24 @@ void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_s
         }
         particles[mk].ax = ax; particles[mk].ay = ay; particles[mk].az = az;
     }
+}
+#endif // OPENMP
+
+void reb_integrator_mercurius_calculate_acceleration_mode_encounter(struct reb_simulation* r){
+    struct reb_integrator_mercurius_state* mercurius = r->integrator.state;
+#ifdef OPENMP
+    // Serial code unless the parallel loop pays off (same results, see rebound_internal.h).
+    if (reb_omp_parallel_onesided((double)mercurius->encounter_N*(double)mercurius->encounter_N_active)){
+        reb_mercurius_encounter_forces_parallel(r, mercurius);
+        return;
     }
 #endif // OPENMP
+    reb_mercurius_encounter_forces_serial(r, mercurius);
 }
 
-static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+// WH mode, serial: L times the mutual forces of all planet pairs (heliocentric; the star's force is in the Kepler
+// step). Returns 1 if interrupted.
+static int reb_mercurius_wh_forces_serial(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
     struct reb_particle* const particles = r->particles;
     const size_t N = r->N;
     const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
@@ -846,18 +870,13 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     // The default changeover function returns exactly 1 for d > dcrit; with a small margin
     // (y >= 1.0001 in reb_integrator_mercurius_L_mercury) the call can be skipped.
     const int L_default = (_L == reb_integrator_mercurius_L_mercury);
-#ifdef OPENMP
-    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_onesided((double)N*(double)N_active))
-#endif // OPENMP
-    {
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0; 
         particles[i].ay = 0; 
         particles[i].az = 0; 
     }
     for (size_t i=2; i<N_active; i++){
-        if (reb_sigint > 1) return;
+        if (reb_sigint > 1) return 1;
         if (i-1 >= 16){
             // Blocks of partners: separations and distances first (vectorisable square roots),
             // then the changeover function and the accumulation in the original order.
@@ -919,7 +938,7 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
     }
     const size_t startitestp = MAX(N_active,2);
     for (size_t i=startitestp; i<N; i++){
-        if (reb_sigint > 1) return;
+        if (reb_sigint > 1) return 1;
         for (size_t j=1; j<N_active; j++){
             const double dx = particles[i].x - particles[j].x;
             const double dy = particles[i].y - particles[j].y;
@@ -940,9 +959,23 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
             }
         }
     }
-    }
+    return 0;
+}
+
 #ifdef OPENMP
-    else {
+// WH mode, parallel: each particle sums its partners (one-sided), bitwise identical to the serial loops.
+static void reb_mercurius_wh_forces_parallel(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+    struct reb_particle* const particles = r->particles;
+    const size_t N = r->N;
+    const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const int _testparticle_type   = r->testparticle_type;
+    double (*_L) (const struct reb_simulation* const r, double d, double dcrit) = mercurius->L;
+    const double* const dcrit = mercurius->dcrit;
+    // The default changeover function returns exactly 1 for d > dcrit; with a small margin
+    // (y >= 1.0001 in reb_integrator_mercurius_L_mercury) the call can be skipped.
+    const int L_default = (_L == reb_integrator_mercurius_L_mercury);
     // One-sided parallel loop, bitwise identical to the serial loop above (same terms, same
     // order per particle: partners in ascending order, then the type-1 back-reaction of the test
     // particles; a partner-row term (prefact*m_i)*(x_i - x_k) equals (-prefact*m_i)*(x_k - x_i)).
@@ -990,33 +1023,45 @@ static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_s
         }
         particles[k].ax = ax; particles[k].ay = ay; particles[k].az = az;
     }
-    }
+}
 #endif // OPENMP
 
-    if (r->additional_forces){
-        // Additional forces are only calculated in the kick step, not during close encounter
-        // shift pos and velocity so that external forces are calculated in inertial frame
-        // Note: Copying avoids degrading floating point performance
-        if(r->N>mercurius->N_allocated_additional_forces){
-            mercurius->particles_backup_additional_forces = realloc(mercurius->particles_backup_additional_forces, r->N*sizeof(struct reb_particle));
-            mercurius->N_allocated_additional_forces = r->N;
-        }
-        memcpy(mercurius->particles_backup_additional_forces,r->particles,r->N*sizeof(struct reb_particle)); 
-        reb_integrator_mercurius_dh_to_inertial(r, mercurius);
-
-        r->additional_forces(r);
-
-        struct reb_particle* restrict const particles = r->particles;
-        struct reb_particle* restrict const backup = mercurius->particles_backup_additional_forces;
-        for (size_t i=0;i<r->N;i++){
-            particles[i].x = backup[i].x;
-            particles[i].y = backup[i].y;
-            particles[i].z = backup[i].z;
-            particles[i].vx = backup[i].vx;
-            particles[i].vy = backup[i].vy;
-            particles[i].vz = backup[i].vz;
-        }
+// Additional forces, evaluated in the inertial frame (positions and velocities are restored afterwards).
+static void reb_mercurius_additional_forces(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+    // Additional forces are only calculated in the kick step, not during close encounter
+    // shift pos and velocity so that external forces are calculated in inertial frame
+    // Note: Copying avoids degrading floating point performance
+    if(r->N>mercurius->N_allocated_additional_forces){
+        mercurius->particles_backup_additional_forces = realloc(mercurius->particles_backup_additional_forces, r->N*sizeof(struct reb_particle));
+        mercurius->N_allocated_additional_forces = r->N;
     }
+    memcpy(mercurius->particles_backup_additional_forces,r->particles,r->N*sizeof(struct reb_particle)); 
+    reb_integrator_mercurius_dh_to_inertial(r, mercurius);
+
+    r->additional_forces(r);
+
+    struct reb_particle* restrict const particles = r->particles;
+    struct reb_particle* restrict const backup = mercurius->particles_backup_additional_forces;
+    for (size_t i=0;i<r->N;i++){
+        particles[i].x = backup[i].x;
+        particles[i].y = backup[i].y;
+        particles[i].z = backup[i].z;
+        particles[i].vx = backup[i].vx;
+        particles[i].vy = backup[i].vy;
+        particles[i].vz = backup[i].vz;
+    }
+}
+
+static void reb_integrator_mercurius_calculate_acceleration_mode_wh(struct reb_simulation* r, struct reb_integrator_mercurius_state* mercurius){
+#ifdef OPENMP
+    // Serial code unless the parallel loop pays off (same results, see rebound_internal.h).
+    const size_t N_active = ((r->N_active==SIZE_MAX)?r->N:r->N_active);
+    if (reb_omp_parallel_onesided((double)r->N*(double)N_active)){
+        reb_mercurius_wh_forces_parallel(r, mercurius);
+    }else
+#endif // OPENMP
+    if (reb_mercurius_wh_forces_serial(r, mercurius)) return;
+    if (r->additional_forces) reb_mercurius_additional_forces(r, mercurius);
 }
 
 void reb_integrator_mercurius_did_add_particle(struct reb_simulation* r){

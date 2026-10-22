@@ -366,19 +366,15 @@ static void reb_integrator_trace_update_ks_any(struct reb_simulation* const r, s
     trace->ks_any_valid = 1;
 }
 #define REB_TRACE_BLOCK 32
-static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct reb_simulation* r){
+// Interaction step forces, serial: mutual forces of all pairs not in a close encounter (heliocentric; the star's
+// force is in the Kepler step). Returns 1 if interrupted.
+static int reb_trace_interaction_forces_serial(struct reb_simulation* r, struct reb_integrator_trace_state* const trace){
     struct reb_particle* const particles = r->particles;
-    struct reb_integrator_trace_state* const trace = r->integrator.state;
     const size_t N = r->N;
     const double G = r->G;
     const double softening2 = r->softening*r->softening;
     const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
     const int _testparticle_type   = r->testparticle_type;
-#ifdef OPENMP
-    // Serial code unless the parallel loop below pays off (same results, see rebound_internal.h).
-    if (!reb_omp_parallel_onesided((double)N*(double)N_active))
-#endif // OPENMP
-    {
     for (size_t i=0; i<N; i++){
         particles[i].ax = 0;
         particles[i].ay = 0;
@@ -391,7 +387,7 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     reb_integrator_trace_update_ks_any(r, trace);
     const unsigned char* const ks_any = trace->ks_any;
     for (size_t i=2; i<N_active; i++){
-        if (reb_sigint > 1) return;
+        if (reb_sigint > 1) return 1;
         if (!ks_any[i] && i-1 >= 16){
             const double xi = particles[i].x, yi = particles[i].y, zi = particles[i].z, mi = particles[i].m;
             double axi = particles[i].ax, ayi = particles[i].ay, azi = particles[i].az;
@@ -445,7 +441,7 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
     }
     const size_t startitestp = MAX(N_active,2);
     for (size_t i=startitestp; i<N; i++){
-        if (reb_sigint > 1) return;
+        if (reb_sigint > 1) return 1;
         const int ksi = ks_any[i];
         for (size_t j=1; j<N_active; j++){
             if (ksi && ks_any[j] && trace->current_Ks[j*N+i]) continue;
@@ -466,10 +462,18 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
             }
         }
     }
+    return 0;
+}
 
-    }
 #ifdef OPENMP
-    else {
+// Interaction step forces, parallel: each particle sums its partners (one-sided), bitwise identical to the serial loops.
+static void reb_trace_interaction_forces_parallel(struct reb_simulation* r, struct reb_integrator_trace_state* const trace){
+    struct reb_particle* const particles = r->particles;
+    const size_t N = r->N;
+    const double G = r->G;
+    const double softening2 = r->softening*r->softening;
+    const size_t N_active = ((r->N_active==SIZE_MAX)?N:r->N_active);
+    const int _testparticle_type   = r->testparticle_type;
     particles[0].ax = 0;
     particles[0].ay = 0;
     particles[0].az = 0;
@@ -507,32 +511,44 @@ static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct 
             }
         }
     }
-    }
+}
 #endif // OPENMP
 
-    // Handle Additional forces
-    if (r->additional_forces){
-        // shift pos and velocity so that external forces are calculated in inertial frame
-        // Note: Copying avoids degrading floating point performance
-        // We should NOT do this in FULL mode, already in inertial frame
-        if(r->N>trace->N_allocated_additional_forces){
-            trace->particles_backup_additional_forces = realloc(trace->particles_backup_additional_forces, r->N*sizeof(struct reb_particle));
-            trace->N_allocated_additional_forces = r->N;
-        }
-        memcpy(trace->particles_backup_additional_forces,r->particles,r->N*sizeof(struct reb_particle));
-        reb_integrator_trace_dh_to_inertial(r);
-        r->additional_forces(r);
-        struct reb_particle* restrict const particles = r->particles;
-        struct reb_particle* restrict const backup = trace->particles_backup_additional_forces;
-        for (size_t i=0;i<r->N;i++){
-            particles[i].x = backup[i].x;
-            particles[i].y = backup[i].y;
-            particles[i].z = backup[i].z;
-            particles[i].vx = backup[i].vx;
-            particles[i].vy = backup[i].vy;
-            particles[i].vz = backup[i].vz;
-        }
+// Additional forces, evaluated in the inertial frame (positions and velocities are restored afterwards).
+static void reb_trace_additional_forces(struct reb_simulation* r, struct reb_integrator_trace_state* const trace){
+    // shift pos and velocity so that external forces are calculated in inertial frame
+    // Note: Copying avoids degrading floating point performance
+    // We should NOT do this in FULL mode, already in inertial frame
+    if(r->N>trace->N_allocated_additional_forces){
+        trace->particles_backup_additional_forces = realloc(trace->particles_backup_additional_forces, r->N*sizeof(struct reb_particle));
+        trace->N_allocated_additional_forces = r->N;
     }
+    memcpy(trace->particles_backup_additional_forces,r->particles,r->N*sizeof(struct reb_particle));
+    reb_integrator_trace_dh_to_inertial(r);
+    r->additional_forces(r);
+    struct reb_particle* restrict const particles = r->particles;
+    struct reb_particle* restrict const backup = trace->particles_backup_additional_forces;
+    for (size_t i=0;i<r->N;i++){
+        particles[i].x = backup[i].x;
+        particles[i].y = backup[i].y;
+        particles[i].z = backup[i].z;
+        particles[i].vx = backup[i].vx;
+        particles[i].vy = backup[i].vy;
+        particles[i].vz = backup[i].vz;
+    }
+}
+
+static void reb_integrator_trace_calculate_acceleration_mode_interaction(struct reb_simulation* r){
+    struct reb_integrator_trace_state* const trace = r->integrator.state;
+#ifdef OPENMP
+    // Serial code unless the parallel loop pays off (same results, see rebound_internal.h).
+    const size_t N_active = ((r->N_active==SIZE_MAX)?r->N:r->N_active);
+    if (reb_omp_parallel_onesided((double)r->N*(double)N_active)){
+        reb_trace_interaction_forces_parallel(r, trace);
+    }else
+#endif // OPENMP
+    if (reb_trace_interaction_forces_serial(r, trace)) return;
+    if (r->additional_forces) reb_trace_additional_forces(r, trace);
 }
 
 static void reb_integrator_trace_calculate_acceleration_mode_kepler(struct reb_simulation* r){

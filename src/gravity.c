@@ -1044,6 +1044,143 @@ static void reb_gravity_basic_block_order(struct reb_simulation* const r){
     if (gbs!=gb_buf) free(gbs);
 }
 
+// Serial basic gravity: all active pairs, each pair once (Newton's third law). Returns 1 if interrupted.
+static inline __attribute__((always_inline)) int reb_gravity_basic_active_pairs(struct reb_particle* const particles, const size_t N_active, const size_t starti, const size_t startj, const struct reb_vec6d gb, const double G, const double softening2){
+    for (size_t i=starti; i<N_active; i++){
+        if (reb_sigint > 1) return 1;
+        // Particle i's position and acceleration live in registers during the inner loop
+        // (the compiler cannot prove that the writes to particles[j] do not alias them).
+        // The additions happen in the same order as before, so results are unchanged.
+        const double xi = gb.x+particles[i].x;
+        const double yi = gb.y+particles[i].y;
+        const double zi = gb.z+particles[i].z;
+        const double mi = particles[i].m;
+        double axi = particles[i].ax;
+        double ayi = particles[i].ay;
+        double azi = particles[i].az;
+        if (i-startj < REB_GRAVITY_BLOCK_MIN){
+            for (size_t j=startj; j<i; j++){
+                const double dx = xi - particles[j].x;
+                const double dy = yi - particles[j].y;
+                const double dz = zi - particles[j].z;
+                const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+                const double prefact = G/(_r*_r*_r);
+                const double prefactj = -prefact*particles[j].m;
+                const double prefacti = prefact*mi;
+
+                axi    += prefactj*dx;
+                ayi    += prefactj*dy;
+                azi    += prefactj*dz;
+                particles[j].ax    += prefacti*dx;
+                particles[j].ay    += prefacti*dy;
+                particles[j].az    += prefacti*dz;
+            }
+        }else{
+            // Blocks of up to REB_GRAVITY_BLOCK partners: first the separations and 1/r^3
+            // factors (independent per pair, vectorisable: square roots and divisions run
+            // two or more at a time), then the accumulation in the original order.
+            for (size_t j0=startj; j0<i; j0+=REB_GRAVITY_BLOCK){
+                const size_t nb = (i-j0) < REB_GRAVITY_BLOCK ? (i-j0) : REB_GRAVITY_BLOCK;
+                double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bpf[REB_GRAVITY_BLOCK];
+                for (size_t k=0; k<nb; k++){
+                    const struct reb_particle* const pj = &particles[j0+k];
+                    bdx[k] = xi - pj->x;
+                    bdy[k] = yi - pj->y;
+                    bdz[k] = zi - pj->z;
+                }
+                for (size_t k=0; k<nb; k++){
+                    const double _r = sqrt(bdx[k]*bdx[k] + bdy[k]*bdy[k] + bdz[k]*bdz[k] + softening2);
+                    bpf[k] = G/(_r*_r*_r);
+                }
+                for (size_t k=0; k<nb; k++){
+                    struct reb_particle* const pj = &particles[j0+k];
+                    const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
+                    const double prefact = bpf[k];
+                    const double prefactj = -prefact*pj->m;
+                    const double prefacti = prefact*mi;
+
+                    axi    += prefactj*dx;
+                    ayi    += prefactj*dy;
+                    azi    += prefactj*dz;
+                    pj->ax    += prefacti*dx;
+                    pj->ay    += prefacti*dy;
+                    pj->az    += prefacti*dz;
+                }
+            }
+        }
+        particles[i].ax = axi;
+        particles[i].ay = ayi;
+        particles[i].az = azi;
+    }
+    return 0;
+}
+
+// Serial basic gravity: test particles and the active particles (with the back-reaction for testparticle_type 1).
+// Returns 1 if interrupted.
+static inline __attribute__((always_inline)) int reb_gravity_basic_test_particles(struct reb_particle* const particles, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening2){
+    const size_t startitestp = MAX(N_active, starti);
+    for (size_t i=startitestp; i<N; i++){
+        if (reb_sigint > 1) return 1;
+        const double xi = gb.x+particles[i].x;
+        const double yi = gb.y+particles[i].y;
+        const double zi = gb.z+particles[i].z;
+        const double mi = particles[i].m;
+        double axi = particles[i].ax;
+        double ayi = particles[i].ay;
+        double azi = particles[i].az;
+        for (size_t j=startj; j<N_active; j++){
+            const double dx = xi - particles[j].x;
+            const double dy = yi - particles[j].y;
+            const double dz = zi - particles[j].z;
+            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
+            const double prefact = G/(_r*_r*_r);
+            const double prefactj = -prefact*particles[j].m;
+
+            axi    += prefactj*dx;
+            ayi    += prefactj*dy;
+            azi    += prefactj*dz;
+            if (testparticle_type){
+                const double prefacti = prefact*mi;
+                particles[j].ax    += prefacti*dx;
+                particles[j].ay    += prefacti*dy;
+                particles[j].az    += prefacti*dz;
+            }
+        }
+        particles[i].ax = axi;
+        particles[i].ay = ayi;
+        particles[i].az = azi;
+    }
+    return 0;
+}
+
+#ifdef OPENMP
+// Parallel basic gravity, active pairs and test particles: the two-pass table kernel, or, if its table would be too
+// large, one-sided rows (each particle sums all its partners in the serial order, see reb_gravity_basic_onesided).
+// Bitwise identical to the serial loops.
+static inline __attribute__((always_inline)) void reb_gravity_basic_parallel(struct reb_simulation* const r, const size_t N, const size_t N_active, const size_t starti, const size_t startj, const int testparticle_type, const struct reb_vec6d gb, const double G, const double softening){
+    struct reb_particle* const particles = r->particles;
+    if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, testparticle_type, gb, G, softening)){
+        const size_t nchunk = (N+REB_GRAVITY_ONESIDED_CHUNK-1)/REB_GRAVITY_ONESIDED_CHUNK;
+        const int nthreads = reb_gravity_omp_threads(N, N_active);
+        // Full team, threads 0..nthreads-1 work (see reb_omp_static_range).
+#pragma omp parallel num_threads(reb_omp_threads())
+        {
+            const int tid = omp_get_thread_num();
+            const int nw = nthreads<omp_get_num_threads() ? nthreads : omp_get_num_threads();
+            if (tid<nw){
+                size_t c0, c1;
+                reb_omp_static_range(nchunk, nw, tid, &c0, &c1);
+                for (size_t c=c0; c<c1; c++){
+                    const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
+                    const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;
+                    reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, testparticle_type, gb, G, softening);
+                }
+            }
+        }
+    }
+}
+#endif // OPENMP
+
 REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simulation* r){
     PROFILING_START();
     if (r->gravity_block_order){
@@ -1080,138 +1217,14 @@ REB_TARGET_CLONES void reb_gravity_basic_calculate_acceleration(struct reb_simul
         for (int gby=-N_ghost_y; gby<=N_ghost_y; gby++){
             for (int gbz=-N_ghost_z; gbz<=N_ghost_z; gbz++){
                 struct reb_vec6d gb = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
-                // All active particle pairs
 #ifdef OPENMP
-                if (!parallel)
-#endif // OPENMP
-                // Serial: O(1/2*N^2), each pair once (Newton's third law)
-                for (size_t i=starti; i<N_active; i++){
-                    if (reb_sigint > 1) return;
-                    // Particle i's position and acceleration live in registers during the inner loop
-                    // (the compiler cannot prove that the writes to particles[j] do not alias them).
-                    // The additions happen in the same order as before, so results are unchanged.
-                    const double xi = gb.x+particles[i].x;
-                    const double yi = gb.y+particles[i].y;
-                    const double zi = gb.z+particles[i].z;
-                    const double mi = particles[i].m;
-                    double axi = particles[i].ax;
-                    double ayi = particles[i].ay;
-                    double azi = particles[i].az;
-                    if (i-startj < REB_GRAVITY_BLOCK_MIN){
-                        for (size_t j=startj; j<i; j++){
-                            const double dx = xi - particles[j].x;
-                            const double dy = yi - particles[j].y;
-                            const double dz = zi - particles[j].z;
-                            const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                            const double prefact = G/(_r*_r*_r);
-                            const double prefactj = -prefact*particles[j].m;
-                            const double prefacti = prefact*mi;
-
-                            axi    += prefactj*dx;
-                            ayi    += prefactj*dy;
-                            azi    += prefactj*dz;
-                            particles[j].ax    += prefacti*dx;
-                            particles[j].ay    += prefacti*dy;
-                            particles[j].az    += prefacti*dz;
-                        }
-                    }else{
-                        // Blocks of up to REB_GRAVITY_BLOCK partners: first the separations and 1/r^3
-                        // factors (independent per pair, vectorisable: square roots and divisions run
-                        // two or more at a time), then the accumulation in the original order.
-                        for (size_t j0=startj; j0<i; j0+=REB_GRAVITY_BLOCK){
-                            const size_t nb = (i-j0) < REB_GRAVITY_BLOCK ? (i-j0) : REB_GRAVITY_BLOCK;
-                            double bdx[REB_GRAVITY_BLOCK], bdy[REB_GRAVITY_BLOCK], bdz[REB_GRAVITY_BLOCK], bpf[REB_GRAVITY_BLOCK];
-                            for (size_t k=0; k<nb; k++){
-                                const struct reb_particle* const pj = &particles[j0+k];
-                                bdx[k] = xi - pj->x;
-                                bdy[k] = yi - pj->y;
-                                bdz[k] = zi - pj->z;
-                            }
-                            for (size_t k=0; k<nb; k++){
-                                const double _r = sqrt(bdx[k]*bdx[k] + bdy[k]*bdy[k] + bdz[k]*bdz[k] + softening2);
-                                bpf[k] = G/(_r*_r*_r);
-                            }
-                            for (size_t k=0; k<nb; k++){
-                                struct reb_particle* const pj = &particles[j0+k];
-                                const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
-                                const double prefact = bpf[k];
-                                const double prefactj = -prefact*pj->m;
-                                const double prefacti = prefact*mi;
-
-                                axi    += prefactj*dx;
-                                ayi    += prefactj*dy;
-                                azi    += prefactj*dz;
-                                pj->ax    += prefacti*dx;
-                                pj->ay    += prefacti*dy;
-                                pj->az    += prefacti*dz;
-                            }
-                        }
-                    }
-                    particles[i].ax = axi;
-                    particles[i].ay = ayi;
-                    particles[i].az = azi;
-                }
-#ifdef OPENMP
-                // Parallel: one-sided, each particle sums all its partners in the serial order
-                // (bitwise identical to the serial loop, see reb_gravity_basic_onesided).
-                else if (!reb_gravity_basic_two_pass(r, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening)){
-                    const size_t nchunk = (N+REB_GRAVITY_ONESIDED_CHUNK-1)/REB_GRAVITY_ONESIDED_CHUNK;
-                    const int nthreads = reb_gravity_omp_threads(N, N_active);
-                    // Full team, threads 0..nthreads-1 work (see reb_omp_static_range).
-#pragma omp parallel num_threads(reb_omp_threads())
-                    {
-                        const int tid = omp_get_thread_num();
-                        const int nw = nthreads<omp_get_num_threads() ? nthreads : omp_get_num_threads();
-                        if (tid<nw){
-                            size_t c0, c1;
-                            reb_omp_static_range(nchunk, nw, tid, &c0, &c1);
-                            for (size_t c=c0; c<c1; c++){
-                                const size_t k0 = c*REB_GRAVITY_ONESIDED_CHUNK;
-                                const size_t k1 = (k0+REB_GRAVITY_ONESIDED_CHUNK<N) ? k0+REB_GRAVITY_ONESIDED_CHUNK : N;
-                                reb_gravity_basic_onesided_range(particles, k0, k1, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening);
-                            }
-                        }
-                    }
+                if (parallel){
+                    reb_gravity_basic_parallel(r, N, N_active, starti, startj, _testparticle_type, gb, G, r->softening);
+                    continue;
                 }
 #endif // OPENMP
-       // Interactions of test particles with active particles
-#ifdef OPENMP
-                if (!parallel)   // the parallel branch above handled test particles too
-#endif // OPENMP
-                {
-                const size_t startitestp = MAX(N_active, starti);
-                for (size_t i=startitestp; i<N; i++){
-                    if (reb_sigint > 1) return;
-                    const double xi = gb.x+particles[i].x;
-                    const double yi = gb.y+particles[i].y;
-                    const double zi = gb.z+particles[i].z;
-                    const double mi = particles[i].m;
-                    double axi = particles[i].ax;
-                    double ayi = particles[i].ay;
-                    double azi = particles[i].az;
-                    for (size_t j=startj; j<N_active; j++){
-                        const double dx = xi - particles[j].x;
-                        const double dy = yi - particles[j].y;
-                        const double dz = zi - particles[j].z;
-                        const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
-                        const double prefact = G/(_r*_r*_r);
-                        const double prefactj = -prefact*particles[j].m;
-
-                        axi    += prefactj*dx;
-                        ayi    += prefactj*dy;
-                        azi    += prefactj*dz;
-                        if (_testparticle_type){
-                            const double prefacti = prefact*mi;
-                            particles[j].ax    += prefacti*dx;
-                            particles[j].ay    += prefacti*dy;
-                            particles[j].az    += prefacti*dz;
-                        }
-                    }
-                    particles[i].ax = axi;
-                    particles[i].ay = ayi;
-                    particles[i].az = azi;
-                }
-                }
+                if (reb_gravity_basic_active_pairs(particles, N_active, starti, startj, gb, G, softening2)) return;
+                if (reb_gravity_basic_test_particles(particles, N, N_active, starti, startj, _testparticle_type, gb, G, softening2)) return;
             }
         }
     }
