@@ -2,6 +2,7 @@
 
 <p align="center">
 <a href="https://github.com/hippke/parachron/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green.svg?style=flat" alt="GPL-3.0"></a>
+<a href="https://pypi.org/project/parachron/"><img src="https://img.shields.io/pypi/v/parachron.svg?style=flat" alt="PyPI"></a>
 <a href="https://github.com/hannorein/rebound"><img src="https://img.shields.io/badge/based%20on-REBOUND%205.2-blue.svg?style=flat" alt="based on REBOUND"></a>
 </p>
 
@@ -92,9 +93,18 @@ to-do list.
 
 ## Installation
 
+Parachron is on [PyPI](https://pypi.org/project/parachron/):
+
 ```bash
-pip install parachron          # once published; or from source:
-git clone https://github.com/hippke/parachron && cd parachron && pip install .
+pip install parachron
+```
+
+pip compiles the C library during the installation, so a C compiler is needed (`gcc` or `clang`; on Debian/Ubuntu
+`sudo apt install build-essential`, on macOS `xcode-select --install`). MEP runs on Linux. To install the latest
+development version from GitHub instead:
+
+```bash
+pip install git+https://github.com/hippke/parachron
 ```
 
 The Python module is `parachron` and can be installed next to REBOUND. Its API is REBOUND's: scripts written for
