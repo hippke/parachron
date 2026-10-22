@@ -28,6 +28,9 @@ struct pint_cfg {
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days);
 // G: E_in -> E_out over one slice
 void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]);
+// giants' part of G only (rows PINT_NI.. of Eo), and G with those rows precomputed (bitwise identical to G)
+void pint_coarse_giants(const struct pint_cfg* c, const double E_in[PINT_NP][6], double Eo[PINT_NP][6]);
+void pint_coarse_pre(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par, const double (*Mpre)[6]);
 // conversions (Jacobi, as REBOUND's default orbits)
 void pint_sim_to_el(struct reb_simulation* r, double E[PINT_NP][6]);
 struct reb_simulation* pint_el_to_sim(const double* masses, const double E[PINT_NP][6]);

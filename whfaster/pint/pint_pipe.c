@@ -148,11 +148,29 @@ static int W, khist[KMAX+1]; static el Ecur;
 // deciding thread and written by the main thread as records (t, E_tot incl. GR, E[8][6]) to <prefix>_pr.bin
 #define RING 64
 static el* ring[RING]; static sem_t out_ready, out_free; static int out_on=0;
+// PINT_GSWEEP=1: in the k = 0 sweep the giants' part of G depends only on the giants, so a separate thread integrates
+// the giants through the whole window at its start (one pint_coarse_giants call per slice) and the k = 0 hops use these
+// rows instead of their own giants' run (bitwise identical; takes the giants off the k = 0 critical path).
+static int gsweep=0; static el Gsw[2][NMAX+1]; static sem_t gready[2][NMAX+1], gsw_go[2]; static atomic_int gsw_done[2];
+static struct pint_cfg cfgs_sw[NMAX];
+static void* giants_sweeper(void* arg){ (void)arg;
+    for (int w=0; w<W; w++){
+        const int p=w&1; sem_wait(&gsw_go[p]);
+        for (int n=0;n<N;n++){ pint_coarse_giants(&cfgs_sw[n],(const double (*)[6])Gsw[p][n],Gsw[p][n+1]); sem_post(&gready[p][n]); }
+        atomic_store(&gsw_done[p],w);
+    }
+    return NULL;
+}
 // prepare the state of a window (parity p) that starts from Ecur
-static void window_init(int p){
+static void window_init(int p, int wn){   // wn: index of the window that will use parity p
     for (int k=0;k<=KMAX;k++){ memcpy(U[p][k][0],Ecur,sizeof(el)); upd_max[p][k]=0; for (int i=0;i<PINT_NP;i++) upd_pl[p][k][i]=0; memset(upd_el[p][k],0,sizeof upd_el[p][k]); for (int n=0;n<=N;n++){ sem_destroy(&ready[p][k][n]); sem_init(&ready[p][k][n],0,0); } }
     sem_destroy(&win_done[p]); sem_init(&win_done[p],0,0);
     atomic_store(&stop_at[p],-1);
+    if (gsweep){
+        while (atomic_load(&gsw_done[p]) < wn-2) sched_yield();   // the sweep of window wn-2 must be finished
+        for (int n=0;n<=N;n++){ sem_destroy(&gready[p][n]); sem_init(&gready[p][n],0,0); }
+        memcpy(Gsw[p][0],Ecur,sizeof(el)); sem_post(&gsw_go[p]);
+    }
 }
 static double tbusyF[NMAX], tbusyG[NMAX];
 // optional event trace (env PINT_TRACE=file): per thread (window, k, n, type, t_start, t_end); type 0 = coarse+update,
@@ -182,7 +200,8 @@ static void* slice_thread(void* arg){
         double t0=now();
         el g;
         // G is not needed for boundaries that are already exact (n <= k-1): skip it (saves coarse time on the chain)
-        if (k==0 || n>k-1) pint_coarse_par(&cfgs[n],Up[k][n],g, npar>0 && (parmode==2 || k==0));
+        if (k==0 && gsweep){ sem_wait(&gready[p][n]); pint_coarse_pre(&cfgs[n],Up[0][n],g, npar>0, (const double (*)[6])Gsw[p][n+1]); }
+        else if (k==0 || n>k-1) pint_coarse_par(&cfgs[n],Up[k][n],g, npar>0 && (parmode==2 || k==0));
         if (k==0 || n<k-1){
             if (k==0) memcpy(Up[0][n+1],g,sizeof(el)); else memcpy(Up[k][n+1],Up[k-1][n+1],sizeof(el));
         } else if (n==k-1){
@@ -223,7 +242,7 @@ static void* slice_thread(void* arg){
                 khist[k]++; memcpy(Ecur,Up[k][N],sizeof(el));
                 if (out_on){ sem_wait(&out_free); memcpy(ring[w%RING],&Up[k][1],sizeof(el)*N); sem_post(&out_ready); }
                 if (upd_diag) for (int kk=1;kk<=k;kk++){ fprintf(stderr,"UPD %d %d",w,kk); for (int i=0;i<PINT_NP;i++) fprintf(stderr," %.3e",upd_pl[p][kk][i]); if (upd_diag>1) for (int i=0;i<PINT_NI;i++) for (int e=0;e<4;e++) fprintf(stderr," %.3e",upd_el[p][kk][i][e]); fprintf(stderr,"\n"); }
-                if (w+1<W) window_init(p^1);
+                if (w+1<W) window_init(p^1,w+1);
                 atomic_store(stp,k);
                 for (int q=0;q<N/M;q++) sem_post(&win_done[p]);
                 for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&rdy[kk][q]);   // release waiting threads
@@ -269,6 +288,7 @@ int main(int argc, char** argv){
     if (getenv("PINT_JR")) jr=atoi(getenv("PINT_JR"));
     if (getenv("PINT_EDIAG")) ediag=atoi(getenv("PINT_EDIAG"));
     if (getenv("PINT_PROJ")) projmode=atoi(getenv("PINT_PROJ"));
+    if (getenv("PINT_GSWEEP")) gsweep=atoi(getenv("PINT_GSWEEP"));
     if (getenv("PINT_CHUNKS")) nchunk=atoi(getenv("PINT_CHUNKS"));
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     pint_default_cfg(&cfg, ss_mass, slice_days);
@@ -311,7 +331,14 @@ int main(int argc, char** argv){
     if (trf){ trace_on=1; for (int n=0;n<N;n++) trace[n]=malloc(TRACE_MAX*sizeof(tev)); }
     const double t0=now(); trace_t0=t0;
     for (int p=0;p<2;p++){ sem_init(&win_start[p],0,0); sem_init(&win_done[p],0,0); for (int k=0;k<=KMAX;k++) for (int n=0;n<=N;n++) sem_init(&ready[p][k][n],0,0); }
-    window_init(0);
+    if (gsweep){
+        if (M!=1){ fprintf(stderr,"PINT_GSWEEP needs M = 1\n"); return 1; }
+        for (int q=0;q<2;q++){ sem_init(&gsw_go[q],0,0); atomic_store(&gsw_done[q],-1); for (int n=0;n<=N;n++) sem_init(&gready[q][n],0,0); }
+        for (int n=0;n<N;n++) cfgs_sw[n]=cfgs[n];
+    }
+    pthread_t gth;
+    if (gsweep) pthread_create(&gth,NULL,giants_sweeper,NULL);
+    window_init(0,0);
     FILE* fo=NULL;
     if (outp){
         char fn[512]; snprintf(fn,sizeof fn,"%s_pr.bin",outp); fo=fopen(fn,"wb"); write_rec(fo,0.,E0);
@@ -326,6 +353,7 @@ int main(int argc, char** argv){
         if (w%1000==999) fflush(fo);
     }
     for (int c=0;c<N/M;c++) pthread_join(th[c],NULL);
+    if (gsweep) pthread_join(gth,NULL);
     if (fo) fclose(fo);
     const double tpr=now()-t0;
     if (trf){ FILE* f=fopen(trf,"w"); for (int n=0;n<N;n++) for (int i=0;i<ntr[n];i++) fprintf(f,"%d %d %d %d %.7f %.7f\n",trace[n][i].w,n,trace[n][i].k,trace[n][i].type,trace[n][i].t0,trace[n][i].t1); fclose(f); }

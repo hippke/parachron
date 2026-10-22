@@ -442,7 +442,7 @@ static void p_grid1i(void* a, int t){ struct pctx* p=a; task_grid(p->x1,t); }
 static void p_pair1i(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->inner_t[t]); }
 static void p_grid1o(void* a, int t){ struct pctx* p=a; task_grid(p->x1,PINT_NI+t); }
 static void p_pair1o(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->outer_t[t]); }
-static int coarse_staged(const struct pint_cfg* c, const double* mu, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){
+static int coarse_staged(const struct pint_cfg* c, const double* mu, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], const double (*Mpre)[6]){
     if (!c->heun || !pool_acquire(1)) return 0;
     static __thread struct tctx *x0=NULL, *x1=NULL; if (!x0){ x0=malloc(sizeof *x0); x1=malloc(sizeof *x1); }
     static __thread struct pctx p; double M2[PINT_NP][6], Mg[PINT_NP][6];
@@ -456,7 +456,7 @@ static int coarse_staged(const struct pint_cfg* c, const double* mu, const doubl
         a=am;
     }
     pool_launch(&a);
-    outer_wh(c,E_in,Mg);
+    if (Mpre) memcpy(Mg,Mpre,sizeof Mg); else outer_wh(c,E_in,Mg);
     pool_join();
     for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6);
     table_nmotion(x1,PINT_NI);
@@ -468,19 +468,24 @@ static int coarse_staged(const struct pint_cfg* c, const double* mu, const doubl
     return 1;
 }
 void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par);
+void pint_coarse_pre(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par, const double (*Mpre)[6]);
 void pint_coarse(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6]){ pint_coarse_par(c,E_in,E_out,0); }
-void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){
+// the giants' part of G alone (their WH run; depends only on the giants' rows of E_in): rows PINT_NI.. of Eo
+void pint_coarse_giants(const struct pint_cfg* c, const double E_in[PINT_NP][6], double Eo[PINT_NP][6]){ outer_wh(c,E_in,Eo); }
+void pint_coarse_par(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par){ pint_coarse_pre(c,E_in,E_out,par,NULL); }
+// as pint_coarse_par, with the giants' end rows Mpre (= pint_coarse_giants(E_in)) precomputed; bitwise identical
+void pint_coarse_pre(const struct pint_cfg* c, const double E_in[PINT_NP][6], double E_out[PINT_NP][6], int par, const double (*Mpre)[6]){
     const double t0=now();
     const double* m=c->masses;
     double Mint[PINT_NP], mu[PINT_NP]; double acc=0;
     for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
-    if (par && coarse_staged(c,mu,E_in,E_out)){ pint_t_total=now()-t0; return; }
+    if (par && coarse_staged(c,mu,E_in,E_out,Mpre)){ pint_t_total=now()-t0; return; }
     double disp[PINT_NI], R[PINT_NI][6], M2[PINT_NP][6];
     table_par(c,E_in,disp,R,par);
     if (c->meann){ double E1[PINT_NP][6]; mean_state(E_in,disp,E1); table_par(c,(const double (*)[6])E1,disp,R,par); }
     const double t1=now();
     inner_predict(c,mu,E_in,disp,R,M2);
-    outer_wh(c,E_in,M2);
+    if (Mpre){ for (int j=PINT_NI;j<PINT_NP;j++) memcpy(M2[j],Mpre[j],sizeof(double)*6); } else outer_wh(c,E_in,M2);
     const double t2=now();
     double disp1[PINT_NI];
     if (c->heun){
