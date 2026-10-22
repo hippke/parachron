@@ -1300,3 +1300,17 @@ one core of the 7950X: **0.640 → 0.286 ms** (32²/16² grids), 0.973 → 0.476
   evaluations, end) × ≈ 0.07 ms ≈ 0.5 ms vs the gate 0.35 ms, with the giants' 180-d run (≈ 0.3 ms) on the calling
   core in parallel. Next reductions: dual-number or analytic dE/dv (grids are on the chain), one packed FFT for
   W1 + W2, inner–inner rates frozen across the RK4 stages (only the giants move appreciably), SIMD sums.
+
+### Iteration 43 — exact dE/dv by dual numbers (`pint_dual.h`; KEPT, now the default of config B)
+Forward-mode dual numbers (value + three derivative components) through the element conversion give the exact
+derivatives of (ln a, λ, k, h, q, p) w.r.t. the velocity. Check against central differences with Richardson
+extrapolation: the difference grows as 1/h (1.4e-9 at h = 2e-3 … 1.4e-6 at h = 2e-6 relative) — round-off of the
+finite differences; the dual numbers are exact. The old finite differences (config B: forward, h = 1e-7; `pint_disp6`:
+central, h = 1e-6) were only good to ≈ 1e-6 in some components.
+* `pint_disp6k` with dual numbers: grids 0.095 → 0.036 ms; pass 0.787 → 0.294 ms in total vs `pint_disp6` (local);
+  displacements change by 3e-11 (relative 3e-7) = the finite-difference error.
+* Config B with `cfg.dual = 1` (`PINT_DUAL`): bitwise serial = parallel; serial coarse step 0.609 → 0.534 ms;
+  K histograms unchanged (100 windows, τ 3e-6 and 3e-5); speedup (asm, 2 reps) τ 3e-5: 3.56 / 3.59 vs 3.41 / 3.30,
+  τ 3e-6: 3.03 / 2.89 vs 2.84 / 2.86 (less helper work next to the fine solves); 10 Myr hard ICs τ 3e-5: same K
+  histogram (557/66/2), extra error vs dt 6 d 6.6e-7 (was 6.9e-7). → default `dual = 1` (`PINT_DUAL=0` restores the
+  old numerics; earlier iterations used the finite differences).

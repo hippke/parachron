@@ -18,7 +18,7 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
-    c->meann = 0; c->dual = 0;
+    c->meann = 0; c->dual = 1;   // dual: exact dE/dv (iteration 43); PINT_DUAL=0 restores the finite differences of rounds 2-4
     // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT, PINT_ALPHAHI, PINT_MAXJ (7: Uranus and Neptune paired with the inner planets)
     const char* e;
     if ((e=getenv("PINT_MEANN"))) c->meann=atoi(e);
