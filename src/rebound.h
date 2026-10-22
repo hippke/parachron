@@ -521,6 +521,59 @@ REB_API void reb_simulations_steps(struct reb_simulation** sims, size_t N, size_
 // kernel). Both simulations are synchronized at the end; r->status reports each result. No
 // heartbeat or Simulationarchive output happens during the call.
 REB_API void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps);
+
+// Mean-element parareal (MEP): parallel-in-time integration of ONE WHFast512 simulation (a central object and
+// exactly 8 planets, G = 1, units AU / Msun / yr/2pi) on many cores. The time axis is cut into windows of `cores`
+// slices of `slice_steps` time steps; the slices run in parallel and a cheap coarse propagator in mean orbital
+// elements links them (parareal). The result is the serial WHFast512 trajectory to within the tolerance `tol`.
+// Designed and validated for the Solar System. Linux only (on other platforms reb_mep_create returns NULL).
+// A run can be checkpointed to a small file and resumed; the resumed run is bitwise identical.
+#define REB_MEP_KHIST 12                // length of the iteration histogram
+#define REB_MEP_PATH 1024
+#define REB_MEP_MSG 256
+struct reb_mep_options {
+    int cores;                          // Slices per window = slice threads. 0 (default): physical cores available to the process.
+    int helpers;                        // Helper threads of the coarse step. -1 (default): min(8, cores/2).
+    int pin;                            // 1 (default): pin slice thread n to physical core n and helpers to SMT siblings.
+    int k_min;                          // Minimum number of parareal iterations per window. Default 3.
+    int k_max;                          // Maximum number of parareal iterations per window (<= 11). Default 6.
+    double tol;                         // A window is accepted when the largest change of a planet position between two
+                                        // iterations is <= tol [AU]. Default 3e-6.
+    int64_t slice_steps;                // Time steps per slice (even). Default 60000 (986 yr at dt = 6 d).
+    int64_t checkpoint_every;           // Write the checkpoint every this many windows (0: only at the end of each
+                                        // reb_mep_integrate call). Default 100.
+    double walltime;                    // Stop reb_mep_integrate after the first window that ends after this many
+                                        // seconds of wall clock (0: no limit). Default 0.
+};
+struct reb_mep {
+    struct reb_mep_options opt;         // Options (cores is set to the actual value by the first integration).
+    double t;                           // Current time (end of the last completed window).
+    double t_start;                     // Time at which the run started.
+    double dt;                          // Time step of the fine integration.
+    int64_t windows;                    // Number of completed windows.
+    int64_t khist[REB_MEP_KHIST];       // Number of windows that needed k iterations.
+    double masses[9];
+    double E[8][6];                     // Current state: Jacobi elements (ln a, lambda, k, h, q, p) of the planets.
+    unsigned int gr_potential;          // WHFast512 settings of the fine integration.
+    unsigned int corrector;
+    unsigned int kernel;                // WHFast512 kernel (resolved; a resumed run uses the same one).
+    double walltime_last;               // Wall clock [s] of the last reb_mep_integrate call.
+    char checkpoint[REB_MEP_PATH];      // Checkpoint file ("" = none).
+    char message[REB_MEP_MSG];          // Error message of the last call ("" = none).
+};
+REB_API void reb_mep_options_default(struct reb_mep_options* o);
+// Starts a run from the current state of r (which is not modified). o may be NULL (defaults); checkpoint may be NULL.
+REB_API struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_options* o, const char* checkpoint);
+// Resumes a run from a checkpoint file. Only the options helpers, pin, checkpoint_every and walltime are taken from o
+// (if not NULL); all others come from the file. Returns NULL if the file cannot be read.
+REB_API struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o);
+// Integrates whole windows up to the last window boundary <= tmax. Returns REB_STATUS_SUCCESS, REB_STATUS_USER
+// (walltime reached), REB_STATUS_SIGINT (interrupted; the unfinished window is discarded) or REB_STATUS_GENERIC_ERROR
+// (see m->message). The checkpoint (if any) is written at the end in every case.
+REB_API enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax);
+// Replaces the particles of r by the current state of the run and sets r->t (r can be used for analysis or plotting).
+REB_API void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r);
+REB_API void reb_mep_free(struct reb_mep* m);
 // Ensemble runner internals: 1 if two WHFast512 simulations can use the paired kernel; one paired
 // integrator step of each (bitwise identical to one separate step of each).
 int reb_integrator_whfast512_can_pair(struct reb_simulation* const r1, struct reb_simulation* const r2);

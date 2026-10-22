@@ -21,6 +21,7 @@ REBOUND is an N-body integrator, i.e. a software package that can integrate the 
 * Real-time, 3D visualization, for both C and Python.
 * Extensive set of example problems for both C and Python. You can run examples directly from your browser without the need to download or install anything.
 * Parallelized [WHFast512](integrators/whfast512.md) integrator for super fast integrations of planetary systems with SIMD AVX512 instructions
+* Parallel-in-time integration of one planetary system on many cores with mean-element parareal ([MEP](ipython_examples/MEP.ipynb)), with checkpoints and bitwise identical restarts
 * Parallelized with OpenMP (for shared memory systems)
 * Parallelized with [MPI](mpi.md) is supported for some special use cases only (using an essential tree for gravity and collisions)
 * The code is 100% open-source. All features are included in the public repository on [github](https://github.com/hannorein/rebound).

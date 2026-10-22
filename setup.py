@@ -44,6 +44,8 @@ if sys.platform == "darwin":
     cfg["LDSHARED"] = cfg["LDSHARED"].replace("-bundle", "-shared")
     suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     extra_link_args += [f"-Wl,-install_name,@rpath/librebound{suffix}"]
+if sys.platform.startswith("linux"):
+    extra_link_args += ["-pthread", "-lrt"]   # mean-element parareal (src/mep.c): threads, semaphores, clock_gettime
 
 ##### Compile args
 if sys.platform == "win32":

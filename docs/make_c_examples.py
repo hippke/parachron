@@ -23,6 +23,8 @@ for l in config:
                 livepreview=0
             if "screenshots" in name:
                 livepreview=0
+            if name.startswith("mep_"):     # needs Linux threads
+                livepreview=0
             try:
                 with open("examples/"+name+"/Makefile","r") as mfd:
                     Makefile = mfd.read()
