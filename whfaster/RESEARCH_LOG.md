@@ -1144,6 +1144,9 @@ parareal τ 3e-6 **+8.6e-11, growing linearly** (+1.44e-11 at 10 Myr, +4.0e-11 a
   offset is +0.5e-17 ± 0.5e-17 (corrector 17, no GR), +0.1e-17 ± 0.2e-17 (no corrector, GR), −0.9e-17 ± 0.5e-17
   (corrector 17 + GR); with 0: +7.4e-17 ± 0.5e-17. → No significant residual (|offset| < 1.5e-17 at 2σ, ≥ 85 %
   removed); the "corrector residual" of the first sample was a fluctuation.
+* REBOUND test suite with the modified library (host2, venv with this fork installed): `rebound/tests/test_whfast512.py`
+  75 passed. From Python, `sim.integrator.jacobi_recursive` defaults to 0 and can be set; 0 vs 1 agree to 2e-14 after
+  1000 steps (two-planet test).
 * Long runs re-planned: the τ = 1e-5 Gyr run with the biased transformation was cancelled; added a serial run with the
   fix (`s0jr`) and, after the τ = 3e-6 run finishes, the τ/K_min scan and a 1 Gyr parareal run with the fix (`p3jr`).
 * 1 Gyr parareal τ 3e-6 (matrix transform, `p3`): 0.986 Gyr in 3152 s (52.5 min; three serial runs shared SMT
