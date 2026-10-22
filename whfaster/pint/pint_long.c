@@ -61,8 +61,9 @@ static void project_energy(el E, double Et){
     for (int it=0; it<2; it++){
         const double e=energy_sim(s);
         double K=0; for (unsigned i=0;i<s->N;i++){ struct reb_particle p=s->particles[i]; K+=0.5*p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz); }
-        const double f=sqrt(1.+(Et-e)/K);
-        for (unsigned i=0;i<s->N;i++){ s->particles[i].vx*=f; s->particles[i].vy*=f; s->particles[i].vz*=f; }
+        // v += v*d (keeps the precision of the tiny correction; v *= sqrt(1 + x) left a -1e-16 bias, iteration 49)
+        const double d=(Et-e)/(2.*K);
+        for (unsigned i=0;i<s->N;i++){ s->particles[i].vx+=s->particles[i].vx*d; s->particles[i].vy+=s->particles[i].vy*d; s->particles[i].vz+=s->particles[i].vz*d; }
     }
     pint_sim_to_el(s,E); reb_simulation_free(s);
 }
