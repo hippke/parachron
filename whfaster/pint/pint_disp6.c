@@ -222,3 +222,75 @@ void pint_disp6k(const struct pint_cfg* c, const double E[PINT_NP][6], const dou
     }
     pint_disp6k_t[0]=t1-t0; pint_disp6k_t[1]=tf; pint_disp6k_t[2]=tk;
 }
+
+// Task-parallel pint_disp6k on the coarse step's helper pool (round 5 cost study): stage 1 grids (one task per
+// planet), stage 2 one task per pair and one per GR term; reduction in the serial order (bitwise identical to
+// pint_disp6k for any number of helpers).
+void pint_run_job(int nst, void (**fn)(void*,int), void** arg, const int* ntask);
+#define NPT 40
+static struct {
+    const struct pint_cfg* c; const double (*E)[6]; double Mint[PINT_NP], mu[PINT_NP], n[PINT_NP]; int N1;
+    double ri[PINT_NI][NGM][3], vi[PINT_NI][NGM][3], Di[PINT_NI][NGM][6][3], rj[PINT_NP][NGM][3];
+    int np, pi[NPT], pj[NPT];            // pair tasks (pj = -1: GR task of planet pi)
+    double sa[NPT][6], sb[NPT][6], ra0[NPT], rb0[NPT];
+} PX;
+static void px_grid(void* u, int p){ (void)u;
+    double Eg[6]; memcpy(Eg,PX.E[p],sizeof Eg);
+    if (p<PINT_NI){ for (int g=0;g<PX.N1;g++){ Eg[1]=2.*M_PI*g/PX.N1; el_to_rv6(PX.mu[p],Eg,PX.ri[p][g],PX.vi[p][g]);
+                    if (pint_disp6k_dual) dEdv6d(PX.mu[p],PX.ri[p][g],PX.vi[p][g],PX.Di[p][g]); else dEdv6(PX.mu[p],PX.ri[p][g],PX.vi[p][g],PX.Di[p][g]); } }
+    else { double vd[3]; for (int g=0;g<PX.c->ng_io;g++){ Eg[1]=2.*M_PI*g/PX.c->ng_io; el_to_rv6(PX.mu[p],Eg,PX.rj[p][g],vd); } }
+}
+static void px_pair(void* u, int t){ (void)u;
+    const struct pint_cfg* c=PX.c; const double* m=c->masses; const int i=PX.pi[t], j=PX.pj[t];
+    for (int e=0;e<6;e++){ PX.sa[t][e]=0; PX.sb[t][e]=0; } PX.ra0[t]=PX.rb0[t]=0;
+    if (j<0){   // GR term of planet i
+        double complex f1[6][NGM]; const double pre=-6.*m[0]*m[0]/(CGR*CGR); const int N1=PX.N1;
+        for (int a=0;a<N1;a++){ const double* r1=PX.ri[i][a]; const double rr=sqrt(r1[0]*r1[0]+r1[1]*r1[1]+r1[2]*r1[2]), r4=rr*rr*rr*rr;
+            double ag[3]; for (int x=0;x<3;x++) ag[x]=pre*r1[x]/r4;
+            for (int e=0;e<6;e++){ double s=0; for (int x=0;x<3;x++) s+=PX.Di[i][a][e][x]*ag[x]; f1[e][a]=s; } }
+        double complex sl0=0;
+        for (int e=0;e<6;e++){ fftd(f1[e],N1,1); double complex s=0;
+            for (int a=0;a<N1;a++){ const int K=kfd(a,N1); if (!K) continue; const double kk=K*PX.n[i];
+                const double complex ph=cexp(I*K*PX.E[i][1])*f1[e][a]/N1; s+=ph/(I*kk); if (e==0) sl0+=ph/(kk*kk); }
+            PX.sa[t][e]=creal(s); }
+        PX.ra0[t]=creal(sl0); return;
+    }
+    static __thread double fa[6][NGM*NGM], fb[6][NGM*NGM]; static __thread double complex W1[NGM*NGM], W2[NGM*NGM];
+    const int N1=PX.N1, inner_j=j<PINT_NI;
+    const int hi=inner_j && c->ng_hi>0 && exp(PX.E[i][0]-PX.E[j][0])>=c->alpha_hi;
+    const int Ng= inner_j ? (hi ? N1 : c->ng_ii) : c->ng_io, si= inner_j ? N1/Ng : 1, sio = inner_j ? 0 : N1/c->ng_io;
+    const double pf=inner_j ? -(PX.Mint[j]+m[j+1])/PX.Mint[j]*m[i+1] : 0.;
+    for (int a=0;a<Ng;a++){ const int ia = inner_j ? a*si : a*sio; const double* r1=PX.ri[i][ia];
+        for (int b=0;b<Ng;b++){ const double* r2= inner_j ? PX.ri[j][b*si] : PX.rj[j][b];
+            const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
+            const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
+            const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
+            double ai[3]; for (int x=0;x<3;x++) ai[x]=m[j+1]*(d[x]*id3-r2[x]*irj3);
+            double aj[3]={0,0,0};
+            if (inner_j){ const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
+                for (int x=0;x<3;x++) aj[x]=pf*(d[x]*id3-r2[x]*irj3+r1[x]*irj3-3.*r2[x]*(rdot/rj2*irj3)); }
+            for (int e=0;e<6;e++){ const double* De=PX.Di[i][ia][e]; fa[e][a*Ng+b]=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2];
+                if (inner_j){ const double* Dj=PX.Di[j][b*si][e]; fb[e][a*Ng+b]=Dj[0]*aj[0]+Dj[1]*aj[1]+Dj[2]*aj[2]; } } } }
+    kernels(Ng,PX.n[i],PX.n[j],PX.E[i][1],PX.E[j][1],W1,W2);
+    double sa[6]={0}, sb[6]={0}, ra0=0, rb0=0;
+    for (int g=0;g<Ng*Ng;g++){ const double w1=cimag(W1[g]);
+        for (int e=0;e<6;e++){ sa[e]+=fa[e][g]*w1; if (inner_j) sb[e]+=fb[e][g]*w1; }
+        ra0+=fa[0][g]*creal(W2[g]); if (inner_j) rb0+=fb[0][g]*creal(W2[g]); }
+    const double nrm=1./((double)Ng*Ng*Ng*Ng)*Ng*Ng;
+    for (int e=0;e<6;e++){ PX.sa[t][e]=sa[e]*nrm; PX.sb[t][e]=sb[e]*nrm; } PX.ra0[t]=ra0*nrm; PX.rb0[t]=rb0*nrm;
+}
+void pint_disp6k_par(const struct pint_cfg* c, const double E[PINT_NP][6], const double* n_div, double disp[PINT_NI][6]){
+    const double* m=c->masses; double acc=0; PX.c=c; PX.E=E;
+    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; PX.Mint[i]=acc; PX.mu[i]=PX.Mint[i]+m[i+1]; PX.n[i]= n_div ? n_div[i] : sqrt(PX.mu[i]/exp(3.*E[i][0])); }
+    PX.N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii);
+    int np=0; for (int i=0;i<PINT_NI;i++){ for (int j=i+1;j<=c->maxj;j++){ PX.pi[np]=i; PX.pj[np]=j; np++; } PX.pi[np]=i; PX.pj[np]=-1; np++; }
+    PX.np=np;
+    void (*fn[2])(void*,int)={px_grid,px_pair}; void* arg[2]={NULL,NULL}; const int nt[2]={c->maxj+1,np};
+    pint_run_job(2,fn,arg,nt);
+    for (int i=0;i<PINT_NI;i++) for (int e=0;e<6;e++) disp[i][e]=0;
+    for (int t=0;t<np;t++){ const int i=PX.pi[t], j=PX.pj[t];
+        if (j<0){ for (int e=0;e<6;e++) disp[i][e]+=PX.sa[t][e]; disp[i][1]+=1.5*PX.n[i]*PX.ra0[t]; continue; }
+        for (int e=0;e<6;e++){ disp[i][e]+=PX.sa[t][e]; if (j<PINT_NI) disp[j][e]+=PX.sb[t][e]; }
+        disp[i][1]+=1.5*PX.n[i]*PX.ra0[t]; if (j<PINT_NI) disp[j][1]+=1.5*PX.n[j]*PX.rb0[t];
+    }
+}

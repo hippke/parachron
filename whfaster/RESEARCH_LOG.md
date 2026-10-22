@@ -1328,3 +1328,15 @@ central, h = 1e-6) were only good to ≈ 1e-6 in some components.
   ≈ 2 ms serial, ≈ 0.55 ms on the chain with 8 helpers; with the inner–inner rates frozen across the RK4 stages (only
   inner–giant pairs re-evaluated), the mean-n step as a divisor-only re-evaluation and a single end evaluation
   ≈ 0.3 ms — at the gate. The design is plausible but needs these reductions to pay.
+
+### Iteration 45 — task-parallel all-component pass (`pint_disp6k_par`, `pint_run_job`): the chain cost of config C
+Stage 1 grids (one task per planet), stage 2 one task per pair (14) and per GR term (4) on the coarse step's helper
+pool (new `pint_run_job` in `pint_coarse.c`), fixed-order reduction (identical for any helper count; 3e-18 from the
+serial `pint_disp6k`). Local i5-13500, idle, dual numbers: serial 0.299 ms → **0.091 ms (4 helpers) / 0.093 ms (8)**
+per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominates).
+* Config C chain under load (×≈ 1.6 on SMT siblings): 2 start passes + 4 RK4 rate passes + 1–3 end passes ≈ 0.4–0.6 ms
+  (≈ 0.4 ms with inner–inner rates frozen across the RK4 stages and one end pass) vs the gate 0.35 ms, the giants'
+  180-d run (≈ 0.3 ms) running in parallel on the calling core. → **On 16 cores config C is about break-even**
+  (gain 0–10 %) unless passes are fused (start transform and RK4 rates from shared grids) and the large pair tasks
+  are split. With more cores the balance improves (config B's K̄ grows with the window length; iteration 25: K = 4
+  for 40 slices).

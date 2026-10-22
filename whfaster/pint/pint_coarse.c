@@ -298,6 +298,12 @@ static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
     if (!pool_acquire(par)){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
     struct pjob j={1,{fn},{arg},{ntask}}; pool_launch(&j); pool_join(); pool_release();
 }
+// generic staged job on the helper pool for other modules (pint_disp6.c); serial in the caller if the pool is busy
+void pint_run_job(int nst, void (**fn)(void*,int), void** arg, const int* ntask){
+    if (!pool_acquire(1)){ for (int s=0;s<nst;s++) for (int t=0;t<ntask[s];t++) fn[s](arg[s],t); return; }
+    struct pjob j; j.nst=nst; for (int s=0;s<nst;s++){ j.fn[s]=fn[s]; j.arg[s]=arg[s]; j.ntask[s]=ntask[s]; }
+    pool_launch(&j); pool_join(); pool_release();
+}
 static void grid_task(void* a, int t){ task_grid((struct tctx*)a, t); }
 static void pairgr_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) task_gr(x,t); else task_pair(x,t); }
 // table setup: masses, mean motions (planets < nn only; the others are set by table_nmotion) and the task list in the
