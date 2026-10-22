@@ -34,3 +34,4 @@ parareal/jacG_*.npz
 parareal/oracle_lna_*.npz
 parareal/slice_err_1Myr.npy
 pint/test_par
+pint/test_disp6k
