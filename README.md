@@ -1,7 +1,7 @@
-<p align="center"><img src="docs/img/parachron_logo.svg" alt="Parachron" width="560"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/hippke/parachron/main/docs/img/parachron_logo.svg" alt="Parachron" width="560"></p>
 
 <p align="center">
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green.svg?style=flat" alt="GPL-3.0"></a>
+<a href="https://github.com/hippke/parachron/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green.svg?style=flat" alt="GPL-3.0"></a>
 <a href="https://github.com/hannorein/rebound"><img src="https://img.shields.io/badge/based%20on-REBOUND%205.2-blue.svg?style=flat" alt="based on REBOUND"></a>
 </p>
 
@@ -76,7 +76,7 @@ mep = parachron.MEP.from_checkpoint("run.mep")
 mep.integrate(2e8 * 2. * math.pi)
 ```
 
-A C version is in [`examples/mep_solar_system`](examples/mep_solar_system/problem.c). MEP runs on Linux and needs a
+A C version is in [`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP runs on Linux and needs a
 central star with exactly 8 planets. It was designed and validated for the Solar System; other systems are on the
 to-do list.
 
@@ -114,9 +114,9 @@ retained in the source files.
 Parachron is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
 License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
 version, like REBOUND. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
-implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [GNU General Public License](LICENSE)
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [GNU General Public License](https://github.com/hippke/parachron/blob/main/LICENSE)
 for more details.
 
 Copyright © 2011–2026 Hanno Rein and REBOUND contributors (REBOUND).
 Modifications and additions © 2026 Michael Hippke. The changes relative to REBOUND are listed in
-[`CHANGES_FROM_REBOUND.md`](CHANGES_FROM_REBOUND.md).
+[`CHANGES_FROM_REBOUND.md`](https://github.com/hippke/parachron/blob/main/CHANGES_FROM_REBOUND.md).

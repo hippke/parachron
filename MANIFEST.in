@@ -1,2 +1,5 @@
 include src/*.h
 recursive-include src *.h
+# GPL-3.0 section 5(a): the list of modifications travels with every distribution
+include CHANGES_FROM_REBOUND.md
+include changelog.md
