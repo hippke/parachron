@@ -1340,3 +1340,10 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
   (gain 0–10 %) unless passes are fused (start transform and RK4 rates from shared grids) and the large pair tasks
   are split. With more cores the balance improves (config B's K̄ grows with the window length; iteration 25: K = 4
   for 40 slices).
+* **Measured on the 7950X** (process confined to the SMT siblings 16–31; "loaded" = 16 concurrent fine integrations on
+  cores 0–15, as in the pipeline): 8 helpers 0.068 ms idle → **0.140 ms loaded** per pass (4 helpers 0.112 → 0.229;
+  serial 0.344 → 0.800; 64² V–E 0.214 → 0.451). Config C chain under load: straightforward 0.7–1.0 ms → window
+  16 × 0.8 + 2.4 × (8.6 + 0.8) ≈ 35 ms vs config B 31.5 ms (**−11 %**); optimistic (frozen inner–inner rates, one end
+  pass) ≈ 0.54 ms → ≈ 30.5 ms (+3 %). **Verdict: config C (lead A) does not pay on 16 cores**; it becomes worthwhile
+  only with more cores (longer windows, where config B needs K ≥ 4) or if the coarse chain can be shortened
+  structurally.

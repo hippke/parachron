@@ -29,9 +29,10 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    step ≈ 2 ms serial / ≈ 0.55 ms on the chain as a straight port; ≈ 0.3 ms with inner–inner rates frozen across the
    RK4 stages, a divisor-only mean-n re-evaluation and one end evaluation (to be checked against the Python
    prototype's accuracy: the end map in Python is a 3-step fixed point at the osculating angles).
-   **Iteration 45 (preliminary verdict):** task-parallel pass 0.09 ms idle (local) → config C chain ≈ 0.4–0.6 ms under
-   load → about break-even on 16 cores. Pursue config C only together with pass fusion / task splitting, or for
-   machines with more cores (≥ 24–32), where config B needs K ≥ 4.
+   **Iteration 45 verdict (measured on the 7950X):** one task-parallel pass costs 0.068 ms idle but 0.140 ms under
+   the pipeline's load → config C chain 0.7–1.0 ms (optimistic 0.54 ms) → −11 % … +3 % vs config B on 16 cores.
+   **No-go for the 16-core machine.** Revisit only for ≥ 24–32 cores (config B then needs K ≥ 4) or with a structural
+   way to shorten the coarse chain.
 2. **E–M–J term** (`so2.resonant_U2`, `g3.G3`): compute once per slice at k = 0 on a helper (off the chain; iteration
    24 showed per-slice freezing is as good as live), apply analytically in the drift.
 3. **Config C in `pint_coarse.c`** behind a cfg flag (default stays config B), bitwise serial = parallel

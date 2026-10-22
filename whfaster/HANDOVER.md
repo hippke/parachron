@@ -28,8 +28,9 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
   6. 1 Gyr runs: energy drift of parareal +7.5e-10/Gyr (old transformation) → −1.1e-10 (fix, 10 calls per slice) →
      −6.7e-11/Gyr (fix, 2 calls per slice, default now) — serial runs +2.9…+6.4e-11/Gyr. CCD load balancing
      (`PINT_BAL`) was tried and rejected (it. 40).
-* Open leads (ranked): (a) the round-4 plan (cheap accurate inner coarse step) is still the only route to K = 2 at
-  reference accuracy (the binding error is the λ of Venus/Earth/Mars, i.e. 3e-10 errors in their mean ln a);
+* Open leads (ranked): (a) K = 2 at reference accuracy needs the accurate coarse step ("config C",
+  `RESEARCH_PLAN_R5.md`): it reaches K̄ ≈ 2.4 at N = 16 (it. 41), but its measured parallel cost under load makes it
+  break-even at best on 16 cores (it. 45) — worth it only on machines with more cores;
   (b) an ensemble of Gyr runs (serial vs parareal) to test instability/secular statistics, which single runs cannot;
   (c) per-core fine-time imbalance (second CCD 3–5 % slower; the slowest slice sets every iteration);
   (d) the remaining per-call energy offset with corrector + GR (−0.9e-17; inverse corrector is algebraically exact,
