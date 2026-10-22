@@ -250,10 +250,17 @@ arXiv 2507.04987) show that ensembles of 5 Gyr integrations remain statistically
   accumulates ≈ +4e-10 from this alone. Parareal, which restarts the integrator in every slice, showed it as a linear
   drift of +7.5e-10 per Gyr. Using REBOUND's recursive Jacobi transformation instead (state-dependent round-off)
   removes it (per-call offset consistent with zero, ≤ 1.5e-17 at 2σ).
-* **Residual.** With the fix, the 16-member ensemble still shows a parareal drift of −1.25e-10 per Gyr relative to
-  serial (≈ 3.5σ); it does not depend on the tolerance (τ = 3e-6: −1.15e-10 ± 0.62e-10; τ = 3e-5: −1.62e-10 ± 0.51e-10
-  per Gyr, paired), which points to a per-slice systematic of the parareal driver rather than to incomplete
-  convergence. Open.
+* **A second, smaller bias in the energy projection (it. 46–49).** With the fix, a 16-member ensemble still showed a
+  parareal drift of −1.25e-10 per Gyr relative to serial (≈ 3.5σ), independent of the tolerance. An energy
+  bookkeeping of every boundary located it: the element round trips of the fine results are unbiased
+  (−2.0e-18 ± 2.4e-18), but the **energy projection left a residual of −1.0e-16 ± 0.025e-16 per projection**. The
+  projection scaled the velocities by f = √(1 + x) with x ≈ 10⁻¹²; f is a double near 1 whose spacing (2.2e-16 above 1,
+  1.1e-16 below) quantises the correction asymmetrically. Applying the correction as an increment, v ← v + v·d with
+  d = (E_target − E)/(2 E_kin), keeps the full precision of d (residual −0.026e-16 ± 0.025e-16). In the ensemble
+  (16 × 100 Myr, τ = 3e-6) the trend relative to serial changed from −1.16e-10 ± 0.58e-10 to −0.48e-10 ± 0.36e-10 per Gyr
+  (consistent with zero), by the +7.6e-11 predicted from the measured bias. **Parareal energy conservation is now
+  statistically equivalent to serial integration.** Lesson: an energy projection applied 10⁶ times per Gyr must be
+  unbiased at the 10⁻¹⁸ level per application.
 
 ## 7. Summary of the physical insight
 1. Parareal for planetary systems is controlled by the coarse model's Jacobian in the **semi-major-axis rows**,

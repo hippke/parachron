@@ -1417,7 +1417,17 @@ sim → elements → sim and (b) the residual of every energy projection (energy
   this is ≈ −0.8e-16 per slice, i.e. most of the −1.6e-16 per slice (−1.25e-10 per Gyr) seen in iterations 46/47.
 * Fix: apply the correction as an increment, v += v·d, which keeps the full relative precision of d. Residual now
   consistent with zero. `PINT_PROJ=2` (default) in `pint_pipe` and the same code in `pint_long`; `PINT_PROJ=1` restores
-  the old projection. Validation ensemble (16 ICs × 100 Myr, τ 3e-6) running.
+  the old projection.
+* **Validation ensemble** (`runs/ens_proj.sh`: the 16 ICs of it. 46, 100 Myr, τ 3e-6, asm, K̄ 3.69–3.70), energy trend
+  per Gyr over 100 Myr, paired by IC:
+  | | trend per Gyr | minus serial (paired) | dE/E at 100 Myr (mean, rms) |
+  |---|---|---|---|
+  | serial | +3.6e-11 ± 3.0e-11 | — | +1.7e-12, 1.2e-11 |
+  | old projection (it. 47) | −7.9e-11 ± 4.4e-11 | −1.16e-10 ± 0.58e-10 | −5.2e-12, 1.6e-11 |
+  | **fixed projection** | **−1.1e-11 ± 3.6e-11** | **−0.48e-10 ± 0.36e-10 (1.3σ)** | +2.2e-12, 1.1e-11 |
+  Fixed − old (paired): +6.8e-11 ± 4.8e-11 per Gyr, as predicted from the projection bias (−1.0e-16 × 12/16 projected
+  boundaries × 1.01e6 slices per Gyr = −7.6e-11). → **The residual drift is explained and removed** within the
+  ensemble's precision; parareal energy is now statistically equivalent to serial (lead 0 closed).
 
 ### Iteration 50 — lead #2: smarter stopping rules (offline evaluation; no gain)
 Full update sequences u_1 … u_6 (largest boundary update per iteration) for all 625 windows of a 10 Myr run with an
