@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Think you encountered a bug? File a bug report and help us improve REBOUND.
+about: Think you encountered a bug? File a bug report and help us improve Parachron.
 title: ''
 labels: bug
 assignees: ''
@@ -8,8 +8,8 @@ assignees: ''
 ---
 
 **Environment**
-Which version of REBOUND are you using and on what operating system?
- - REBOUND Version: [e.g. 28.7.0]
+Which version of Parachron are you using and on what operating system?
+ - Parachron Version: [e.g. 28.7.0]
  - API interface: [C or Python]
  - Operating System (including version): [e.g. Linux, Windows, MacOS]
 

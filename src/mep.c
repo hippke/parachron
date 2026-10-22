@@ -2,13 +2,32 @@
  * @file    mep.c
  * @brief   Mean-element parareal (MEP): parallel-in-time integration of one WHFast512 planetary system on many cores.
  * @details The time axis is cut into windows of N slices; one thread per slice runs the fine WHFast512 integration of
- *          its slice while a cheap coarse propagator in mean elements (reb_mep_coarse.c) links the slices (pipelined
+ *          its slice while a cheap coarse propagator in mean elements (mep_coarse.c) links the slices (pipelined
  *          parareal, adaptive number of iterations, energy projection). The converged result is the serial WHFast512
  *          trajectory to within the tolerance. Designed and validated for the Sun and eight planets of the Solar
  *          System (four inner planets treated by perturbation theory, four giants integrated directly).
  *          The run state (current Jacobi elements, time, statistics) can be saved to a small checkpoint file and
  *          resumed later; a resumed run is bitwise identical to an uninterrupted one.
- *          Origin: hippke/rebound branch whfaster, whfaster/pint/pint_pipe.c. Linux only.
+ *          Derived from the research code of the MEP paper. Linux only.
+ *
+ * @section LICENSE
+ * Copyright (c) 2026 Michael Hippke
+ *
+ * This file is part of Parachron (https://github.com/hippke/parachron), a modified version of rebound.
+ *
+ * Parachron is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Parachron is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
+ *
  */
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #ifndef _GNU_SOURCE

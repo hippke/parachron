@@ -2,6 +2,8 @@
  * integrator_whfast512.h: The AVX512 accelerated symplectic integrator WHFast512 in ASM
  * 
  * Copyright (c) 2026 Hanno Rein, Rishit Dagli, Pejvak Javaheri
+ * Modified in 2026 by Michael Hippke for Parachron (https://github.com/hippke/parachron),
+ * a modified version of REBOUND; see CHANGES_FROM_REBOUND.md for the list of changes.
  *
  * This file is part of rebound.
  *

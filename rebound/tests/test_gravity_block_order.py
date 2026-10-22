@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Michael Hippke. Part of Parachron (https://github.com/hippke/parachron), a modified version
+# of REBOUND. Licensed under the GNU General Public License v3 or later; see LICENSE.
 import unittest
 import os
 import random

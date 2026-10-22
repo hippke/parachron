@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Michael Hippke. Part of Parachron (https://github.com/hippke/parachron), a modified version
+# of REBOUND. Licensed under the GNU General Public License v3 or later; see LICENSE.
 # Results must not depend on the number of OpenMP threads (bitwise). These tests only run against
 # an OpenMP build of the library (REBOUND_OPENMP=1 pip install ...); in a serial build they are skipped.
 import unittest

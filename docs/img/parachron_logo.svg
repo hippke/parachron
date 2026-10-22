@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" width="720" height="200" role="img" aria-label="Parachron logo">
+  <title>Parachron</title>
+  <!-- An orbit cut into six time slices (the slices of one parareal window), integrated side by side. -->
+  <g transform="translate(100 100) rotate(-20)">
+    <g fill="none" stroke-width="9" stroke-linecap="round">
+      <ellipse rx="70" ry="52" stroke="#1f3b73" stroke-dasharray="57.2 328.1" stroke-dashoffset="0.0"/>
+      <ellipse rx="70" ry="52" stroke="#2b5fa8" stroke-dasharray="57.2 328.1" stroke-dashoffset="-64.2"/>
+      <ellipse rx="70" ry="52" stroke="#3f88c5" stroke-dasharray="57.2 328.1" stroke-dashoffset="-128.5"/>
+      <ellipse rx="70" ry="52" stroke="#e0a03a" stroke-dasharray="57.2 328.1" stroke-dashoffset="-192.7"/>
+      <ellipse rx="70" ry="52" stroke="#e07a2f" stroke-dasharray="57.2 328.1" stroke-dashoffset="-256.9"/>
+      <ellipse rx="70" ry="52" stroke="#c4462a" stroke-dasharray="57.2 328.1" stroke-dashoffset="-321.1"/>
+    </g>
+    <!-- the Sun at the focus -->
+    <circle cx="46.9" cy="0" r="10" fill="#f2b632"/>
+    <circle cx="46.9" cy="0" r="14.5" fill="none" stroke="#f2b632" stroke-opacity="0.35" stroke-width="3"/>
+  </g>
+  <text x="200" y="112" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="650"
+        fill="#1f2a44" letter-spacing="1">Parachron</text>
+  <text x="203" y="146" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="19" fill="#5a6478"
+        letter-spacing="0.5">one orbit, many cores · parallel-in-time N-body</text>
+</svg>

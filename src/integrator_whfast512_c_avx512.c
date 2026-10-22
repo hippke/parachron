@@ -8,6 +8,8 @@
  *
  * @section LICENSE
  * Copyright (c) 2026 Hanno Rein
+ * Copyright (c) 2026 Michael Hippke (portable C kernels, derived from the WHFast512 assembly)
+ * Part of Parachron (https://github.com/hippke/parachron), a modified version of REBOUND.
  *
  * This file is part of rebound.
  *

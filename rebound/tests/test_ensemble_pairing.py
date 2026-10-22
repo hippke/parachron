@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Michael Hippke. Part of Parachron (https://github.com/hippke/parachron), a modified version
+# of REBOUND. Licensed under the GNU General Public License v3 or later; see LICENSE.
 # The ensemble runner (rebound.steps_simulations / reb_simulations_steps) steps WHFast512
 # simulations two at a time with the paired kernel when possible. Results must be bitwise
 # identical to stepping each simulation on its own.

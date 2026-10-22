@@ -1,6 +1,6 @@
 ---
 name: Ask for advice
-about: Ask for advice on how to use REBOUND for the specific science problem that you have in mind. Get suggestions for choosing the best integrator and settings, or inquire about ways to optmimize runtime.
+about: Ask for advice on how to use Parachron for the specific science problem that you have in mind. Get suggestions for choosing the best integrator and settings, or inquire about ways to optmimize runtime.
 title: ''
 labels: question
 assignees: ''
@@ -8,8 +8,8 @@ assignees: ''
 ---
 
 **Environment**
-Which version of REBOUND are you using and on what operating system?
- - REBOUND Version: [e.g. 28.7.0]
+Which version of Parachron are you using and on what operating system?
+ - Parachron Version: [e.g. 28.7.0]
  - API interface: [C or Python]
  - Operating System (including version): [e.g. Linux, Windows, MacOS]
 

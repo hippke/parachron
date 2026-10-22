@@ -1,11 +1,30 @@
 /**
- * @file    reb_mep_coarse.c
+ * @file    mep_coarse.c
  * @brief   Coarse propagator of mean-element parareal (MEP) for WHFast512 planetary systems.
  * @details Inner four planets: numerical first-order mean-element theory (Jacobi pair accelerations on 2-D grids of
  *          the mean longitudes, 2-D FFT, rebuilt from the input state at every call), Kepler + first-order secular
  *          drift with the trapezoidal rule. Outer four planets: WHFast512 at a large step in a reduced system.
- *          Origin: hippke/rebound branch whfaster, whfaster/pint/pint_coarse.c (results bitwise identical).
+ *          Derived from the research code of the MEP paper (results bitwise identical).
  *          Linux only (pthreads, CPU affinity); on other platforms the file compiles to nothing.
+ *
+ * @section LICENSE
+ * Copyright (c) 2026 Michael Hippke
+ *
+ * This file is part of Parachron (https://github.com/hippke/parachron), a modified version of rebound.
+ *
+ * Parachron is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Parachron is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
+ *
  */
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #ifndef _GNU_SOURCE

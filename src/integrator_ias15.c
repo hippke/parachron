@@ -16,6 +16,8 @@
  * @section     LICENSE
  * Copyright (c) 2011-2012 Hanno Rein, Dave Spiegel.
  * Copyright (c) 2002-2004 Pasquale Tricarico.
+ * Modified in 2026 by Michael Hippke for Parachron (https://github.com/hippke/parachron),
+ * a modified version of REBOUND; see CHANGES_FROM_REBOUND.md for the list of changes.
  *
  * This file is part of rebound.
  *

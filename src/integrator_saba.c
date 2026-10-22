@@ -2,6 +2,8 @@
  * integrator_saba.c: SABA integrator family 
  * 
  * Copyright (c) 2019 Hanno Rein
+ * Modified in 2026 by Michael Hippke for Parachron (https://github.com/hippke/parachron),
+ * a modified version of REBOUND; see CHANGES_FROM_REBOUND.md for the list of changes.
  *
  * This file is part of rebound.
  *

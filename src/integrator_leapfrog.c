@@ -2,6 +2,8 @@
  * integrator_leapfrog.c: The standard Leap Frog integator and higher order generalizations
  *
  * Copyright (c) 2011 Hanno Rein, Shangfei Liu
+ * Modified in 2026 by Michael Hippke for Parachron (https://github.com/hippke/parachron),
+ * a modified version of REBOUND; see CHANGES_FROM_REBOUND.md for the list of changes.
  *
  * This file is part of rebound.
  *

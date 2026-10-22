@@ -1,137 +1,121 @@
-[![Version](https://img.shields.io/badge/rebound-v5.2.2-green.svg?style=flat)](https://rebound.hanno-rein.de)
-[![PyPI](https://badge.fury.io/py/rebound.svg)](https://badge.fury.io/py/rebound)
-[![GPL](https://img.shields.io/badge/license-GPL-green.svg?style=flat)](https://github.com/hannorein/rebound/blob/main/LICENSE)
-[![Docs](https://img.shields.io/badge/Documentation-green.svg?style=flat)](https://rebound.hanno-rein.de/)
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/hannorein/rebound/main)
-    
+<p align="center"><img src="docs/img/parachron_logo.svg" alt="Parachron" width="560"></p>
 
-# Welcome to REBOUND
+<p align="center">
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green.svg?style=flat" alt="GPL-3.0"></a>
+<a href="https://github.com/hannorein/rebound"><img src="https://img.shields.io/badge/based%20on-REBOUND%205.2-blue.svg?style=flat" alt="based on REBOUND"></a>
+</p>
 
-![REBOUND Examples](https://github.com/hannorein/rebound/raw/main/docs/img/reboundbanner.png)
+# Parachron
 
-REBOUND is an N-body integrator, i.e. a software package that can integrate the motion of particles under the influence of gravity. The particles can represent stars, planets, moons, ring or dust particles. REBOUND is very flexible and can be customized to accurately and efficiently solve many problems in astrophysics.  
+**One planetary system, one trajectory, many cores.**
+Parachron integrates a single long orbit of the Solar System in parallel in time. A 5 Gyr integration of the Sun and
+the eight planets (WHFast512, general relativity, 6 d step) takes **3.0 h on 16 cores instead of 9.2 h** on one core, at
+the accuracy of the serial integrator. With relaxed tolerances, which are still validated by ensembles, it takes
+1.8 h (up to 5×).
 
-## Features
+Parachron is a fork of [**REBOUND**](https://github.com/hannorein/rebound) by Hanno Rein and contributors. Everything
+REBOUND does, Parachron does too, with the same API and results. On top of it, it adds mean-element parareal and a
+set of single- and multi-core speed-ups. If you do not need these, please use upstream REBOUND.
 
-* No dependencies on external libraries.
-* Runs natively on Linux, MacOS, and Windows. 
-* Symplectic integrators WHFast, SEI, LEAPFROG, EOS.
-* Hybrid symplectic integrators for planetary dynamics with close encounters MERCURIUS
-* Hybrid reversible integrators for planetary dynamics with arbitrary close encounters TRACE
-* High order symplectic integrators for integrating planetary systems SABA, WH Kernel methods.
-* High accuracy non-symplectic integrator with adaptive time-stepping IAS15.
-* Can integrate arbitrary user-defined ODEs that are coupled to N-body dynamics for tides, spin, etc
-* Support for collisional/granular dynamics, various collision detection routines
-* The computationally intensive parts of the code are written entirely in C, conforming to the ISO standard C99, and can be used as a thread-safe shared library
-* Easy-to-use Python module, installation in 3 words: `pip install rebound`
-* Real-time, 3D visualization, for both C and Python.
-* Extensive set of example problems for both C and Python. You can run examples directly from your browser without the need to download or install anything.
-* Parallelized WHFast512 integrator for super fast integrations of planetary systems with SIMD AVX512 instructions
-* Parallelized with OpenMP (for shared memory systems)
-* Parallelized with MPI is supported for some special use cases only (using an essential tree for gravity and collisions)
-* The code is 100% open-source. All features are included in the public repository on github.
+## The idea: mean-element parareal (MEP)
 
-## Try out REBOUND 
+A step of a Wisdom–Holman integrator takes about 100 ns, too short to split across cores. Every step needs the
+exact end state of the previous one, so extra cores have so far only been used to run more simulations, not to
+finish one faster.
 
-You can try out REBOUND without installing it. 
-Simply head over to [the documentation](https://rebound.hanno-rein.de/).
-All the C examples have been compiled with emscripten and can run directly in your browser.
+*Parareal* breaks this chain. It cuts the time axis into slices and integrates all slices at once, each from a guessed
+start state. A cheap *coarse* propagator links the slices, and a few correction sweeps make the result converge to
+the serial trajectory. For planetary orbits, standard parareal fails. An error δa in a semi-major axis grows into a
+phase error δλ = −(3/2) n T δa/a through **Kepler shear**. A cheap coarse integrator gets the short-period terms of
+*a* wrong by far more than the corrections can absorb.
 
-## One minute installation
+MEP gives the coarse propagator what Kepler shear needs:
 
-You can install REBOUND with pip if you want to only use the python version of REBOUND:
+* **Mean elements.** The coarse step evaluates a numerical first-order perturbation theory on the fly: pair
+  accelerations on grids of mean longitudes, a 2-D FFT and the small divisors. With it, the coarse step removes the
+  short-period terms from the inner planets' semi-major axes and advances their secular evolution. The giants are
+  integrated directly with a long step. The result is accurate where shear amplifies errors, and costs about 3 % of a
+  fine slice.
+* **Corrections in orbital elements.** The parareal correction is formed in Jacobi elements, with longitudes
+  modulo 2π. An energy projection then gives each corrected state the energy of the symplectic fine solution.
+* **Pipelined windows.** Slices are processed in windows of N slices, one core each. Each window iterates until no
+  planet moves by more than τ (3×10⁻⁶ AU by default) between iterations, which takes typically 3 iterations.
+  Iterations overlap like a pipeline, and the next window starts as soon as the current one has converged.
 
-    pip install rebound
+The results are statistically indistinguishable from serial integrations. The secular frequencies agree to within
+10⁻⁷ ″/yr, far below the serial integrator's own time-step error. An ensemble of 16 runs of 200 Myr shows the same
+dynamics as 16 serial runs, and the energy errors match. Details: Hippke et al. (in prep.), *Mean-Element Parareal:
+Parallel-in-Time Symplectic Integration of the Solar System*.
 
-Then, you can run a simple REBOUND simulation such as
+| setting (16 cores, AMD Ryzen 9 7950X) | speed-up | 5 Gyr |
+|---|---|---|
+| serial WHFast512 (reference) | 1× | 9.2 h |
+| MEP, τ = 3×10⁻⁶ AU (default, serial accuracy) | 3.1× | 3.0 h |
+| MEP, relaxed tolerances (ensemble-validated) | 3.4–5.0× | 1.8–2.7 h |
+
+## Example
 
 ```python
-import rebound
+import math
+import rebound          # Parachron keeps REBOUND's Python module name (see below)
+
 sim = rebound.Simulation()
-sim.add(m=1.0)
-sim.add(m=1.0e-3, a=1.0)
-sim.integrate(1000.)
-sim.status()
+sim.add("solar system")                 # Sun + 8 planets
+sim.integrator = "whfast512"
+sim.dt = 6. / 365.25 * 2. * math.pi     # 6 days (units: AU, Msun, yr/2pi)
+sim.exact_finish_time = False
+sim.integrator.gr_potential = 1
+sim.integrator.corrector = 17
+
+mep = rebound.MEP(sim, checkpoint="run.mep")   # one thread per physical core
+mep.integrate(1e8 * 2. * math.pi)              # 100 Myr; sim is updated to the end state
+print(mep.mean_iterations, mep.walltime_last)
+
+# later, possibly in another process: continues bitwise identically
+mep = rebound.MEP.from_checkpoint("run.mep")
+mep.integrate(2e8 * 2. * math.pi)
 ```
 
-If you want to use the C version of REBOUND simply copy and paste this line into your terminal (it won't do anything bad, we promise):
+A C version is in [`examples/mep_solar_system`](examples/mep_solar_system/problem.c). MEP runs on Linux and needs a
+central star with exactly 8 planets. It was designed and validated for the Solar System; other systems are on the
+to-do list.
+
+## What else is different from REBOUND
+
+* **WHFast512 without AVX-512.** Portable C kernels (AVX2+FMA, AVX-512, generic, ARM NEON) next to the assembly. The
+  kernels give bitwise identical results on every machine, and two simulations can be stepped together.
+* **`jacobi_recursive`** (opt-in): removes a systematic energy offset of +7.5×10⁻¹⁷ per WHFast512 synchronization.
+* **Faster on one core.** The use-case benchmarks run 2.4× faster than upstream (geometric mean). Results are
+  bitwise identical, except for round-off-level changes in IAS15.
+* **Deterministic OpenMP.** Results do not depend on the thread count and equal those of the serial build. There is
+  also an opt-in stage-parallel IAS15 (`parallel_stages`) for N ≳ 100.
+
+## Installation
 
 ```bash
-git clone https://github.com/hannorein/rebound && cd rebound/examples/shearing_sheet && make && ./rebound
+git clone https://github.com/hippke/parachron && cd parachron && pip install -e .
 ```
 
- 
-## Documentation
-The full documentation with many examples, changelogs and tutorials can be found at
+The package is called `parachron`, but its Python module keeps the name `rebound`, so existing REBOUND scripts run
+unchanged. It therefore replaces an installed REBOUND: use a separate virtual environment if you need both. The C
+library is built as before (`make` in `src/`, or see the examples).
 
-<https://rebound.hanno-rein.de>
+## Credit and citation
 
-If you have trouble installing or using REBOUND, please open an issue on github and we'll try to help as much as we can.
-
-There are also short YouTube videos describing various aspects of REBOUND available at https://www.youtube.com/channel/UCNmrCzxcmWVTBwtDPPLxkkw .
-
-
-## Related projects
-
-### Additional physics
-To easily incorporate additional physics modules such as migration forces, GR effects and spin into your REBOUND simulations, see REBOUNDx at https://github.com/dtamayo/reboundx
-
-### Analytical and semianalytical tools
-If you're interested in comparing numerical simulations to analytical and semianalytical tools for celestial mechanics, see Celmech at https://github.com/shadden/celmech
-
-### Ephemeris-quality integrations of test particles
-To generate ephemeris-quality integrations of test particles in the Solar System with a precision on par with JPL's small body integrator, see ASSIST at https://github.com/matthewholman/assist
-
-
-## Papers
-
-There are several papers describing the functionality of REBOUND.
-
-1. Rein & Liu 2012 (Astronomy and Astrophysics, Volume 537, A128) describes the code structure and the main feature including the gravity and collision routines for many particle systems. <http://adsabs.harvard.edu/abs/2012A%26A...537A.128R>
-
-2. Rein & Tremaine 2011 (Monthly Notices of the Royal Astronomical Society, Volume 415, Issue 4, pp. 3168-3176) describes the Symplectic Epicycle integrator for shearing sheet simulations. <https://ui.adsabs.harvard.edu/abs/2011MNRAS.415.3168R>
-
-3. Rein & Spiegel 2015 (Monthly Notices of the Royal Astronomical Society, Volume 446, Issue 2, p.1424-1437) describes the versatile high order integrator IAS15 which is now part of REBOUND. <http://adsabs.harvard.edu/abs/2015MNRAS.446.1424R>
-
-4. Rein & Tamayo 2015 (Monthly Notices of the Royal Astronomical Society, Volume 452, Issue 1, p.376-388) describes WHFast, the fast and unbiased implementation of a symplectic Wisdom-Holman integrator for long term gravitational simulations. <http://adsabs.harvard.edu/abs/2015MNRAS.452..376R>
-
-5. Rein & Tamayo 2016 (Monthly Notices of the Royal Astronomical Society, Volume 459, Issue 3, p.2275-2285) develop the framework for second order variational equations. <https://ui.adsabs.harvard.edu/abs/2016MNRAS.459.2275R>
-
-6. Rein & Tamayo 2017 (Monthly Notices of the Royal Astronomical Society, Volume 467, Issue 2, p.2377-2383) describes the Simulationarchive for exact reproducibility of N-body simulations. <https://ui.adsabs.harvard.edu/abs/2017MNRAS.467.2377R>
-
-7. Rein & Tamayo 2018 (Monthly Notices of the Royal Astronomical Society, Volume 473, Issue 3, p.3351–3357) describes the integer based JANUS integrator. <https://ui.adsabs.harvard.edu/abs/2018MNRAS.473.3351R>
-
-8. Rein, Hernandez, Tamayo, Brown, Eckels, Holmes, Lau, Leblanc & Silburt 2019 (Monthly Notices of the Royal Astronomical Society, Volume 485, Issue 4, p.5490-5497) describes the hybrid symplectic integrator MERCURIUS. <https://ui.adsabs.harvard.edu/abs/2019MNRAS.485.5490R>
-
-9. Rein, Tamayo & Brown 2019 (Monthly Notices of the Royal Astronomical Society, Volume 489, Issue 4, November 2019, Pages 4632-4640) describes the implementation of the high order symplectic integrators SABA, SABAC, SABACL, WHCKL, WHCKM, and WHCKC. <https://ui.adsabs.harvard.edu/abs/2019MNRAS.489.4632R/>
-
-## Acknowledgments
-
-If you use this code or parts of this code for results presented in a scientific publication, we would greatly appreciate a citation.
-The simplest way to find the citations relevant to the specific setup of your REBOUND simulation is: 
-
-```python
-sim = rebound.Simulation()
--your setup-
-sim.cite()
-```
-
-## AI/LLM policy
-
-REBOUND is a labour of love, created by people.
-
-Please refrain from submitting issues or pull requests that have been generated by an LLM or other fully-automated tools. Submission that are in violation of this policy will be closed, and the submitter may be blocked from this repository. You may of course use AI assistants for your own work with REBOUND. Just don't submit any AI generated code.
-
-The rationale behind this policy is that automated contributions are a waste of the maintainers' time. Humans spend their time and brainpower reviewing every submission. Issues or pull requests generated by automation tools create an imbalance of effort between the submitter and the reviewer. Nobody learns anything when a maintainer reviews code written by an LLM.
-
-Additionally, AI-generated code conflicts with this project's license, since you cannot truly release code for use if you didn't author it yourself.
-
+Parachron is built on REBOUND. Please cite REBOUND as described in its [documentation](https://rebound.hanno-rein.de/)
+(`sim.cite()` lists the papers for the methods you use), and in addition the MEP paper if you use `rebound.MEP`.
+REBOUND is developed by Hanno Rein and many contributors: see the
+[upstream repository](https://github.com/hannorein/rebound) and its git history. All upstream copyright notices are
+retained in the source files.
 
 ## License
 
-REBOUND is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+Parachron is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+version, like REBOUND. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [GNU General Public License](LICENSE)
+for more details.
 
-REBOUND is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License along with REBOUND.  If not, see <http://www.gnu.org/licenses/>.
-
+Copyright © 2011–2026 Hanno Rein and REBOUND contributors (REBOUND).
+Modifications and additions © 2026 Michael Hippke. The changes relative to REBOUND are listed in
+[`CHANGES_FROM_REBOUND.md`](CHANGES_FROM_REBOUND.md).

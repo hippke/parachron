@@ -2,6 +2,8 @@
  * integrator_whfast512.c: ASM version of WHFast512 in Jacobi Coordinates
  * 
  * Copyright (c) 2026 Rishit Dagli, Hanno Rein, Pejvak Javaheri
+ * Modified in 2026 by Michael Hippke for Parachron (https://github.com/hippke/parachron),
+ * a modified version of REBOUND; see CHANGES_FROM_REBOUND.md for the list of changes.
  *
  * This file is part of rebound.
  *

@@ -8,6 +8,9 @@
  *
  * Usage: ./rebound [tmax in years] [wall-clock limit in seconds]
  * Linux only.
+ *
+ * Copyright (c) 2026 Michael Hippke. Part of Parachron (https://github.com/hippke/parachron), a modified
+ * version of REBOUND; GNU GPL v3 or later (see LICENSE).
  */
 #include "rebound.h"
 #include <stdio.h>

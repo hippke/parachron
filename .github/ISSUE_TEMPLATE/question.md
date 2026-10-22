@@ -1,6 +1,6 @@
 ---
 name: General question
-about: Ask a general question about REBOUND.
+about: Ask a general question about Parachron.
 title: ''
 labels: question
 assignees: ''

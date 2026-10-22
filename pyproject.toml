@@ -3,14 +3,16 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rebound"
+name = "parachron"
 version = "5.2.2"
-description = "An open-source multi-purpose N-body code"
+description = "Parallel-in-time N-body integration (mean-element parareal), based on REBOUND"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
+# Parachron is a modified version of REBOUND by Hanno Rein and contributors (https://github.com/hannorein/rebound)
 authors = [
     { name = "Hanno Rein", email = "hanno@hanno-rein.de" },
+    { name = "Michael Hippke" },
 ]
 keywords = [
     "astronomy",
@@ -19,6 +21,8 @@ keywords = [
     "integrator",
     "symplectic",
     "wisdom-holman",
+    "parareal",
+    "parallel-in-time",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -32,7 +36,8 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/hannorein/rebound/"
+Homepage = "https://github.com/hippke/parachron"
+Upstream = "https://github.com/hannorein/rebound"
 
 [tool.setuptools.packages.find]
 include = ["rebound*"]
