@@ -1251,3 +1251,34 @@ of the serial runs. Mercury e max 0.343 (serial runs 0.303–0.333), a within 0.
 **CCD load balancing** (`PINT_BAL=d`: slices on cores 0–7 get (1 + d) × the steps, cores 8–15 (1 − d) ×; 100 windows,
 asm, τ 3e-6): d = 0: K̄ 3.81, 2.82–2.93×; d = 0.02 / 0.03 / 0.04: K̄ 4.02 / 4.06 / 4.07, 2.74–2.80× — unequal slices
 cost more iterations than the balance gains. Rejected (option kept, off).
+
+### Iteration 41 — is lead A worth it on 16 cores? The round-3 coarse step at N = 16 (`parareal/ph16.py`)
+Nonlinear parareal, 16 × 986 yr, from the 10 Phase-0 epochs of the 10 Myr serial run (`m10_ser2.bin` = exact fine
+chain), host2 (Python venv `/home/ubuntu/venv` with this fork installed; one process per epoch). Max over the 16
+boundaries of the true position error and of the update |U^k − U^(k−1)| (what the stop rule sees), in AU:
+| coarse step | k1 err | k2 err | k3 err (× noise) | k2 update | K = 2 stops at τ 3e-5 |
+|---|---|---|---|---|---|
+| config B (C) | 1.7e-4 … 8.4e-3 | 1.3e-6 … 3.7e-4 | 1.2 … 1570 | 1.7e-4 … 8.8e-3 | 0/10 |
+| C mean-n + 64² V–E | 1.7e-4 … 7.9e-4 | 1.5e-6 … 7.0e-5 | 1.4 … 45 | 1.7e-4 … 8.0e-4 | 0/10 |
+| round-3 Python G (`all_mn1_g3_dt180_nsub2_un_ga120_w2k_frzs`) | 1.6e-5 … 1.9e-4 | **3.5e-8 … 9.5e-7** | **0.6 … 6.7** | 1.6e-5 … 1.9e-4 | **6/10** |
+* With the round-3 coarse step, 6 of 10 windows stop at K = 2 at τ = 3e-5 (accepted error 3.5e-8 … 4.4e-7 AU, i.e.
+  better than config B's accepted states at K = 3–4) and the rest at K = 3 → **K̄ ≈ 2.4 at reference accuracy**, vs
+  3.18 (benchmark) / 3.33 (1 Gyr) for config B. With an update-based rule a K = 2 stop needs the *first* corrected
+  iterate within τ, which only the accurate step delivers.
+* Payoff on 16 cores: window ≈ 16 T_G + K̄ (T_F + T_G) with T_F ≈ 8.6 ms. At T_G = 0.3 ms (parallel, on the chain):
+  ≈ 26 ms vs 31.5 ms today → **+20 %** (≈ 4.1× benchmark); break-even at T_G ≈ 0.6 ms. Python takes 3 s per call;
+  round 3 estimated ≥ 2 ms serially in C (two all-component passes) → lead A pays only with the round-4 cost
+  reductions (analytic dE/dv, pruning, table reuse) plus the parallel staged schedule. Ablation: below.
+* **Ablation at N = 16** (one ingredient removed from the round-3 step; 10 epochs; K = 2 stops = windows whose k = 2
+  update ≤ 3e-5 AU):
+  | removed | k1 err median / max | k2 err median / max | k3/noise median / max | K = 2 stops |
+  |---|---|---|---|---|
+  | nothing (round-3 step) | 2.7e-5 / 1.9e-4 | 1.1e-7 / 9.5e-7 | 2.9 / 6.7 | 6/10 |
+  | second-order secular rates U2 (`w2k_frzs`) | 2.6e-5 / 2.5e-4 | 1.5e-7 / 1.5e-6 | 2.3 / 8.9 | **6/10** |
+  | mean-n tables (`mn1`) | 1.1e-4 / 5.6e-3 | 3.1e-7 / 2.8e-4 | 4.4 / 890 | 4/10 |
+  | all-component transform (`all`; ln a only) | 6.3e-5 / 1.9e-4 | 4.9e-7 / 4.2e-6 | 3.8 / 12 | 3/10 |
+  | Earth–Mars–Jupiter resonant term (`g3`) | 1.5e-4 / 9.2e-4 | 1.1e-6 / 2.4e-5 | 3.3 / 64 | 1/10 |
+  | RK4 secular drift with sampled giants (`nsub2` → Heun) | 1.0e-4 / 5.0e-4 | 1.3e-6 / 4.2e-6 | 2.4 / 12 | 1/10 |
+  | giants' coarse step 180 d (→ 360 d) | 1.2e-4 / 1.9e-4 | 6.6e-7 / 2.1e-6 | 2.2 / 4.5 | **0/10** |
+  → The most expensive part (U2 on 14 pairs + 3 triples) is **not needed**; the giants' 180-d step and the RK4 drift
+  with the giants' sampled forcing are indispensable, then g3, the all-component transform and mean-n.
