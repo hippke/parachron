@@ -1273,7 +1273,7 @@ boundaries of the true position error and of the update |U^k − U^(k−1)| (wha
   update ≤ 3e-5 AU):
   | removed | k1 err median / max | k2 err median / max | k3/noise median / max | K = 2 stops |
   |---|---|---|---|---|
-  | nothing (round-3 step) | 2.7e-5 / 1.9e-4 | 1.1e-7 / 9.5e-7 | 2.9 / 6.7 | 6/10 |
+  | nothing (round-3 step) | 2.7e-5 / 1.9e-4 | 1.1e-7 / 9.5e-7 | 2.5 / 6.7 | 6/10 |
   | second-order secular rates U2 (`w2k_frzs`) | 2.6e-5 / 2.5e-4 | 1.5e-7 / 1.5e-6 | 2.3 / 8.9 | **6/10** |
   | mean-n tables (`mn1`) | 1.1e-4 / 5.6e-3 | 3.1e-7 / 2.8e-4 | 4.4 / 890 | 4/10 |
   | all-component transform (`all`; ln a only) | 6.3e-5 / 1.9e-4 | 4.9e-7 / 4.2e-6 | 3.8 / 12 | 3/10 |
@@ -1282,3 +1282,9 @@ boundaries of the true position error and of the update |U^k − U^(k−1)| (wha
   | giants' coarse step 180 d (→ 360 d) | 1.2e-4 / 1.9e-4 | 6.6e-7 / 2.1e-6 | 2.2 / 4.5 | **0/10** |
   → The most expensive part (U2 on 14 pairs + 3 triples) is **not needed**; the giants' 180-d step and the RK4 drift
   with the giants' sampled forcing are indispensable, then g3, the all-component transform and mean-n.
+* Second ablation, on the base without U2 (`all_mn1_g3_dt180_nsub2_un_ga120`, 6/10): without Uranus/Neptune in the
+  rates (`un`) 5/10 (k2 1.7e-7 / 1.7e-6); without the giants' 120-yr box averaging (`ga120`) 6/10 (1.4e-7 / 1.3e-6);
+  one RK4 sub-step instead of two (`nsub1`) 6/10 (1.5e-7 / 1.5e-6).
+  → **Minimal "config C"** for K = 2 at N = 16: mean-n tables + all-component first-order transform + Earth–Mars–Jupiter
+  resonant term (frozen per slice) + giants' WH at 180 d sampled at slice start/middle/end + one RK4 step of the
+  secular drift with the sampled giants + Uranus/Neptune in the rates. Plan: `RESEARCH_PLAN_R5.md`.

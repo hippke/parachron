@@ -59,6 +59,7 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
 | `RESEARCH_LOG.md` | every iteration with numbers: round 2 = it. 1–16, round 3 = it. 17–26, it. 27 + "Phase 8" = 7950X runs |
 | `RESEARCH_PLAN.md`, `RESEARCH_PLAN_R3.md` | plans of rounds 1–2 and 3 (with status sections at the end) |
 | `RESEARCH_PLAN_R4.md` | draft round-4 plan: make the accurate coarse step cheap |
+| `RESEARCH_PLAN_R5.md` | round-5 plan (Oct 22): "config C" = minimal accurate coarse step for K = 2 at N = 16, cost gate |
 | `LITERATURE_PINT.md` | literature review (parareal, MGRIT, waveform relaxation, mean-element theories, …) |
 | `pint_history.csv` | experiment table |
 | `pint/README.md` | build/run of the C code |
