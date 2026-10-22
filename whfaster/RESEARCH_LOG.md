@@ -1288,3 +1288,15 @@ boundaries of the true position error and of the update |U^k − U^(k−1)| (wha
   → **Minimal "config C"** for K = 2 at N = 16: mean-n tables + all-component first-order transform + Earth–Mars–Jupiter
   resonant term (frozen per slice) + giants' WH at 180 d sampled at slice start/middle/end + one RK4 step of the
   secular drift with the sampled giants + Uranus/Neptune in the rates. Plan: `RESEARCH_PLAN_R5.md`.
+
+### Iteration 42 — R5 step 1: the all-component transform with one kernel per pair (`pint_disp6k`, KEPT as a building block)
+The transform needs, per pair and element, Σ_k F_k e^{ik·θ}/(k·ν) at one point θ; exchanging the sums gives
+(1/n²) Σ_g f(θ_g) Im W1_g with W1 = FFT(e^{ik·θ}/(k·ν)) (and W2 with 1/(k·ν)² for the λ shear term). W1, W2 do not
+depend on the element → per pair two FFTs and cheap dot products replace six FFTs and six Fourier evaluations.
+`test_disp6k.c`: agreement with `pint_disp6` to 6e-18 (displacements up to 1e-4; pure round-off). Time per pass,
+one core of the 7950X: **0.640 → 0.286 ms** (32²/16² grids), 0.973 → 0.476 ms with 64² for V–E. Breakdown of
+`pint_disp6k`: grids incl. finite-difference dE/dv 0.100 ms, pair fills 0.038 ms, kernels + sums 0.129 ms.
+* Config C estimate (staged schedule, 8 helpers on SMT siblings): ≈ 7 dependent passes (start, mean-n, 4 RK4 rate
+  evaluations, end) × ≈ 0.07 ms ≈ 0.5 ms vs the gate 0.35 ms, with the giants' 180-d run (≈ 0.3 ms) on the calling
+  core in parallel. Next reductions: dual-number or analytic dE/dv (grids are on the chain), one packed FFT for
+  W1 + W2, inner–inner rates frozen across the RK4 stages (only the giants move appreciably), SIMD sums.

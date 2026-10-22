@@ -22,6 +22,9 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    pruning of coefficients < 1e-12; (b) secular rates only (grid means, no FFT) for the RK4 stages; (c) giants at
    180 d with the three samples (on the calling core, as now). Measure each serially and in the staged schedule.
    Stop if the sum cannot reach the gate.
+   **Status (iteration 42):** (a) done in part — `pint_disp6k` (one kernel per pair, exact) 0.286 ms per pass on the
+   7950X (was 0.640); estimate for the whole config C step ≈ 0.5 ms on the chain → still needs: dual-number/analytic
+   dE/dv (0.100 ms of the pass), one packed FFT for both kernels, inner–inner rates frozen across RK4 stages.
 2. **E–M–J term** (`so2.resonant_U2`, `g3.G3`): compute once per slice at k = 0 on a helper (off the chain; iteration
    24 showed per-slice freezing is as good as live), apply analytically in the drift.
 3. **Config C in `pint_coarse.c`** behind a cfg flag (default stays config B), bitwise serial = parallel
