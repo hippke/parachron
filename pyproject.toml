@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 # The Python module is `parachron`; the C library keeps the REBOUND C API (reb_*).
 # Parachron is a modified version of REBOUND by Hanno Rein and contributors (https://github.com/hannorein/rebound)
 authors = [
-    { name = "Hanno Rein", email = "hanno@hanno-rein.de" },
+    { name = "Hanno Rein" },
     { name = "Michael Hippke" },
 ]
 keywords = [
