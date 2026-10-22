@@ -2,7 +2,7 @@
 # (runs/eg/s<q>_ser1.bin, runs/eg/p<q>_pr.bin). Per run: secular frequencies in consecutive windows (WIN_MYR, default
 # 20), Mercury's maximum eccentricity, energy error at the end and its linear trend. Ensembles compared with KS tests:
 # frequencies pooled over runs (windows after the first SKIP_MYR, default 50, i.e. after decorrelation), and the
-# per-run maxima of Mercury's eccentricity.
+# per-run maximum and mean of Mercury's eccentricity after SKIP_MYR.
 #   python3 ens_stat.py [n_members]
 import numpy as np, sys, os
 from scipy.optimize import minimize_scalar
@@ -22,15 +22,17 @@ def analyse(fn):
     for a in range(ns,len(t)-nw+1,nw):
         s=slice(a,a+nw); tt=t[s]
         F.append([naff1(tt,X[s,i,2]+1j*X[s,i,3]) for i in range(4)]+[naff1(tt,X[s,i,4]+1j*X[s,i,5]) for i in range(4)])
-    return np.array(F), np.hypot(X[:,0,2],X[:,0,3]).max(), dE[-1], slope, t[-1]
+    eM=np.hypot(X[ns:,0,2],X[ns:,0,3])          # Mercury's e after decorrelation
+    return np.array(F), eM.max(), dE[-1], slope, t[-1], eM.mean()
 M=int(sys.argv[1]) if len(sys.argv)>1 else 16
 S=[analyse(f"runs/eg/s{q}_ser1.bin") for q in range(1,M+1)]
 P=[analyse(f"runs/eg/p{q}_pr.bin") for q in range(1,M+1)]
 print(f"{M} members, span {S[0][4]/1e6:.0f} Myr, frequency windows of {WIN} Myr after {SKIP} Myr")
 for lbl,R in (("serial",S),("parareal",P)):
-    em=np.array([r[1] for r in R]); de=np.array([r[2] for r in R]); sl=np.array([r[3] for r in R])
-    print(f"{lbl:9s} Mercury e_max mean {em.mean():.4f} sd {em.std(ddof=1):.4f} [{em.min():.3f}, {em.max():.3f}]; dE/E end mean {de.mean():+.1e} rms {np.sqrt((de**2).mean()):.1e}; trend per Gyr mean {sl.mean():+.1e} sd {sl.std(ddof=1):.1e}")
+    em=np.array([r[1] for r in R]); de=np.array([r[2] for r in R]); sl=np.array([r[3] for r in R]); ea=np.array([r[5] for r in R])
+    print(f"{lbl:9s} Mercury (t > {SKIP:.0f} Myr) e_max mean {em.mean():.4f} sd {em.std(ddof=1):.4f} [{em.min():.3f}, {em.max():.3f}], <e> mean {ea.mean():.4f} sd {ea.std(ddof=1):.4f}; dE/E end mean {de.mean():+.1e} rms {np.sqrt((de**2).mean()):.1e}; trend per Gyr mean {sl.mean():+.1e} sd {sl.std(ddof=1):.1e}")
 print(f"Mercury e_max KS p = {ks_2samp([r[1] for r in S],[r[1] for r in P]).pvalue:.2f}; Mann-Whitney p = {mannwhitneyu([r[1] for r in S],[r[1] for r in P]).pvalue:.2f}")
+print(f"Mercury <e> KS p = {ks_2samp([r[5] for r in S],[r[5] for r in P]).pvalue:.2f}")
 print("energy trend KS p = %.2f"%ks_2samp([r[3] for r in S],[r[3] for r in P]).pvalue)
 FS=np.vstack([r[0] for r in S]); FP=np.vstack([r[0] for r in P])
 print("frequencies pooled over runs and windows: serial mean ± sd | parareal mean ± sd | KS p")
