@@ -38,6 +38,7 @@
 #include "boundary.h"
 #include "integrator_whfast.h"
 #include "integrator_whfast512.h"
+#include "transformations.h"
 
 //#define DEBUG_AVX512 1
 
@@ -110,6 +111,13 @@ const struct reb_binarydata_field_descriptor reb_integrator_whfast512_field_desc
         "1: AVX-512 assembly, 2: C kernel compiled for AVX-512, 3: C kernel for AVX2+FMA, 4: generic C kernel (any CPU). "
         "The C kernels give bitwise identical results on all machines; the assembly kernel differs from them at round-off level. ",
         REB_UINT,        "kernel",          offsetof(struct reb_integrator_whfast512_state, kernel), 0, 0, 0},
+    { "Coordinate transformation at the start and end of every integration call (i.e. at every synchronization). "
+        "0 (default, as upstream): inertial <-> Jacobi coordinates by two precomputed 8x8 matrices. These are not exact inverses "
+        "in floating point, and the fixed residual of their product changes the energy systematically at every synchronization "
+        "(Solar System: dE/E = +7e-17 per synchronization, i.e. a linear drift for frequent outputs). "
+        "1: the recursive Jacobi transformations of REBOUND (round-off depends on the state; no systematic drift). "
+        "Results differ from 0 at round-off level. ",
+        REB_UINT,        "jacobi_recursive", offsetof(struct reb_integrator_whfast512_state, jacobi_recursive), 0, 0, 0},
     { "Kernel used by the last step (read only). Same values as `kernel`.",
         REB_UINT,        "kernel_used",     offsetof(struct reb_integrator_whfast512_state, kernel_used), 0, 0, 0},
     { "", REB_POINTER_ALIGNED, "data",        offsetof(struct reb_integrator_whfast512_state, data), SIZE_MAX, sizeof(struct simd_data), 0},
@@ -296,6 +304,7 @@ static void load_from_m512d(struct reb_simulation* r, size_t offset, const doubl
     }
 }
 
+static void jacobi_to_inertial_posvel_recursive(struct reb_simulation* r, struct simd_data* data, unsigned int N_systems);
 // Convert jacobi coordinates to inertial coordinates
 // Also performs com step (assume original particles are unmodified)
 // Note: Speed is not a concern here 
@@ -306,6 +315,10 @@ static void jacobi_to_inertial_posvel_and_com(struct reb_simulation* r, struct s
         com[s] = reb_simulation_com_range(r,s*N_per_system, (s+1)*N_per_system); // original com
     }
     struct reb_particle* particles = r->particles;
+    const struct reb_integrator_whfast512_state* w = r->integrator.state;
+    if (w->jacobi_recursive){
+        jacobi_to_inertial_posvel_recursive(r, data, N_systems);
+    }else{
     load_from_m512d(r, offsetof(struct reb_particle, x), data->mat8_jacobi_to_inertial, N_systems, &data->x);
     load_from_m512d(r, offsetof(struct reb_particle, y), data->mat8_jacobi_to_inertial, N_systems, &data->y);
     load_from_m512d(r, offsetof(struct reb_particle, z), data->mat8_jacobi_to_inertial, N_systems, &data->z);
@@ -327,6 +340,9 @@ static void jacobi_to_inertial_posvel_and_com(struct reb_simulation* r, struct s
             particles[s*N_per_system+0].vy -= particles[s*N_per_system+i].m/particles[s*N_per_system+0].m*particles[s*N_per_system+i].vy;
             particles[s*N_per_system+0].vz -= particles[s*N_per_system+i].m/particles[s*N_per_system+0].m*particles[s*N_per_system+i].vz;
         }
+    }
+    }
+    for (unsigned s=0;s<N_systems;s++){
         for (unsigned int i=0;i<N_per_system;i++){
             particles[s*N_per_system+i].x  += com[s].x + com[s].vx*dt_com;
             particles[s*N_per_system+i].y  += com[s].y + com[s].vy*dt_com;
@@ -452,6 +468,44 @@ static void whfast512_kepler_step(struct reb_integrator_whfast512_state* whfast5
 #endif // REB_WHFAST512_HAVE_ASM
 }
 
+// Jacobi coordinates of the planets by the recursive transformation (COM frame), written into the vectors
+static void inertial_to_jacobi_posvel_recursive(struct reb_simulation* r, struct simd_data* data, unsigned int N_systems){
+    const unsigned int N_per_system = r->N/N_systems;
+    const unsigned int p_per_system = 8/N_systems;
+    struct reb_particle pj[9];
+    double t[6][8] = {{0}};
+    for (unsigned int s=0;s<N_systems;s++){
+        const struct reb_particle* ps = r->particles + s*N_per_system;
+        reb_transformations_inertial_to_jacobi_posvel(ps, pj, ps, N_per_system, N_per_system);
+        for (unsigned int i=1;i<N_per_system;i++){
+            const unsigned int l = s*p_per_system+i-1;
+            t[0][l]=pj[i].x; t[1][l]=pj[i].y; t[2][l]=pj[i].z; t[3][l]=pj[i].vx; t[4][l]=pj[i].vy; t[5][l]=pj[i].vz;
+        }
+    }
+    w512_movu_pd(&data->x,t[0]); w512_movu_pd(&data->y,t[1]); w512_movu_pd(&data->z,t[2]);
+    w512_movu_pd(&data->vx,t[3]); w512_movu_pd(&data->vy,t[4]); w512_movu_pd(&data->vz,t[5]);
+}
+// inverse of inertial_to_jacobi_posvel_recursive: all particles of each system in its COM frame
+static void jacobi_to_inertial_posvel_recursive(struct reb_simulation* r, struct simd_data* data, unsigned int N_systems){
+    const unsigned int N_per_system = r->N/N_systems;
+    const unsigned int p_per_system = 8/N_systems;
+    struct reb_particle pj[9];
+    double t[6][8];
+    w512_movu_pd(t[0],&data->x); w512_movu_pd(t[1],&data->y); w512_movu_pd(t[2],&data->z);
+    w512_movu_pd(t[3],&data->vx); w512_movu_pd(t[4],&data->vy); w512_movu_pd(t[5],&data->vz);
+    for (unsigned int s=0;s<N_systems;s++){
+        struct reb_particle* ps = r->particles + s*N_per_system;
+        double mtot = ps[0].m;
+        for (unsigned int i=1;i<N_per_system;i++) mtot += ps[i].m;   // same order as the forward transformation
+        memset(pj, 0, sizeof(pj));
+        pj[0].m = mtot;
+        for (unsigned int i=1;i<N_per_system;i++){
+            const unsigned int l = s*p_per_system+i-1;
+            pj[i].m = ps[i].m; pj[i].x=t[0][l]; pj[i].y=t[1][l]; pj[i].z=t[2][l]; pj[i].vx=t[3][l]; pj[i].vy=t[4][l]; pj[i].vz=t[5][l];
+        }
+        reb_transformations_jacobi_to_inertial_posvel(ps, pj, ps, N_per_system, N_per_system);
+    }
+}
 static void inertial_to_jacobi_posvel(struct reb_simulation* r, struct simd_data* data, unsigned int N_systems){
     const unsigned int N_per_system = r->N/N_systems;
     // Transformations assume system is in COM frame.
@@ -472,6 +526,10 @@ static void inertial_to_jacobi_posvel(struct reb_simulation* r, struct simd_data
         }
     }
     reb_simulation_move_to_com(r);
+    const struct reb_integrator_whfast512_state* w = r->integrator.state;
+    if (w->jacobi_recursive){
+        inertial_to_jacobi_posvel_recursive(r, data, N_systems);
+    }else{
     // Same layout as for democratic heliocentric
     load_into_m512d(&data->x,  r, offsetof(struct reb_particle,x),data->mat8_inertial_to_jacobi, N_systems);
     load_into_m512d(&data->y,  r, offsetof(struct reb_particle,y),data->mat8_inertial_to_jacobi, N_systems);
@@ -479,6 +537,7 @@ static void inertial_to_jacobi_posvel(struct reb_simulation* r, struct simd_data
     load_into_m512d(&data->vx, r, offsetof(struct reb_particle,vx),data->mat8_inertial_to_jacobi, N_systems);
     load_into_m512d(&data->vy, r, offsetof(struct reb_particle,vy),data->mat8_inertial_to_jacobi, N_systems);
     load_into_m512d(&data->vz, r, offsetof(struct reb_particle,vz),data->mat8_inertial_to_jacobi, N_systems);
+    }
     load_into_m512d(&data->m,  r, offsetof(struct reb_particle,m),NULL, N_systems);
     // Undo COM transformation. COM will be applied in jacobi_to_inertial_posvel_and_com().
     memcpy(r->particles, p_tmp, sizeof(struct reb_particle)*r->N);
