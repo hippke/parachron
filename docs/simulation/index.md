@@ -1,6 +1,6 @@
 # Simulation
 
-These pages describe the C structure `reb_simulation` and the python class `rebound.Simulation`.
+These pages describe the C structure `reb_simulation` and the python class `parachron.Simulation`.
 Because the python class is an abstraction of the C structure, we describe their common features in one place.
 We refer to both the C structure and the python object interchangeably as the *simulation structure* and *simulation object*.
 The simulation structure contains all the configuration, status and particle data of one REBOUND simulation.
@@ -20,11 +20,11 @@ It's the one structure you will work with most when using REBOUND.
     It will also free the memory for the simulation structure itself.
 
 === "Python"
-    When you create a new object of the class `rebound.Simulation`, REBOUND will allocate memory for the object and also initialize all variables to their default value.
+    When you create a new object of the class `parachron.Simulation`, REBOUND will allocate memory for the object and also initialize all variables to their default value.
 
     Python automatically releases all the memory after the last reference to the object is gone:
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... do work ...
     sim = None  # This will allow python to free the memory
     ```
@@ -36,7 +36,7 @@ It's the one structure you will work with most when using REBOUND.
         Because the memory associated with the `particles` array is freed when the simulation is freed, this will lead to a segmentation fault.
 
         ```python
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.add(m=1)
         particles = sim.particles
         sim = None           # free simulation

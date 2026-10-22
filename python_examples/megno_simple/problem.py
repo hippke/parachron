@@ -3,14 +3,14 @@
 # to regular quasi-periodic orbits. Higher values of <Y> correspond to chaotic orbits.
 from __future__ import print_function
 # Import the rebound module
-import rebound
+import parachron
 # Import other modules
 import numpy as np
 
 def simulation(integrator):
     print("Running "+integrator)
     with open(integrator+".txt","w") as f:
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.integrator = integrator
         sim.dt = 0.2
             

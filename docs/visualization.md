@@ -33,7 +33,7 @@ The following code shows how to start the server:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.start_server(port=1234)
     ```
 
@@ -75,7 +75,7 @@ For all keyboard commands available, press `h`. A help window will show up on sc
 Instead of opening a new browser window for the visualization, you can also include a visualization widget in your Jupyter notebook.
 
 ```python
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 sim.widget(size=(400,400))
 ```
 

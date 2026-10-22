@@ -10,7 +10,7 @@ You can calculate the total energy (kinetic plus potential energy) of a simulati
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     energy = sim.energy()
     ```
 
@@ -24,7 +24,7 @@ You can calculate the angular momentum of a simulation using the following funct
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     Lx, Ly, Lz = sim.angular_momentum()
     ```
 
@@ -48,7 +48,7 @@ The return value is particle object with mass, position, and velocity reflecting
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation ...
     com = sim.com()
     ```

@@ -15,7 +15,7 @@ Here is how you can move the simulation to the heliocentric frame.
     ```
 === "Python"
     ```python
-    r = rebound.Simulation()
+    r = parachron.Simulation()
     # ... setup simulation ...
     r.move_to_hel()
     ```
@@ -35,7 +35,7 @@ You can also move a simulation to the center-of-mass frame, the inertial frame w
     ```
 === "Python"
     ```python
-    r = rebound.Simulation()
+    r = parachron.Simulation()
     # ... setup simulation ...
     r.move_to_com()
     ```

@@ -1,0 +1,15 @@
+import parachron
+import unittest
+from ctypes import c_size_t, sizeof, c_uint32, POINTER, c_char_p
+
+class TestSizeOfSimulation(unittest.TestCase):
+    
+    def test_size_of_simulation(self):
+        cl = parachron.clibrebound
+        cl.reb_simulation_struct_size.res_type = c_size_t
+        simulation_size_c = cl.reb_simulation_struct_size()
+
+        self.assertEqual(simulation_size_c, sizeof(parachron.Simulation))
+
+if __name__ == "__main__":
+    unittest.main()

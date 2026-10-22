@@ -15,7 +15,7 @@ Nevertheless, here is the syntax to set this manually:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.boundary = "none"
     ```
 
@@ -33,7 +33,7 @@ The syntax is as follows:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.root_size = 10.0   # confine the simulation to a box of size 10
     sim.boundary = "open"
     ```
@@ -55,7 +55,7 @@ The syntax is as follows:
 
 === "python"
     ```python
-    sim = rebound.simulation()
+    sim = parachron.simulation()
     sim.root_size = 10.0
     sim.N_root_x = 1  # 1 is the default
     sim.N_root_y = 2
@@ -107,7 +107,7 @@ For more information on how to setup simulations of planetary rings in REBOUND, 
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.root_size = 10.0
     sim.OMEGA = 1.0
     sim.boundary = "shear"

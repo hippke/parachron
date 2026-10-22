@@ -1,9 +1,9 @@
 # Import the rebound module 
-import rebound
+import parachron
 
 # Add particles
 # We work in units where G=1.  
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 sim.add(m=1. )                  # Test particle
 sim.add(m=1e-3,x=1.,vy=1. )     # Planet
 

@@ -27,8 +27,8 @@ The following code shows an example on how to add particles this way:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
-    p = rebound.Particle()
+    sim = parachron.Simulation()
+    p = parachron.Particle()
     p.m = 1.
     p.x = 1.
     sim.add(p)
@@ -57,13 +57,13 @@ You can also use orbital parameters to initialize the particle object.
 === "Python"
     In python, you can create and initialize particles using the constructor of the `Particle` class.
     ```python
-    sim = rebound.Simulation()
-    primary = rebound.Particle(m=1., x=1.)
+    sim = parachron.Simulation()
+    primary = parachron.Particle(m=1., x=1.)
     sim.add(primary)
     ```
     If you want to use orbital parameters, you need to pass the primary and the simulation to the constructor:
     ```python
-    planet = rebound.Particle(simulation=sim, primary=primary, m=1e-3, a=1., e=0.1)
+    planet = parachron.Particle(simulation=sim, primary=primary, m=1e-3, a=1., e=0.1)
     ```
     You can use any combination of orbital parameters that makes physically sense. 
     See [the discussion on orbital elements](orbitalelements.md) for more details.
@@ -136,7 +136,7 @@ By far the easiest way to add particles to REBOUND is to use a convenience funct
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1)                 # star at origin with mass 1                                      
     sim.add(m=1e-3, a=1.)        # planet with mass 1e-3 and semi-major axis 1
     sim.add(m=1e-3, a=2., e=0.1) # planet with mass 1e-3, semi-major axis 2, and eccentricity 0.1
@@ -157,7 +157,7 @@ If you want to quickly try something out, you can use a set of initial condition
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add("solar system")
     ```
 
@@ -171,7 +171,7 @@ and similarly for the outer Solar System:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add("outer solar system")
     ```
 

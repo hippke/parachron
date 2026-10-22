@@ -57,9 +57,9 @@ Parallel-in-Time Symplectic Integration of the Solar System*.
 
 ```python
 import math
-import rebound          # Parachron keeps REBOUND's Python module name (see below)
+import parachron
 
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 sim.add("solar system")                 # Sun + 8 planets
 sim.integrator = "whfast512"
 sim.dt = 6. / 365.25 * 2. * math.pi     # 6 days (units: AU, Msun, yr/2pi)
@@ -67,12 +67,12 @@ sim.exact_finish_time = False
 sim.integrator.gr_potential = 1
 sim.integrator.corrector = 17
 
-mep = rebound.MEP(sim, checkpoint="run.mep")   # one thread per physical core
-mep.integrate(1e8 * 2. * math.pi)              # 100 Myr; sim is updated to the end state
+mep = parachron.MEP(sim, checkpoint="run.mep")  # one thread per physical core
+mep.integrate(1e8 * 2. * math.pi)               # 100 Myr; sim is updated to the end state
 print(mep.mean_iterations, mep.walltime_last)
 
 # later, possibly in another process: continues bitwise identically
-mep = rebound.MEP.from_checkpoint("run.mep")
+mep = parachron.MEP.from_checkpoint("run.mep")
 mep.integrate(2e8 * 2. * math.pi)
 ```
 
@@ -93,17 +93,18 @@ to-do list.
 ## Installation
 
 ```bash
-git clone https://github.com/hippke/parachron && cd parachron && pip install -e .
+pip install parachron          # once published; or from source:
+git clone https://github.com/hippke/parachron && cd parachron && pip install .
 ```
 
-The package is called `parachron`, but its Python module keeps the name `rebound`, so existing REBOUND scripts run
-unchanged. It therefore replaces an installed REBOUND: use a separate virtual environment if you need both. The C
-library is built as before (`make` in `src/`, or see the examples).
+The Python module is `parachron` and can be installed next to REBOUND. Its API is REBOUND's: scripts written for
+REBOUND run after replacing `import rebound` with `import parachron as rebound`. The C library keeps REBOUND's C API
+(`reb_*` functions, `rebound.h`) and is built as before (`make` in `src/`, or see the examples).
 
 ## Credit and citation
 
 Parachron is built on REBOUND. Please cite REBOUND as described in its [documentation](https://rebound.hanno-rein.de/)
-(`sim.cite()` lists the papers for the methods you use), and in addition the MEP paper if you use `rebound.MEP`.
+(`sim.cite()` lists the papers for the methods you use), and in addition the MEP paper if you use `parachron.MEP`.
 REBOUND is developed by Hanno Rein and many contributors: see the
 [upstream repository](https://github.com/hannorein/rebound) and its git history. All upstream copyright notices are
 retained in the source files.

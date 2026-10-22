@@ -25,7 +25,7 @@ Which programming language you want to use depends on your preference and your s
 If you just want to try out REBOUND or don't plan to modify it in any way, then the easiest way to install the python version of REBOUND is [pip](https://pypi.org) (the Package Installer for Python). Simply type the following command into a terminal:
 
 ```bash
-pip install rebound
+pip install parachron
 ```
 
 If you have trouble installing a package with pip, consider using a [virtual environment](https://docs.python.org/3/tutorial/venv.html).

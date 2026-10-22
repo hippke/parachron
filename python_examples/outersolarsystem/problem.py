@@ -1,8 +1,8 @@
 # Import the rebound module
-import rebound
+import parachron
 
 # Create a REBOUND simulation
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 
 # Set variables (defaults are G=1, t=0, dt=0.01)
 k = 0.01720209895       # Gaussian constant 

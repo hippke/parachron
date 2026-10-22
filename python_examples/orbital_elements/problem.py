@@ -1,7 +1,7 @@
-import rebound
+import parachron
 
 # Create a rebound simulation
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 
 # Add a particle at the origin with mass 1
 sim.add(m=1.)  

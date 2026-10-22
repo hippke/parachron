@@ -41,7 +41,7 @@ You create a binary file if you save a simulation
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     // ... setup simulation ...
     sim.save_to_file("snapshot.bin")
     ```

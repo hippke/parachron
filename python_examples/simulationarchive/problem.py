@@ -1,13 +1,13 @@
 # Import the rebound module
-import rebound
+import parachron
 
 filename = "simulationarchive.bin"
 try:
-    sim = rebound.Simulation(filename)
+    sim = parachron.Simulation(filename)
     print("Restarting from simulationarchive. Last snapshot found at t=%.1f"%sim.t)
 except:
     print("Cannot load Simulationarchive. Creating new simulation.")
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1) # star
     sim.add(m=1e-3, a=1, e=0.01) # planet 1
     sim.add(m=1e-3, a=2.5, e=0.01) # planet 2

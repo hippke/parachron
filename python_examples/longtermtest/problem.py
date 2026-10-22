@@ -2,14 +2,14 @@
 import sys
 import matplotlib; matplotlib.use("pdf")
 import matplotlib.pyplot as plt
-import rebound
+import parachron
 import numpy as np
 import time
 import warnings
 
 def simulation(par):
     integrator, run, trial = par
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     k = 0.01720209895    
     Gfac = 1./k
     sim.dt = dt

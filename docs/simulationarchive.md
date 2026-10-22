@@ -18,7 +18,7 @@ If the file already exists, the function will append a Simulationarchive snapsho
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... work on simulation ...
     sim.save_to_file("archive.bin")
     ```
@@ -38,7 +38,7 @@ The following code automatically creates a Simulationarchive snapshot at regular
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... work on simulation ...
     sim.save_to_file("archive.bin", interval=10.)
     ```
@@ -54,7 +54,7 @@ The following code automatically creates a Simulationarchive snapshot after a fi
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... work on simulation ...
     sim.save_to_file("archive.bin", step=100)
     ```
@@ -78,7 +78,7 @@ The wall-time is given in seconds.
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... work on simulation ...
     sim.save_to_file("archive.bin", walltime=120) # 2 minutes
     ```
@@ -99,9 +99,9 @@ For example, the last snapshot in the file would have the index `-1`, the second
 
 === "Python"
     ```python
-    sim = rebound.Simulation("archive.bin", snapshot=12)
+    sim = parachron.Simulation("archive.bin", snapshot=12)
     # ... work on simulation ...
     ```
     In python, `snapshot=-1` is the default. 
-    Thus, `#!python sim = rebound.Simulation("archive.bin")` will create a new simulation from the last snapshot in the archive. 
+    Thus, `#!python sim = parachron.Simulation("archive.bin")` will create a new simulation from the last snapshot in the archive. 
 

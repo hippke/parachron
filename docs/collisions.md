@@ -18,7 +18,7 @@ You can manually set the collision routine to NONE with the following code:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "none"
     ```
 
@@ -34,7 +34,7 @@ The following code enables this module:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "direct"
     ```
 
@@ -56,7 +56,7 @@ It assumes particles travelled along straight lines during the timestep and migh
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "line"
     ```
 
@@ -75,7 +75,7 @@ Below is an example on how to enable the tree based collision search.
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.root_size = 10.0 # confine the simulation to a box of size 10
     sim.collision = "tree"
     ```
@@ -98,7 +98,7 @@ Below is an example on how to enable the line-tree collision search.
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.root_size = 10.0   # confine the simulation to a box of size 10
     sim.collision = "linetree"
     ```
@@ -130,7 +130,7 @@ It can also be set manually using the following syntax:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "direct"
     sim.collision_resolve = "halt"
     ```
@@ -162,7 +162,7 @@ The following example shows how to set up a hard-sphere collision resolve functi
         # v is the normal impact velocity.
         # Here, we just use a constant coefficient of restitution
         return 0.5
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "direct"
     sim.coefficient_of_restitution = coefficient_of_restitution_constant
     sim.collision_resolve = "hardsphere"
@@ -186,7 +186,7 @@ The following example shows how to set up a hard-sphere collision resolve functi
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "direct"
     sim.collision_resolve = "merge"
     ```
@@ -228,7 +228,7 @@ Here is a short example on how to write a simple custom collision resolve functi
         print(sim.particles[collision.p2].x) # x position of particle 2
         return 0                             # Don't remove either particle
     
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.collision = "direct"
     sim.collision_resolve = collision_print_only
     ```

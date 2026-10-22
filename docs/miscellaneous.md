@@ -11,7 +11,7 @@ The result is in the range $[0, 2\pi]$.
 
 === "Python"
     ```python
-    f = rebound.mod2pi(7.) // returns 0.7168 = 7 - 2*pi
+    f = parachron.mod2pi(7.) // returns 0.7168 = 7 - 2*pi
     ```
 ## Hash function
 REBOUND comes with its own hash function. 
@@ -25,5 +25,5 @@ You can call REBOUND's hash function  manually:
 
 === "Python"
     ```python
-    hash = rebound.hash("test string")
+    hash = parachron.hash("test string")
     ```

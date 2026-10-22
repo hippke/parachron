@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
  
 # Import the rebound module
-import rebound
+import parachron
 # Import other modules
 import numpy as np
 import warnings
@@ -19,12 +19,12 @@ import warnings
 # Runs one simulation.
 def simulation(par):
     saturn_a, saturn_e = par
-    sim = rebound.Simulation() 
+    sim = parachron.Simulation() 
     sim.integrator = "whfast"
     sim.dt = 1.
     
     # These parameters are only approximately those of Jupiter and Saturn.
-    sun     = rebound.Particle(m=1.)
+    sun     = parachron.Particle(m=1.)
     sim.add(sun)
     jupiter = sim.add(primary=sun,m=0.000954, a=5.204, M=0.600, omega=0.257, e=0.048)
     saturn  = sim.add(primary=sun,m=0.000285, a=saturn_a, M=0.871, omega=1.616, e=saturn_e)

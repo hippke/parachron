@@ -12,7 +12,7 @@ In the code blow, the particle's position and velocity coordinates, and its mass
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1., x=1., vx=1.)
     sim.particles[0] *= 2.
     ```
@@ -28,8 +28,8 @@ This will add or subtract the particles' position, velocity and mass from each o
     ```
 === "Python"
     ```python
-    p1 = rebound.Particle(m=0., x=1., vx=1.)
-    p2 = rebound.Particle(m=0., x=1., vx=1.)
+    p1 = parachron.Particle(m=0., x=1., vx=1.)
+    p2 = parachron.Particle(m=0., x=1., vx=1.)
     p1 += p2 # p1.m, p1.x, p1.vx will now all be 3. p2 remains unchanged.
     p1 -= p2 # p1.m, p1.x, p1.vx will be 1.
     ```
@@ -39,8 +39,8 @@ In python, one can also use the multiply, add, and subtract operations to create
 The following operations do not affect the original particles `p1` and `p2`.
 
 ```python
-p1 = rebound.Particle(m=0., x=1., vx=1.)
-p2 = rebound.Particle(m=0., x=1., vx=1.)
+p1 = parachron.Particle(m=0., x=1., vx=1.)
+p2 = parachron.Particle(m=0., x=1., vx=1.)
 p3 = p1 + p2  # p3 is a new particle
 p4 = p1 + p2  # p4 is a new particle
 p5 = 2.*p1    # p5 is a new particle
@@ -50,7 +50,7 @@ p5 = 2.*p1    # p5 is a new particle
     These particle operations can be very helpful when initializing particles.
     For example, you can create initialize two particles using orbital parameters and then easily create another particle exactly in between these two particles.
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1)        # star
     sim.add(a=1)        # planet 1
     sim.add(a=2, f=0.1) # planet 2
@@ -69,8 +69,8 @@ REBOUND has a convenience function for that:
 === "Python"
     In python this is implemented using the power operator (`**`):
     ```python
-    p1 = rebound.Particle(m=0., x=1., vx=1.)
-    p2 = rebound.Particle(m=0., x=1., vx=1.)
+    p1 = parachron.Particle(m=0., x=1., vx=1.)
+    p2 = parachron.Particle(m=0., x=1., vx=1.)
     distance = p1 ** p2
     ```
 

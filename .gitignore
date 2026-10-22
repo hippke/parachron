@@ -60,3 +60,6 @@ utsc_nfs/
 # build-flag marker written by the benchmark harness (research/benchmarks/perf/run.py)
 src/.bench_build_flags
 *.egg-info/
+# written by the test suite
+test.pickle
+test.sa

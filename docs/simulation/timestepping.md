@@ -17,7 +17,7 @@ In those cases use this syntax:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.integrate(100.) # integrate until t=100.
     ```
 
@@ -38,7 +38,7 @@ The following code shows you how to do that.
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation, set timestep ...
     sim.integrate(100., exact_finish_time=0) # integrate until t=100. or a bit further
     ```
@@ -67,7 +67,7 @@ Rather than integrating up to a fixed time, you can also advance the simulation 
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation, set timestep ...
     sim.steps(1)
     ```
@@ -82,7 +82,7 @@ And finally, you can ask REBOUND to advance the simulation by a finite number of
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation, set timestep ...
     sim.steps(100) # 100 steps
     ```
@@ -99,7 +99,7 @@ You can manually 'synchronize' the simulation by calling
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation ...
     sim.synchronize()
     ```

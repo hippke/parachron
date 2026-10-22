@@ -9,6 +9,7 @@ description = "Parallel-in-time N-body integration (mean-element parareal), base
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
+# The Python module is `parachron`; the C library keeps the REBOUND C API (reb_*).
 # Parachron is a modified version of REBOUND by Hanno Rein and contributors (https://github.com/hannorein/rebound)
 authors = [
     { name = "Hanno Rein", email = "hanno@hanno-rein.de" },
@@ -40,11 +41,11 @@ Homepage = "https://github.com/hippke/parachron"
 Upstream = "https://github.com/hannorein/rebound"
 
 [tool.setuptools.packages.find]
-include = ["rebound*"]
+include = ["parachron*"]
 exclude = ["reboundx*","utsc_nfs*"]
 
 [tool.setuptools.package-data]
-rebound = ["../src/*.h"]
+parachron = ["../src/*.h"]
 
 [tool.cibuildwheel.windows]
 environment = { CC = "clang-cl" }

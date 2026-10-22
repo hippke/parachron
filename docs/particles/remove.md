@@ -12,7 +12,7 @@ You can remove all particles with the following code:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... add particles ...
     del sim.particles
     ```
@@ -37,7 +37,7 @@ You can remove a particle using this index as shown in the following code:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1.) // star, index=0
     sim.add(a=1.) // planet 1, index=1
     sim.add(a=2.) // planet 2, index=2
@@ -63,7 +63,7 @@ If a particle has a name, you can remove it as shown here:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1., name="star")
     sim.add(a=1., name="planet1")
     sim.add(a=2., name="planet2")

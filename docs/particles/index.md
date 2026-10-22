@@ -25,7 +25,7 @@ You can create a particle object which is not part of a REBOUND simulation.
 
 === "Python"
     ```python
-    p = rebound.Particle(m=1., x=0., vy=0.)
+    p = parachron.Particle(m=1., x=0., vy=0.)
     ```
 
 However, in most cases you will work with particles which have been added to a REBOUND simulation.
@@ -40,7 +40,7 @@ You then access the particle using the simulation's `particles` array:
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... setup simulation, add particles ... 
     sim.particles[0].x = 1
     ```
@@ -56,7 +56,7 @@ Alternatively you can assign a name to particles and access them using the follo
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1., name="star")
     sim.add(a=1., name="planet1")
     p = sim.particles["planet1"]

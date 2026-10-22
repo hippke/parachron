@@ -17,7 +17,7 @@ This scenario can be setup with the following code:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1.)
     sim.add(a=1.)
     ```
@@ -61,7 +61,7 @@ The following example sets $G$ to its value in SI units:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.G = 6.6743e-11 # m^3 / kg s^2
     ```
 From now on, all quantities that have unit of length (semi-major axis, particle radius, etc) need to be specified (and will be output) in meters.

@@ -9,7 +9,7 @@ The following example shows how to access variables in the simulation structure.
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.G = 1.0    # Set the gravitational constant
     print(sim.t)   # print current simulation time
     ```
@@ -58,7 +58,7 @@ To keep the documentation concise, variables which are only intended for interna
         In python, you do not need to set this flag in the simulation structure. 
         Instead, you pass it as an argument when calling `integrate()`:
         ```python
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.integrator = "leapfrog" # uses fixed timestep
         sim.dt = 10
         sim.integrate(15, exact_finish_time=0)
@@ -96,7 +96,7 @@ To keep the documentation concise, variables which are only intended for interna
             sim = sim_pointer.contents
             print(sim.t)
         
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.heartbeat = heartbeat
         # ...
         ```
@@ -162,7 +162,7 @@ To keep the documentation concise, variables which are only intended for interna
 
     === "Python"
         ```python
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         # ... setup simulation, add particles ... 
         sim.particles[0].x = 1
         ```
@@ -201,7 +201,7 @@ To keep the documentation concise, variables which are only intended for interna
 
     === "Python"
         ```python
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.add(m=1)
         sim.add(m=1e-3, a=1)
         sim.add(m=0, a=2)

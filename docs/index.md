@@ -17,7 +17,7 @@ REBOUND is an N-body integrator, i.e. a software package that can integrate the 
 * Can integrate arbitrary user-defined ODEs that are coupled to N-body dynamics for tides, spin, etc
 * Support for collisional/granular dynamics, various collision detection routines
 * The computationally intensive parts of the code are written entirely in C, conforming to the ISO standard C99, and can be used as a thread-safe shared library
-* Easy-to-use Python module, installation in 3 words: `pip install rebound`
+* Easy-to-use Python module, installation in 3 words: `pip install parachron`
 * Real-time, 3D visualization, for both C and Python.
 * Extensive set of example problems for both C and Python. You can run examples directly from your browser without the need to download or install anything.
 * Parallelized [WHFast512](integrators/whfast512.md) integrator for super fast integrations of planetary systems with SIMD AVX512 instructions
@@ -114,7 +114,7 @@ If you use this code or parts of this code for results presented in a scientific
 The simplest way to find the citations relevant to the specific setup of your REBOUND simulation is: 
 
 ```python
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 -your setup-
 sim.cite()
 ```

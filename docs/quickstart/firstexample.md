@@ -17,13 +17,13 @@ Choose whichever you are most comfortable with.
 We start by importing REBOUND:
 
 ```python
-import rebound
+import parachron
 ```
 
 To run an N-body simulation, we need to create a simulation object first:
 
 ```python
-sim = rebound.Simulation()
+sim = parachron.Simulation()
 ```
 
 Then, we [add particles](../particles/add.md) to the simulation:

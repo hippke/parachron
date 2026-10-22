@@ -1,14 +1,14 @@
-import rebound
+import parachron
 import ctypes
 import os
 import re
-from rebound.binarydata_field_descriptor import REB_BINARYDATA_DTYPE
+from parachron.binarydata_field_descriptor import REB_BINARYDATA_DTYPE
 os.makedirs("integrators", exist_ok=True)
 
 youtube_regex = r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:[^/\n\s]+/\S+/|(?:v|e(?:mbed)?)/|\S*?[?&]v=)|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})'
 
 # Get all integrators
-clibrebound = rebound.clibrebound
+clibrebound = parachron.clibrebound
 clibrebound.reb_integrators_registered.restype = ctypes.POINTER(ctypes.c_char_p)
 res = clibrebound.reb_integrators_registered()
 i = 0
@@ -24,7 +24,7 @@ clibrebound.reb_free(res)
 for name in names:
     print(name)
     with open("docs/integrators/"+name+".md", "w") as file:
-        sim = rebound.Simulation()
+        sim = parachron.Simulation()
         sim.integrator = name
         file.write("# " + name.upper()+"\n\n")
         doc = sim.integrator.callbacks.documentation.decode("utf-8") + "\n\n"

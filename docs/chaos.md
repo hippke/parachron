@@ -13,7 +13,7 @@ Then, initialize the variational particles and MEGNO variables with
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... add particles ...
     sim.init_megno()
     ```
@@ -32,7 +32,7 @@ If you want to have reproducible result, you can specify the seed manually:
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... add particles ...
     sim.init_megno(seed=0) # 0 is the initial seed
     ```
@@ -51,7 +51,7 @@ To print out the MEGNO value or the largest Lyapunov characteristic number (LCN)
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... add particles ...
     sim.init_megno()
     # ... integrate ...
@@ -91,7 +91,7 @@ This variable contains the natural logarithm of all re-scaling factors that have
     ```
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # ... add particles ...
     sim.init_megno()
     # ... integrate ...

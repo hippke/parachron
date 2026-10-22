@@ -18,13 +18,13 @@ Below is an example on how to work with binary files.
 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     // ... setup simulation ...
     sim.integrate(10)
     sim.save_to_file("snapshot.bin")
     sim = None # Remove reference, allow python to release memory
 
-    sim2 = rebound.Simulation("snapshot.bin")
+    sim2 = parachron.Simulation("snapshot.bin")
     sim2.integrate(2) # continue integration
     sim2 = None 
     ```

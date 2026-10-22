@@ -43,7 +43,7 @@ if sys.platform == "darwin":
     cfg = sysconfig.get_config_vars()
     cfg["LDSHARED"] = cfg["LDSHARED"].replace("-bundle", "-shared")
     suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-    extra_link_args += [f"-Wl,-install_name,@rpath/librebound{suffix}"]
+    extra_link_args += [f"-Wl,-install_name,@rpath/libparachron{suffix}"]
 if sys.platform.startswith("linux"):
     extra_link_args += ["-pthread", "-lrt"]   # mean-element parareal (src/mep.c): threads, semaphores, clock_gettime
 
@@ -103,8 +103,10 @@ class build_ext_avx512(build_ext):
         super().build_extensions()
 
 ##### C Extension
+# The compiled C library (REBOUND C API, reb_* functions), named libparachron in the Python package so that it
+# can be installed next to upstream REBOUND (librebound)
 libreboundmodule = Extension(
-    "librebound",
+    "libparachron",
     sources=sorted(glob("src/*.c")),
     include_dirs=["src"],
     depends=sorted(glob("src/*.s")),

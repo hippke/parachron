@@ -9,7 +9,7 @@ parallel, which settings help, and what to expect.
 - Python: `REBOUND_OPENMP=1 pip install .` (or `pip install -e .` in a source checkout). Compiling
   with `-fopenmp` in `CFLAGS` also works.
 - The number of threads is set with the environment variable `OMP_NUM_THREADS`, or with
-  `rebound.omp_set_num_threads(n)` from Python. For reproducible timings, bind the threads:
+  `parachron.omp_set_num_threads(n)` from Python. For reproducible timings, bind the threads:
   `OMP_PROC_BIND=close OMP_PLACES=cores`.
 
 ## Results do not depend on the number of threads
@@ -106,8 +106,8 @@ Simulationarchives.
 ## Ensembles: many simulations at once
 
 ```python
-rebound.integrate_simulations(sims, tmax)   # each sim integrated to tmax
-rebound.steps_simulations(sims, N_steps)    # each sim advanced by N_steps steps
+parachron.integrate_simulations(sims, tmax)   # each sim integrated to tmax
+parachron.steps_simulations(sims, N_steps)    # each sim advanced by N_steps steps
 ```
 
 These functions (C: `reb_simulations_integrate`, `reb_simulations_steps`) run independent

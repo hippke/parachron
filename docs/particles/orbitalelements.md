@@ -56,7 +56,7 @@ The following function allows you to calculate the orbital elements of a particl
     The last argument of the `reb_orbit_from_particle` function is the primary particle, i.e. the star or the center of mass. 
 === "Python"
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1)  # star
     sim.add(a=1, e=0.1) # planet
     o = sim.particles[1].orbit(primary=sim.particles[0])
@@ -66,7 +66,7 @@ The following function allows you to calculate the orbital elements of a particl
     
     You can also calculate the orbits of all particles in the simulation. 
     ```python
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     sim.add(m=1)  # star
     sim.add(a=1, e=0.1) # planet
     sim.add(a=2, e=0.1) # planet
@@ -87,7 +87,7 @@ The following function returns the true anomaly $f$ for a given eccentricity $e$
 
 === "Python"
     ```python
-    f = rebound.M_to_f(0.1, 1.0) # e=0.1, M=1.0
+    f = parachron.M_to_f(0.1, 1.0) # e=0.1, M=1.0
     ```
 
 
@@ -99,7 +99,7 @@ The following function returns the true anomaly $f$ for a given eccentricity $e$
 
 === "Python"
     ```python
-    f = rebound.E_to_f(0.1, 1.0) # e=0.1, E=1.0
+    f = parachron.E_to_f(0.1, 1.0) # e=0.1, E=1.0
     ```
 
 ### Eccentric anomaly
@@ -112,5 +112,5 @@ The following function returns the eccentric anomaly $E$ for a given eccentricit
 
 === "Python"
     ```python
-    f = rebound.M_to_E(0.1, 1.0) # e=0.1, M=1.0
+    f = parachron.M_to_E(0.1, 1.0) # e=0.1, M=1.0
     ```

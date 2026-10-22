@@ -1,6 +1,6 @@
 import matplotlib; matplotlib.use("pdf")
 import matplotlib.pyplot as plt
-import rebound
+import parachron
 import socket
 import sys
 import os.path
@@ -11,9 +11,9 @@ solar_system_objects = ["Sun", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "
 
 if os.path.isfile(filename):
     # Try to load simulation from file
-    sim = rebound.Simulation(filename)
+    sim = parachron.Simulation(filename)
 else: 
-    sim = rebound.Simulation()
+    sim = parachron.Simulation()
     # Get data from NASA Horizons
     try:
         sim.add(solar_system_objects)

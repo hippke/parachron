@@ -13,7 +13,7 @@ For example, you can keep a record of your initial conditions by simply making a
     ```
 === "Python"
     ```python
-    r = rebound.Simulation()
+    r = parachron.Simulation()
     r_copy = r.copy()
     ```
 !!! Info
@@ -35,8 +35,8 @@ For example:
     ```
 === "Python"
     ```python
-    r1 = rebound.Simulation()
-    r2 = rebound.Simulation()
+    r1 = parachron.Simulation()
+    r2 = parachron.Simulation()
     # ... setup simulations ...
     r1 -= r2
     r1 += r2
@@ -58,7 +58,7 @@ This can come in handy when re-scaling a simulation
     ```
 === "Python"
     ```python
-    r = rebound.Simulation()
+    r = parachron.Simulation()
     # ... setup simulation ...
     r.multiply(2., 3.)
     ```
@@ -85,8 +85,8 @@ You can compare if simulations are equal to each other using the following synta
     ```
 === "Python"
     ```python
-    r1 = rebound.Simulation()
-    r2 = rebound.Simulation()
+    r1 = parachron.Simulation()
+    r2 = parachron.Simulation()
     # ... setup simulations ...
     if r1 == r2:
         print("Simulations are equal")
