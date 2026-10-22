@@ -1,6 +1,7 @@
 // Coarse propagator for parareal around WHFast512 (see pint_coarse.h). Mirrors parareal/mgc.py (config A).
 #include "pint_coarse.h"
 #include "integrator_whfast512.h"
+#include "pint_dual.h"
 #include <math.h>
 #include <complex.h>
 #include <string.h>
@@ -17,7 +18,7 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days){
     memcpy(c->masses, masses, sizeof(double)*(PINT_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->kernel = 2; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
-    c->meann = 0;
+    c->meann = 0; c->dual = 0;
     // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT, PINT_ALPHAHI, PINT_MAXJ (7: Uranus and Neptune paired with the inner planets)
     const char* e;
     if ((e=getenv("PINT_MEANN"))) c->meann=atoi(e);
@@ -25,6 +26,7 @@ void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_day
     if ((e=getenv("PINT_DTOUT"))) c->dt_out_days=atof(e);
     if ((e=getenv("PINT_ALPHAHI"))) c->alpha_hi=atof(e);
     if ((e=getenv("PINT_MAXJ"))) c->maxj=atoi(e);
+    if ((e=getenv("PINT_DUAL"))) c->dual=atoi(e);
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -67,7 +69,9 @@ static void rv_to_el(double mu, const double* r, const double* v, double* E){
     E[0]=log(a); E[1]=M+pom; E[2]=e*cos(pom); E[3]=e*sin(pom); E[4]=si*cos(Om); E[5]=si*sin(Om);
 }
 // dE/dv: ln a analytically (d ln a = 2a v.dv/mu); the other components (if ncomp > 1) by forward differences
+static __thread int dual_t=0;
 static void dEdv(double mu, const double* r, const double* v, double D[6][3], int ncomp){
+    if (dual_t && ncomp>1){ pint_dedv_dual(mu,r,v,D); return; }
     const double rn=sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]), v2=v[0]*v[0]+v[1]*v[1]+v[2]*v[2];
     const double a=1./(2./rn-v2/mu);
     for (int c=0;c<3;c++) D[0][c]=2.*a*v[c]/mu;
@@ -149,7 +153,7 @@ struct tctx {
     double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];
 };
 static void task_grid(struct tctx* x, int p){
-    const struct pint_cfg* c=x->c;
+    const struct pint_cfg* c=x->c; dual_t=c->dual;
     if (p<PINT_NI){
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg);
         for (int g=0; g<x->N1; g++){ Eg[1]=2.*M_PI*g/x->N1; el_to_rv(x->mu[p],Eg,x->ri[p][g],x->vi[p][g]); dEdv(x->mu[p],x->ri[p][g],x->vi[p][g],x->Di[p][g],x->nc); }

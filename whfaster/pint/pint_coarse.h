@@ -22,6 +22,7 @@ struct pint_cfg {
     int ng_hi;              // grid for inner-inner pairs with a_i/a_j >= alpha_hi (power of two, >= ng_ii; 0: off)
     double alpha_hi;
     int meann;              // 1: start tables rebuilt at the inner planets' mean ln a (mean motions in the small divisors)
+    int dual;               // 1: dE/dv by dual numbers (exact) instead of finite differences in the tables
 };
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days);
 // G: E_in -> E_out over one slice

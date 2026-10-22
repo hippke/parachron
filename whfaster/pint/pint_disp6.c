@@ -46,6 +46,9 @@ static void dEdv6(double mu, const double* r, const double* v, double D[6][3]){
         for (int e=0;e<6;e++){ double d=Ep[e]-Em[e]; if (e==1) d=wrapd(d); D[e][c]=d/(2*vs); }
     }
 }
+#include "pint_dual.h"
+#define dEdv6d pint_dedv_dual
+int pint_disp6k_dual=0;   // 1: dE/dv by dual numbers in pint_disp6k (else central differences as in pint_disp6)
 static double complex twd[NGM+1][NGM/2]; static int twd_ok=0;
 static void fftd(double complex* a, int n, int s){
     if (!twd_ok){ for (int m=2;m<=NGM;m<<=1) for (int j=0;j<m/2;j++) twd[m][j]=cexp(-2.*M_PI*I*j/m); twd_ok=1; }
@@ -160,7 +163,7 @@ void pint_disp6k(const struct pint_cfg* c, const double E[PINT_NP][6], const dou
     static __thread double complex W1[NGM*NGM], W2[NGM*NGM];
     for (int i=0;i<PINT_NI;i++){
         double Eg[6]; memcpy(Eg,E[i],sizeof Eg);
-        for (int g=0;g<N1;g++){ Eg[1]=2.*M_PI*g/N1; el_to_rv6(mu[i],Eg,ri[i][g],vi[i][g]); dEdv6(mu[i],ri[i][g],vi[i][g],Di[i][g]); }
+        for (int g=0;g<N1;g++){ Eg[1]=2.*M_PI*g/N1; el_to_rv6(mu[i],Eg,ri[i][g],vi[i][g]); if (pint_disp6k_dual) dEdv6d(mu[i],ri[i][g],vi[i][g],Di[i][g]); else dEdv6(mu[i],ri[i][g],vi[i][g],Di[i][g]); }
         for (int e=0;e<6;e++) disp[i][e]=0;
     }
     for (int j=PINT_NI;j<=c->maxj;j++){ double Eg[6]; memcpy(Eg,E[j],sizeof Eg); double vd[3];
