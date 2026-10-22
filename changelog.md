@@ -4,7 +4,7 @@ This changelog only includes the most important changes in recent updates. For a
 
 ## Version 5.x
 
-### Unreleased (Parachron, a modified version of REBOUND; see CHANGES_FROM_REBOUND.md)
+### Parachron 1.0 (a modified version of REBOUND 5.2.2; see CHANGES_FROM_REBOUND.md)
 * New: mean-element parareal (MEP), a parallel-in-time integrator for one WHFast512 planetary system (a central object and 8 planets) on many cores (`parachron.MEP`, `reb_mep_*`; Linux). The coarse propagator uses a numerical first-order mean-element theory; the result is the serial WHFast512 trajectory within a tolerance. About 3x faster than serial WHFast512 for the Solar System on 16 cores at reference accuracy. Runs can be checkpointed and resumed bitwise identically. See `ipython_examples/MEP.ipynb` and `examples/mep_solar_system`.
 * New WHFast512 option `jacobi_recursive` (default 0, unchanged): synchronizes with the recursive Jacobi transformations instead of the precomputed 8x8 matrices, which are not exact inverses in floating point and change the energy by about +7.5e-17 (Solar System) at every synchronization.
 * WHFast512 runs without AVX-512: portable C kernels (AVX2+FMA, AVX-512, generic, ARM NEON), bitwise identical on all machines; unbiased Kepler step (rounding of the Stiefel-series constants corrected, evaluation at the final X).
