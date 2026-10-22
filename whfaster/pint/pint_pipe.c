@@ -58,6 +58,16 @@ static double energy_sim(struct reb_simulation* s){
     return E;
 }
 static double energy_el(const el E){ struct reb_simulation* s=pint_el_to_sim(ss_mass,E); double e=energy_sim(s); reb_simulation_free(s); return e; }
+// PINT_EDIAG=1: energy bookkeeping of the parareal chain — mean and spread of (a) the element round trip of every
+// completed fine result (energy after sim -> elements -> sim minus the energy of the integrated state) and (b) the
+// residual of every energy projection (energy of the projected boundary minus its target); relative to |E0|.
+static int ediag=0; static double ediag_E0=1.;
+typedef struct { double s, s2; long n; } eacc;
+static eacc acc_rt, acc_r1; static pthread_mutex_t acc_mx=PTHREAD_MUTEX_INITIALIZER;
+static void eadd(eacc* a, double x){ pthread_mutex_lock(&acc_mx); a->s+=x; a->s2+=x*x; a->n++; pthread_mutex_unlock(&acc_mx); }
+static void eprint(const char* name, const eacc* a){ const double m=a->s/a->n, sd=sqrt(a->s2/a->n-m*m);
+    printf("ediag %s: n %ld, mean %+.3e +- %.1e, rms %.2e (relative to |E0|)\n", name, a->n, m, sd/sqrt(a->n), sd); }
+static double energy_sim(struct reb_simulation* s);
 static void project_energy(el E, double Et){
     struct reb_simulation* s=pint_el_to_sim(ss_mass,E);
     for (int it=0; it<2; it++){
@@ -84,7 +94,9 @@ static int fine(const el Ein, el Eout, int kneed, atomic_int* stp, int n){
             reb_simulation_steps(s,1);
         }
     } else { w->concatenate_steps=nst; reb_simulation_steps(s,1); }
-    pint_sim_to_el(s,Eout); reb_simulation_free(s);
+    if (ediag){ const double ed=energy_sim(s); pint_sim_to_el(s,Eout); eadd(&acc_rt,(energy_el(Eout)-ed)/ediag_E0); }
+    else pint_sim_to_el(s,Eout);
+    reb_simulation_free(s);
     return 1;
 }
 // two fine slices in one paired kernel call (bitwise identical to two separate calls); same abandonment rule
@@ -173,7 +185,9 @@ static void* slice_thread(void* arg){
                 Up[k][n+1][i][e]=g[i][e]+d;
             }
             for (int i=0;i<PINT_NP;i++) Up[k][n+1][i][1]=wrapd(Up[k][n+1][i][1]);
-            project_energy(Up[k][n+1], energy_el(Up[k][n]) + (EFprev[j]-EUprev[j]));
+            { const double Et=energy_el(Up[k][n]) + (EFprev[j]-EUprev[j]);
+              project_energy(Up[k][n+1], Et);
+              if (ediag) eadd(&acc_r1,(energy_el(Up[k][n+1])-Et)/ediag_E0); }
         }
         memcpy(Gold[j],g,sizeof(el));
         if (tol>0. && k>0){
@@ -244,6 +258,7 @@ int main(int argc, char** argv){
     if (npar>0) pint_set_threads(npar);
     if (getenv("PINT_UPDDIAG")) upd_diag=atoi(getenv("PINT_UPDDIAG"));
     if (getenv("PINT_JR")) jr=atoi(getenv("PINT_JR"));
+    if (getenv("PINT_EDIAG")) ediag=atoi(getenv("PINT_EDIAG"));
     if (getenv("PINT_CHUNKS")) nchunk=atoi(getenv("PINT_CHUNKS"));
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     pint_default_cfg(&cfg, ss_mass, slice_days);
@@ -280,7 +295,7 @@ int main(int argc, char** argv){
         pint_sim_to_el(s,Eser); reb_simulation_free(s);
     }
     if (getenv("PINT_SERONLY")){ printf("serial: wall %.3f s (%d x %d slices)\n",tser,W,N); return 0; }
-    memcpy(Ecur,E0,sizeof(el));
+    memcpy(Ecur,E0,sizeof(el)); ediag_E0=fabs(energy_el(E0));
     const char* trf=getenv("PINT_TRACE");
     if (trf){ trace_on=1; for (int n=0;n<N;n++) trace[n]=malloc(TRACE_MAX*sizeof(tev)); }
     const double t0=now(); trace_t0=t0;
@@ -307,6 +322,7 @@ int main(int argc, char** argv){
     printf("iterations per window:"); double km=0; for (int k=0;k<=KMAX;k++) if (khist[k]){ printf(" K=%d: %d",k,khist[k]); km+=k*khist[k]; } printf(" (mean %.2f)\n",km/W);
     printf("pipelined parareal: N=%d threads (+%d coarse helpers, mode %d), K=%d, %d windows of %d x %.0f d: wall %.3f s, busy fine %.3f s, coarse %.3f s (core-s)\n",
            N,npar,parmode,K,W,N,slice_days,tpr,sF,sG);
+    if (ediag){ eprint("round trip of fine results",&acc_rt); eprint("projection residual",&acc_r1); }
     if (ser){
         struct reb_simulation* a=pint_el_to_sim(ss_mass,Ecur); struct reb_simulation* b=pint_el_to_sim(ss_mass,Eser);
         double m=0; for (int i=1;i<=PINT_NP;i++){ double d[3]={a->particles[i].x-b->particles[i].x,a->particles[i].y-b->particles[i].y,a->particles[i].z-b->particles[i].z}; for(int x=0;x<3;x++) if (fabs(d[x])>m) m=fabs(d[x]); }
