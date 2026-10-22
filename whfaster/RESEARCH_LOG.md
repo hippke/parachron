@@ -1351,3 +1351,10 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
   prediction, config B for all corrections (the k = 0 sweep could be moved off the chain). k1 errors 4.8e-5 … 4.7e-4,
   k2 8.6e-7 … 7.1e-5, k2 updates 4.8e-5 … 4.8e-4 → **0/10 K = 2 stops**; it only helps the hard windows (epoch 1030:
   k3 update 3.9e-4 → 1.1e-5). The accurate step's value is its Jacobian in the corrections (as in round 3).
+
+### Iteration 46 — helper count with the final defaults; ensemble of 200 Myr runs (serial vs parareal)
+* Helpers (τ 3e-5, asm, 2 reps): 4: 3.42 / 3.27; 6: 3.55 / 3.49; 8: 3.53 / 3.36; 10: 3.32 / 3.28; 12: 3.29 / 3.30 →
+  6 ≈ 8 within the noise; 8 stays the documented setting.
+* Ensemble (`runs/ens_gyr.sh`, `pint/ens_stat.py`): 16 IC realisations (all planets x + q × 1e-10 AU), 200 Myr each,
+  asm kernel; serial runs (16 at once on cores 0–15) and parareal runs (K_min 3, τ 3e-5, defaults) from the same ICs.
+  Results below.
