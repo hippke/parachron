@@ -1240,3 +1240,14 @@ be at the level of the serial runs (run `p30c2`, τ 3e-5, started). Serial wall 
   (p = 0.01 for g2, g3) — consecutive windows of one chaotic trajectory are strongly correlated (and NAFF switches
   between s2 and s3), so single Gyr realisations cannot test frequency or instability statistics; an ensemble is
   needed (as in Rein et al. 2025). Mercury's maximum eccentricity: 0.303–0.345 among the five runs.
+
+### Iteration 40 — the recommended setting over 1 Gyr; CCD load balancing (rejected)
+**`p30c2`** (K_min 3, τ 3e-5, asm, `PINT_JR=1`, 2 chunks; idle machine): **0.986 Gyr in 2174 s (36.2 min)**, K̄ 3.33
+(K = 3/4/5/6: 45320/14419/2341/420) — higher than in the 100-window benchmark (3.18), so the long-run speedup is
+6570 s (serial asm, 6.57 ms per slice) / 2174 s = **3.0×**; 5 Gyr ≈ 3.1 h vs 9.1 h serial. Energy (dE/E vs own start,
+linear-fit slope per Gyr): serial s0 +4.0e-11, s12 +6.4e-11, s0jr +2.9e-11; parareal p3 (matrices, 10 calls/slice)
++7.5e-10, p3jr (fix, 10 calls) −1.1e-10, **p30c2 (fix, 2 calls) −6.7e-11** (end −5.5e-11, max 1.05e-10) → at the level
+of the serial runs. Mercury e max 0.343 (serial runs 0.303–0.333), a within 0.387095–0.387104 AU in all runs.
+**CCD load balancing** (`PINT_BAL=d`: slices on cores 0–7 get (1 + d) × the steps, cores 8–15 (1 − d) ×; 100 windows,
+asm, τ 3e-6): d = 0: K̄ 3.81, 2.82–2.93×; d = 0.02 / 0.03 / 0.04: K̄ 4.02 / 4.06 / 4.07, 2.74–2.80× — unequal slices
+cost more iterations than the balance gains. Rejected (option kept, off).
