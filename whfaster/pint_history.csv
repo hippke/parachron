@@ -64,3 +64,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 50,smarter stopping rules (offline, 625 windows),16,986,,,,,no,update rule already Pareto-efficient; contraction-based rules no better
 49b,projection fix validated (16 ICs x 100 Myr tau 3e-6),16,986,K 3.69,,,,yes,drift vs serial -1.16e-10 -> -0.48e-10 +- 0.36e-10 per Gyr (consistent with 0); shift matches predicted bias
 51,lead 1: helper placement on SMT siblings of the first cores (default); sweeper / four-lane giants kernel / no giants corrector rejected,16,986,K 3.81,,,,yes,2.86-2.90 -> 3.09-3.14x at tau 3e-6; 200 Myr tau 3e-5 391 -> 370 s
+52,upstream REBOUND single-core reference on 7950X (paper config),1,,,,,,ref,108.2 ns/step -> 5 Gyr in 9.15 h (paper: 9 h); fork serial reference within 1.2%

@@ -1469,3 +1469,15 @@ Interleaved repetitions on the idle 7950X (asm kernel, τ 3e-6, 100 windows, 8 h
   `PINT_HPIN=-1` off, `PINT_HPIN=c` manual). Bitwise identical (test_par; same final Δx). Benchmark: 3.36–3.37 s vs
   3.48–3.59 s unpinned (**−5 % wall**, 3.14×); 200 Myr ensemble member 1 (τ 3e-5): 391 → **370 s** (≈ 3.6× vs the idle
   serial 1333 s). Default setting τ 3e-6 now ≈ 3.1× (5 Gyr ≈ 2.9 h).
+
+### Iteration 52 — reference: unmodified upstream REBOUND on the 7950X (single core)
+`whfaster/bench_upstream.c` built against a fresh clone of hannorein/rebound `main` (262a9cc, Oct 16, 2026; WHFast512
+v2 = assembly only), paper configuration (Solar System ICs of `examples/whfast512_solar_system`, dt = 6 d, GR potential,
+corrector 17, concatenate_steps = 1e6), pinned to core 2 of the idle host2, 600 s:
+* 5545 calls × 1e6 steps = 5.5e9 steps (91 Myr); **108.22 ns/step** (median 108.22, min 107.59, max 109.63) →
+  **5 Gyr in 9.15 h** — the paper's "9 hours" (its Zen 5: ≈ 106 ns/step) is reproduced on this machine.
+* Upstream's own example (`examples/whfast512_solar_system`, dt = 5 d, no corrector, 0.1 Myr): 0.86 s, ≈ 118 ns/step
+  (short run incl. set-up); its WHFast comparison 13.6× slower.
+* Our serial reference (the same assembly kernel inside this fork, one call per 986 yr): 6.57 ms per 60000 steps =
+  109.5 ns/step, within 1.2 % of upstream → the parareal speed-ups are relative to the paper's serial performance.
+  (The energy printout of the benchmark omits WHFast512's GR potential and is not a conserved quantity.)

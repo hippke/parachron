@@ -17,7 +17,8 @@ Written Oct 21, 2026. Use these machines for all whfaster / parareal timing runs
 Use it for anything that needs more than a few cores, and for all speedup numbers that are compared with the
 earlier 7950X results in `RESEARCH_LOG.md` (Phase 8). WHFast512 uses the AVX-512 assembly kernel here.
 Fine slice ≈ 7.0 ms idle (C kernel; asm 6.6 ms), ≈ 8.3 ms with all 16 cores busy (clock); serial reference for
-`pint_pipe ... 100` windows ≈ 11.3 s (C) / 10.5 s (asm). CPUs 0–15 are the physical cores, 16–31 their SMT siblings.
+`pint_pipe ... 100` windows ≈ 11.3 s (C) / 10.5 s (asm). Unmodified upstream REBOUND (262a9cc), paper
+configuration, one core: 108.2 ns/step → 5 Gyr in 9.15 h (`whfaster/bench_upstream.c`, it. 52). CPUs 0–15 are the physical cores, 16–31 their SMT siblings.
 Governor `powersave` (amd-pstate), not changed. Pitfall: `pkill -f <pattern>` over ssh kills its own shell when the
 pattern appears in the command line — kill by PID.
 
