@@ -40,6 +40,8 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
   (d) the remaining per-call energy offset with corrector + GR (−0.9e-17; inverse corrector is algebraically exact,
   so it is a round-off asymmetry, probably Kepler solver or GR kick); (e) report the WHFast512 synchronization bias
   upstream (user decision).
+* To-do (user, Oct 22): (f) check what generalises to other planetary systems with at most 8 bodies
+  (`RESEARCH_PLAN_R5.md`, "Other open items"); (g) last: thorough study of faster tolerances before adopting one.
 
 ## 0. Read this first
 1. **Goal (user):** make one long Solar System trajectory (Sun + 8 planets, WHFast512, Jacobi coordinates,

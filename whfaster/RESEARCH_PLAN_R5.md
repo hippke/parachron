@@ -46,6 +46,12 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    the k = 0 prediction must be accurate too).
 
 ## Other open items
+* **Generalisation to other planetary systems (user request, Oct 22):** check what carries over to other systems with at
+  most 8 bodies (note: WHFast512 allows up to 8 planets + star). Generic already: driver, staged coarse schedule,
+  `jacobi_recursive`, dual-number derivatives. Solar-System-specific: PINT_NI = 4 / PINT_NP = 8 fixed, inner planets by the
+  mean-element theory and giants by a 360-d WH subsystem, GR constant in AU/yr units with a 1 M_sun star, slice
+  length / τ / grids tuned here. Tasks: make planet counts and the inner/outer split configurable (≈ 1–2 days), then test
+  convergence and accuracy on 2–3 test systems (a hierarchical system, a compact non-resonant one, a resonant one).
 * **Tolerance (user decision, Oct 22):** the default stays τ = 3e-6, K_min 3 (round-2 validated setting). When
   everything else is done: a thorough study of faster settings (τ 1e-5 … 1e-4, K_min 2 with giants at 180 d) with
   larger ensembles (≥ 16 ICs, ≥ 200 Myr: secular frequencies, Mercury statistics, energy) before adopting any of them.
