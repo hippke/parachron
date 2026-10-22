@@ -139,6 +139,9 @@ removed 20× by a 180 d giants step; Venus/Earth/Mars s2/s4 ≈ 1e-6 from the k 
 | C: ≈ dt 12 d | K_min 2, τ 1e-3 | 2.16 | 4.7× | 1.9 h |
 At equal accuracy a serial run with a larger step is the fair competitor: dt 8 d (class B) 6.9 h, dt 12 d (class C)
 4.6 h → parareal is 2.4–2.9× faster than that.
+The speedups above are 100-window benchmarks (1.6 Myr). Over a full 1 Gyr run the recommended class-A setting had
+K̄ 3.33 instead of 3.18: **0.986 Gyr in 36.2 min = 3.0× (5 Gyr ≈ 3.1 h vs 9.1 h)**, energy drift at the level of serial
+runs (it. 40). Expect the long-run figures to be ≈ 10 % below the benchmark ones.
 
 **1 Gyr runs** (asm kernel): energy at 0.986 Gyr — serial +2.9e-11 / +6.8e-11 (IC twin) / +3.5e-11 (with the fix);
 parareal with the old transformation **+7.4e-10** (linear), with the fix −8.8e-11 (a remaining −0.9e-17 per call

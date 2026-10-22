@@ -22,10 +22,12 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
   4. Ceiling of this scheme on 16 cores ≈ 16/K̄ × 0.84 − coarse chain; K̄ cannot go below 3 with K_min = 3. K_min = 2
      reaches K̄ 2.1–2.7 with systematic shifts at the dt 8–12 d level (giants' coarse step 180 d removes the Saturn
      part) — it. 37/38.
-  5. **Recommended settings and speeds** (it. 39, `PINT_SUMMARY.md` §11): reference accuracy `K_min 3, τ 3e-5`:
-     3.46× (5 Gyr in 2.7 h with the asm kernel vs 9.2 h serial); dt 6–8 d class 3.5–3.8×; dt 12 d class 4.7×.
-  6. 1 Gyr runs: energy drift of parareal +7.4e-10 (old transformation) → −8.8e-11 (fix, 10 calls per slice; small
-     residual −0.9e-17 per call with corrector + GR); now 2 calls per slice by default (`p30c2` run checks it).
+  5. **Recommended settings and speeds** (it. 39–40, `PINT_SUMMARY.md` §11): reference accuracy `K_min 3, τ 3e-5`:
+     3.46× in the 100-window benchmark, **3.0× over a full 1 Gyr run** (36.2 min; 5 Gyr ≈ 3.1 h vs 9.1 h serial, asm
+     kernel); dt 6–8 d class 3.5–3.8×; dt 12 d class 4.7× (benchmark figures).
+  6. 1 Gyr runs: energy drift of parareal +7.5e-10/Gyr (old transformation) → −1.1e-10 (fix, 10 calls per slice) →
+     −6.7e-11/Gyr (fix, 2 calls per slice, default now) — serial runs +2.9…+6.4e-11/Gyr. CCD load balancing
+     (`PINT_BAL`) was tried and rejected (it. 40).
 * Open leads (ranked): (a) the round-4 plan (cheap accurate inner coarse step) is still the only route to K = 2 at
   reference accuracy (the binding error is the λ of Venus/Earth/Mars, i.e. 3e-10 errors in their mean ln a);
   (b) an ensemble of Gyr runs (serial vs parareal) to test instability/secular statistics, which single runs cannot;
