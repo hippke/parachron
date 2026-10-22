@@ -4,7 +4,7 @@ from ptlib import mass
 _lib=ctypes.CDLL(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','pint','libpint.so'))
 class Cfg(ctypes.Structure):
     _fields_=[('masses',ctypes.c_double*9),('slice_days',ctypes.c_double),('dt_out_days',ctypes.c_double),
-              ('ng_ii',ctypes.c_int),('ng_io',ctypes.c_int),('maxj',ctypes.c_int),('kernel',ctypes.c_int),('heun',ctypes.c_int),('pcut_yr',ctypes.c_double),('ng_hi',ctypes.c_int),('alpha_hi',ctypes.c_double),('meann',ctypes.c_int),('dual',ctypes.c_int)]
+              ('ng_ii',ctypes.c_int),('ng_io',ctypes.c_int),('maxj',ctypes.c_int),('kernel',ctypes.c_int),('heun',ctypes.c_int),('pcut_yr',ctypes.c_double),('ng_hi',ctypes.c_int),('alpha_hi',ctypes.c_double),('meann',ctypes.c_int),('dual',ctypes.c_int),('gcorr',ctypes.c_int)]
 _lib.pint_default_cfg.argtypes=[ctypes.POINTER(Cfg),ctypes.POINTER(ctypes.c_double),ctypes.c_double]
 _lib.pint_coarse.argtypes=[ctypes.POINTER(Cfg),ctypes.c_void_p,ctypes.c_void_p]
 class CoarseC:

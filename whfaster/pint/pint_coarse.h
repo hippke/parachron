@@ -23,6 +23,7 @@ struct pint_cfg {
     double alpha_hi;
     int meann;              // 1: start tables rebuilt at the inner planets' mean ln a (mean motions in the small divisors)
     int dual;               // 1 (default): dE/dv by dual numbers (exact) instead of finite differences in the tables
+    int gcorr;              // symplectic corrector order of the giants' coarse WH run (default 17)
 };
 void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_days);
 // G: E_in -> E_out over one slice

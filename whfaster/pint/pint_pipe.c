@@ -285,6 +285,7 @@ int main(int argc, char** argv){
         if (bal!=0.) fprintf(stderr,"load balance: %ld / %ld steps per slice\n",nstep_s[0],nstep_s[N-1]);
     }
     if (fkern!=2) cfg.kernel = fkern;
+    if (getenv("PINT_GKERNEL")){ cfg.kernel=atoi(getenv("PINT_GKERNEL")); for (int n=0;n<N;n++) cfgs[n].kernel=cfg.kernel; }   // giants' coarse kernel
     const char* outp=getenv("PINT_OUT"); const double pert = getenv("PINT_PERT") ? atof(getenv("PINT_PERT")) : 0.;
     const double Tsl=slice_days*DAY;
     struct reb_simulation* r0=ss_create(6.,pert); el E0; pint_sim_to_el(r0,E0); reb_simulation_free(r0);

@@ -21,7 +21,7 @@ void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_day
     // giants' kernel: the C kernels are bitwise identical across instruction sets, so use the AVX2 one where the
     // CPU has no AVX-512 (same results); PINT_KERNEL overrides
     if (!__builtin_cpu_supports("avx512f")) c->kernel = 3;
-    c->meann = 0; c->dual = 1;   // dual: exact dE/dv (iteration 43); PINT_DUAL=0 restores the finite differences of rounds 2-4
+    c->meann = 0; c->gcorr = 17; c->dual = 1;   // dual: exact dE/dv (iteration 43); PINT_DUAL=0 restores the finite differences of rounds 2-4
     // experiment overrides (environment): PINT_MEANN, PINT_NGHI, PINT_DTOUT, PINT_ALPHAHI, PINT_MAXJ (7: Uranus and Neptune paired with the inner planets)
     const char* e;
     if ((e=getenv("PINT_MEANN"))) c->meann=atoi(e);
@@ -31,6 +31,7 @@ void pint_default_cfg(struct pint_cfg* c, const double* masses, double slice_day
     if ((e=getenv("PINT_MAXJ"))) c->maxj=atoi(e);
     if ((e=getenv("PINT_DUAL"))) c->dual=atoi(e);
     if ((e=getenv("PINT_KERNEL"))) c->kernel=atoi(e);
+    if ((e=getenv("PINT_GCORR"))) c->gcorr=atoi(e);
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
@@ -375,7 +376,7 @@ static void outer_wh(const struct pint_cfg* c, const double E[PINT_NP][6], doubl
     s->dt=c->slice_days/nst*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
-    w->gr_potential=1; w->corrector=17; w->kernel=c->kernel;
+    w->gr_potential=1; w->corrector=c->gcorr; w->kernel=c->kernel;
     w->concatenate_steps=nst;
     reb_simulation_steps(s,1);
     for (int j=PINT_NI;j<PINT_NP;j++){
