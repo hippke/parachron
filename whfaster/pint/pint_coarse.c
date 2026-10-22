@@ -1,5 +1,7 @@
+#define _GNU_SOURCE
 // Coarse propagator for parareal around WHFast512 (see pint_coarse.h). Mirrors parareal/mgc.py (config A).
 #include "pint_coarse.h"
+#include <stdio.h>
 #include "integrator_whfast512.h"
 #include "pint_dual.h"
 #include <math.h>
@@ -279,9 +281,29 @@ static void* pool_worker(void* a){
     }
     return NULL;
 }
+// the other hardware thread of logical CPU q's core (from sysfs), -1 if none
+static int smt_sibling(int q){
+    char fn[128]; snprintf(fn,sizeof fn,"/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list",q);
+    FILE* f=fopen(fn,"r"); if (!f) return -1;
+    char buf[64]={0}; const int ok = fgets(buf,sizeof buf,f)!=NULL; fclose(f); if (!ok) return -1;
+    int a=-1,b=-1; char sep=0;
+    if (sscanf(buf,"%d%c%d",&a,&sep,&b)!=3) return -1;      // "0,16" or "0-1"
+    if (a==q) return b;
+    if (b==q) return a;
+    return -1;
+}
 void pint_set_threads(int nhelpers){
     pthread_mutex_lock(&pool_busy);
-    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen)); pthread_detach(th); }
+    // Helper placement (iteration 51): by default helper q is pinned to the SMT sibling of logical CPU q, i.e. of the core
+    // of slice q in pint_pipe; in iteration k the cores of slices 0..k-1 have no fine work, so these hardware threads
+    // are the least contended ones (+5-6 % on the 7950X). PINT_HPIN=-1: not pinned; PINT_HPIN=c: helper q on CPU c - q.
+    const char* hp=getenv("PINT_HPIN"); const int hpin = hp ? atoi(hp) : -2;
+    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen));
+        int cpu=-1;
+        if (hpin>=0) cpu = hpin-q;
+        else if (hpin==-2) cpu = smt_sibling(q);
+        if (cpu>=0){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(cpu,&cs); pthread_setaffinity_np(th,sizeof cs,&cs); }
+        pthread_detach(th); }
     if (nhelpers>pool_n) pool_n=nhelpers;
     pthread_mutex_unlock(&pool_busy);
 }
