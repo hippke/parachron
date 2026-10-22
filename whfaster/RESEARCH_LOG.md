@@ -1208,3 +1208,35 @@ Energy vs serial: within ±1e-11 everywhere.
   from the inner secular rates; bitwise serial = parallel checked) for K_min 2 + giants 180 d: τ 1e-4 K̄ 2.92,
   s2 +9.7e-7 ± 4e-7, s4 +6.2e-7 ± 3e-7 (without: +1.2e-6 ± 3e-7, +7.6e-7 ± 2e-7); τ 3e-4 K̄ 2.55, inner rms
   3.1e-6. → The k = 2 shifts are a convergence-level effect, not this missing term. Not kept.
+
+### Iteration 39 — clean timings of the accuracy classes; the 1 Gyr runs
+**Timings** (idle host2, `runs/timing.sh`, `timing2.sh`; 100 windows = 1.58 Myr, `PINT_JR=1`, 8 helpers, mode 2;
+speedup vs a serial run with the same kernel; two repetitions each):
+| setting | class (it. 38) | K̄ | asm (kernel 1) | C (kernel 2) |
+|---|---|---|---|---|
+| K_min 3, τ 3e-6 | A reference | 3.81 | 2.89–2.91 (3.60 s) | 2.91–3.02 |
+| K_min 3, τ 3e-5 | A reference | 3.18 | **3.44–3.48** (3.03 s) | 3.44 |
+| K_min 3, τ 1e-4 | B dt 6–8 d | 3.05 | 3.53–3.60 | 3.51 |
+| K_min 2, τ 3e-4, giants 180 d | B dt 6–8 d | 2.66 | **3.74–3.80** | 3.72 |
+| K_min 2, τ 1e-4, giants 180 d | B | 3.00 | 3.42–3.43 | 3.35–3.39 |
+| K_min 3, τ 3e-5, giants 180 d | A | 3.18 | — | 3.17–3.24 |
+| K_min 2, τ 3e-4 (giants 360 d) | Saturn-biased | 2.68 | 3.96–4.03 | 4.05 |
+| K_min 2, τ 1e-3 | C dt 12 d | 2.16 | **4.69–4.74** | 4.75 |
+| K_min 2, τ 1e-3, giants 180 d | C | 2.14 | 4.43–4.45 | 4.38–4.47 |
+| τ 3e-6, `PINT_JR=0` / `1` | | 3.80 / 3.81 | | 2.88–2.89 / 2.91–2.95 |
+| τ 3e-6, `PINT_CHUNKS=2` / `1` | | 3.81 | | 3.03 / 2.78 |
+* The serial asm reference runs at 6.6 ms per 986 yr: 5 Gyr ≈ 9.2 h (the paper's 9 h). Parareal (asm): class A
+  τ 3e-5 ≈ **2.7 h**, τ 3e-6 ≈ 3.2 h; class B ≈ 2.4 h; class C ≈ 1.9 h. A serial run at the accuracy of class B
+  (dt 8 d) would take 6.9 h, of class C (dt 12 d) 4.6 h → parareal gains 2.4–2.9× at equal accuracy.
+* `jacobi_recursive` costs no speed. Two chunks per speculative fine slice are as fast as ten (one is slower: no
+  early abandonment) → default `PINT_CHUNKS` 2.
+**1 Gyr runs** (0.986 Gyr, 1e6 boundaries, asm kernel; `runs/gyr/`, `gyr_ana.py`): dE/E at the end — serial
+`s0` +2.9e-11, `s12` (IC + 1e-12 AU) +6.8e-11 (nearly linear: one call per slice × 7e-17 with the matrices), serial
+with the fix `s0jr` +3.5e-11; parareal τ 3e-6 with the matrices `p3` **+7.4e-10** (linear), with the fix `p3jr`
+−8.8e-11 (wanders to −8.8e-11 after ≈ 400 Myr ≈ 1e7 calls × −0.9e-17, the small residual seen with corrector + GR in
+it. 36 at 1.8σ) → the fix removes ≈ 90 % of the drift; with 2 chunks per slice (5× fewer calls) the remainder should
+be at the level of the serial runs (run `p30c2`, τ 3e-5, started). Serial wall times on shared cores: 9707 s / 9066 s.
+* Secular-frequency statistics over 49 windows of 20 Myr: the KS test rejects even between the two serial runs
+  (p = 0.01 for g2, g3) — consecutive windows of one chaotic trajectory are strongly correlated (and NAFF switches
+  between s2 and s3), so single Gyr realisations cannot test frequency or instability statistics; an ensemble is
+  needed (as in Rein et al. 2025). Mercury's maximum eccentricity: 0.303–0.345 among the five runs.
