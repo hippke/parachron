@@ -141,7 +141,8 @@ At equal accuracy a serial run with a larger step is the fair competitor: dt 8 d
 4.6 h → parareal is 2.4–2.9× faster than that.
 The speedups above are 100-window benchmarks (1.6 Myr). Over a full 1 Gyr run the recommended class-A setting had
 K̄ 3.33 instead of 3.18: **0.986 Gyr in 36.2 min = 3.0× (5 Gyr ≈ 3.1 h vs 9.1 h)**, energy drift at the level of serial
-runs (it. 40). Expect the long-run figures to be ≈ 10 % below the benchmark ones.
+runs in a single realisation (it. 40; the 16-member ensemble of it. 46 resolves a residual −1.25e-10 per Gyr).
+Expect the long-run figures to be ≈ 10 % below the benchmark ones.
 
 **Coarse step details (it. 43–44):** exact dE/dv by dual numbers (`pint_dual.h`, default) instead of finite
 differences (which were only good to ≈ 1e-6 in some components): same K̄, a few % faster. Giants' coarse step: 360 d
@@ -160,3 +161,7 @@ parareal with the old transformation **+7.4e-10** (linear), with the fix −8.8e
 with corrector + GR, ≈ 1e7 calls); default now 2 calls per fine slice (5× fewer, same speed). Single Gyr trajectories
 cannot test secular or instability statistics (even two serial runs differ significantly in a KS test of correlated
 20-Myr windows) — that needs an ensemble.
+**Ensemble of 16 × 200 Myr (it. 46):** serial vs parareal (τ 3e-5) from the same ICs: Mercury's eccentricity
+(maximum and mean) and all eight inner secular frequencies statistically indistinguishable (KS p 0.06–0.94). The
+energy still shows a small systematic drift in parareal: −1.25e-10 per Gyr relative to serial (≈ 3.5σ), 6× smaller
+than before the WHFast512 fix; source open (see `RESEARCH_LOG.md` it. 46).

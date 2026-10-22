@@ -1360,5 +1360,24 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
   P/E cores: 1.32×; trajectory output fine). The coarse step's default giants kernel was the AVX-512 C kernel, so
   `test_par` and the Python wrapper failed on AVX2 CPUs → default now falls back to the AVX2 C kernel (bitwise
   identical results by design), `PINT_KERNEL` overrides; unchanged on AVX-512 machines.
-  asm kernel; serial runs (16 at once on cores 0–15) and parareal runs (K_min 3, τ 3e-5, defaults) from the same ICs.
-  Results below.
+  asm kernel; serial runs (16 at once on cores 0–15, 1503 s each) and parareal runs (K_min 3, τ 3e-5, defaults) from
+  the same ICs (405 s each, K̄ 3.06–3.27; 3.3× the idle serial time):
+  | statistic (after the first 50 Myr) | serial | parareal | KS p |
+  |---|---|---|---|
+  | Mercury e_max | 0.3040 ± 0.0038 | 0.3036 ± 0.0017 | 0.21 (Mann-Whitney 0.64) |
+  | Mercury ⟨e⟩ | 0.1876 ± 0.0035 | 0.1884 ± 0.0047 | 0.43 |
+  | g1, g2, g3, g4 (7 windows × 16 runs pooled) | | | 0.08, 0.86, 0.94, 0.65 |
+  | s1, s2, s3, s4 | | | 0.15, 0.11, 0.06, 0.65 |
+  | energy trend per Gyr (linear fit per run) | **+2.5e-11 ± 1.0e-10** | **−1.0e-10 ± 0.97e-10** | **0.00** |
+  | dE/E at 200 Myr | +4.3e-12 (rms 2.1e-11) | −1.8e-11 (rms 2.5e-11) | |
+  (s2/s3 widths of 2–4 ″/yr are NAFF switching between the two lines; pooled windows are correlated, so the p-values
+  overstate significance.)
+* **Dynamics: no detectable difference** between the serial and the parareal ensemble (Mercury's eccentricity,
+  all eight inner secular frequencies).
+* **Energy: a residual systematic drift remains**: −1.25e-10 per Gyr relative to serial (≈ 3.5σ with 16 members; the
+  single 1 Gyr run p30c2 had −6.7e-11), i.e. ≈ −1.6e-16 per slice, ≈ −6e-10 over 5 Gyr. Before the
+  `jacobi_recursive` fix it was +7.5e-10 per Gyr (6× larger, opposite sign). The per-call corrector + GR residual
+  (−0.9e-17 × 2 calls per slice) explains only ≈ 1/7 of it; the round trips of the driver's element conversions
+  (−2.8e-18 ± 3.1e-18 each) are too small. Candidates for the next session: the energy projection target (it uses
+  the fine energy increment of the previous iterate, F(U^(K−1)), whose WH energy oscillation does not telescope along
+  the accepted chain), or a τ dependence (test τ 3e-6 vs 3e-5 with ≥ 16 members).
