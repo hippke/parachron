@@ -1401,3 +1401,38 @@ serial coarse chain (N × T_G) grows with the slice count just like config B's i
 (T_F ≈ 8.6–8.9 ms loaded; iteration 25: config B needs K ≈ 4 for 40 slices, the accurate step ≈ 3):
 config B 40 × 0.26 + 4.2 × 8.9 ≈ 48 ms per window → ≈ 5.5×; config C 40 × 0.7 + 3 × 9.3 ≈ 56 ms → ≈ 4.7×.
 Break-even needs T_G(config C) ≈ 0.35–0.4 ms at any N. Docs corrected (`PINT_SUMMARY.md`, `HANDOVER.md`, plan R5).
+
+### Iteration 49 — the residual energy drift: a rounding bias in the energy projection (FIXED)
+`PINT_EDIAG=1` (new) accumulates, relative to |E0|, (a) the energy change of every completed fine result's round trip
+sim → elements → sim and (b) the residual of every energy projection (energy of the projected boundary − target).
+10 Myr, N = 16, τ 3e-6, asm kernel:
+| quantity | n | mean | rms |
+|---|---|---|---|
+| round trip of fine results | 35500 | −2.0e-18 ± 2.4e-18 | 4.4e-16 |
+| **projection residual (old: v *= √(1 + (E_t − E)/K))** | 31952 | **−1.001e-16 ± 0.025e-16** | 4.6e-16 |
+| projection residual (new: v += v·d, d = (E_t − E)/(2K)) | 31917 | −0.026e-16 ± 0.025e-16 | 4.5e-16 |
+* The projection scaled the velocities by f = √(1 + x) with x ≈ 1e-12: f is a double near 1, quantised to steps of
+  2.2e-16 (above 1) / 1.1e-16 (below 1), and the rounding of 1 + x and of the square root is not symmetric for such
+  small x → a systematic energy deficit of 1.0e-16 per projection. With ≈ 12 of 16 boundaries projected per window
+  this is ≈ −0.8e-16 per slice, i.e. most of the −1.6e-16 per slice (−1.25e-10 per Gyr) seen in iterations 46/47.
+* Fix: apply the correction as an increment, v += v·d, which keeps the full relative precision of d. Residual now
+  consistent with zero. `PINT_PROJ=2` (default) in `pint_pipe` and the same code in `pint_long`; `PINT_PROJ=1` restores
+  the old projection. Validation ensemble (16 ICs × 100 Myr, τ 3e-6) running.
+
+### Iteration 50 — lead #2: smarter stopping rules (offline evaluation; no gain)
+Full update sequences u_1 … u_6 (largest boundary update per iteration) for all 625 windows of a 10 Myr run with an
+unreachable τ (`PINT_UPDDIAG=1`, `runs/p9/upd_full.txt`); medians u_k = 1.6e-2, 3.8e-4, 6.2e-6, 1.2e-7, 2.7e-8,
+2.2e-8 AU (floor ≈ 2e-8). For a rule stopping at K the accepted error is ≈ u_{K+1}. Compared: R0 = current rule
+(first k ≥ K_min with u_k ≤ τ) and R1 = predicted error s · u_k²/u_{k−1} ≤ ε (contraction estimated from the window
+itself; K_min 2 or 3; s = 1, 3, 10):
+| rule | K̄ | accepted error median / 90 % / max [AU] |
+|---|---|---|
+| R0, τ 3e-6 | 3.75 | 3.0e-8 / 6.7e-8 / 1.0e-6 |
+| R0, τ 1e-5 | 3.35 | 4.9e-8 / 2.1e-7 / 1.3e-6 |
+| R1, s 1, ε 3e-7 | 3.32 | 5.1e-8 / 2.8e-7 / 1.7e-6 |
+| R0, τ 3e-5 | 3.13 | 8.5e-8 / 5.2e-7 / 2.0e-6 |
+| R1, s 1, ε 1e-6 | 3.16 | 7.8e-8 / 5.2e-7 / 3.4e-6 |
+| R1, K_min 2, s 1, ε 1e-6 | 3.12 | 8.7e-8 / 7.1e-7 / 2.5e-5 |
+All other R1 variants lie on or behind the R0 curve. → **The update rule is already on the efficient frontier**: at
+equal K̄ no contraction-based rule accepts better states (the contraction varies too much between windows to be
+predicted from the previous step), and K = 2 stops cost accuracy in the worst windows. Lead #2 closed (gain 0 %).
