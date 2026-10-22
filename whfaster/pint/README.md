@@ -20,6 +20,9 @@ subsystem; energy projection of the corrected boundary states.
     ./pint_pipe 16 360000 3 100 1 1 1 1e-5 6 8 2    # validated by a 7-run ensemble: ~3.2x
     PINT_OUT=run ./pint_pipe 16 360000 3 5070 1 0 1 3e-6 6 8 2   # 80 Myr, trajectory in run_pr.bin, no serial
     # AVX2-only CPUs (no AVX-512): kernel argument 3; on the 7950X kernel 1 (assembly) is 8 % faster than 2
+    # the 5 Gyr run of arXiv 2609.25339 (Solar System ICs of tools/ss_ics.h): 316900 windows x 16 x 986 yr,
+    # about 3.1 h on the 7950X at reference accuracy (serial: 9.1 h); output: one record per 986 yr (~2 GB)
+    PINT_OUT=ss5gyr ./pint_pipe 16 360000 3 316900 1 0 1 3e-5 6 8 2
 Environment: `PINT_OUT` (trajectory), `PINT_PERT` (IC shift), `PINT_SERONLY`/`PINT_DT` (serial reference only, its
 step), `PINT_JR` (default 1: WHFast512 `jacobi_recursive`, removes an energy drift of +7e-17 per kernel call),
 `PINT_CHUNKS`, `PINT_TRACE`, `PINT_UPDDIAG`, coarse-step experiments `PINT_MEANN`, `PINT_NGHI`, `PINT_ALPHAHI`,
