@@ -132,8 +132,8 @@ removed 20× by a 180 d giants step; Venus/Earth/Mars s2/s4 ≈ 1e-6 from the k 
 | class | setting (`pint_pipe 16 360000 K_min W kernel 1 1 τ 6 8 2`) | K̄ | speedup | 5 Gyr (asm) |
 |---|---|---|---|---|
 | serial reference, dt 6 d | — | — | 1 | 9.2 h |
-| A: reference accuracy (adds ≤ 7e-7 ″/yr rms, unbiased) | K_min 3, τ 3e-6 | 3.81 | 2.9–3.0× | 3.2 h |
-| A | **K_min 3, τ 3e-5** | 3.18 | **3.44–3.48×** | **2.7 h** |
+| A: reference accuracy (adds ≤ 7e-7 ″/yr rms, unbiased) | **K_min 3, τ 3e-6 (default)** | 3.81 | **2.9–3.0×** | **3.2 h** |
+| A | K_min 3, τ 3e-5 (validated; adoption deferred) | 3.18 | 3.44–3.48× | 2.7 h |
 | B: between dt 6 and 8 d | K_min 3, τ 1e-4 | 3.05 | 3.5–3.6× | 2.6 h |
 | B | K_min 2, τ 3e-4, `PINT_DTOUT=180` | 2.66 | 3.7–3.8× | 2.4 h |
 | C: ≈ dt 12 d | K_min 2, τ 1e-3 | 2.16 | 4.7× | 1.9 h |

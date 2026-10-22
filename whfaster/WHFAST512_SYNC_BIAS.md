@@ -1,7 +1,7 @@
 # WHFast512: systematic energy change at every synchronization (draft bug report)
 
-*Found Oct 22, 2026 while validating long parallel-in-time runs (`RESEARCH_LOG.md` iteration 36). Draft text for an
-upstream issue; nothing has been submitted.*
+*Found Oct 22, 2026 while validating long parallel-in-time runs (`RESEARCH_LOG.md` iteration 36). Confirmed on unmodified
+upstream `main` (262a9cc). Draft text for an upstream issue; to be reported by the user.*
 
 ## Summary
 Every WHFast512 integration call (i.e. every synchronization, e.g. every output) changes the total energy of the
@@ -26,9 +26,15 @@ Same number of steps done in C calls instead of one call, averaged over many sta
 Serial runs with 100 calls per 986 yr drift linearly by +7.1e-17 (asm) / +7.7e-17 (C) per call. A 1 Gyr serial run
 with one call per 986 yr (1e6 calls) ends at +6.8e-11, nearly linearly.
 
+## Reproduction on unmodified upstream
+`whfaster/sync_bias_repro.c` (public API only; Solar System, dt = 6 d, corrector 17, no GR; same steps in 1 vs 10
+calls, 30000 start states), built against a fresh clone of hannorein/rebound `main` (commit 262a9cc, Oct 16, 2026) on an
+AMD Ryzen 9 7950X: **extra dE/E per call +7.54e-17 ± 0.49e-17** (15σ); runs in 15 s.
+
 ## Cause
 `inertial_to_jacobi_posvel()` and `jacobi_to_inertial_posvel_and_com()` in `src/integrator_whfast512.c` use
-`mat8_inertial_to_jacobi` and `mat8_jacobi_to_inertial` (built in `recalculate_constants_compute()`). Their product,
+`mat8_inertial_to_jacobi` and `mat8_jacobi_to_inertial` (built in `recalculate_constants()` upstream;
+`recalculate_constants_compute()` in this fork). Their product,
 evaluated in long double for the Solar System masses, is diagonal to 1e-19 with diag − 1 =
 [−1.37, −0.22, +0.07, −0.05, +0.45, −1.37, −0.17, −0.77] × 1e-16 (Mercury … Neptune). A round trip therefore scales
 each planet's Jacobi position and velocity by (1 + e_i), the same for every state, changing its energy by ≈ 2 e_i |U_i|.

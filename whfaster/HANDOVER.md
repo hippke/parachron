@@ -22,7 +22,8 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
   4. Ceiling of this scheme on 16 cores ≈ 16/K̄ × 0.84 − coarse chain; K̄ cannot go below 3 with K_min = 3. K_min = 2
      reaches K̄ 2.1–2.7 with systematic shifts at the dt 8–12 d level (giants' coarse step 180 d removes the Saturn
      part) — it. 37/38.
-  5. **Recommended settings and speeds** (it. 39–40, `PINT_SUMMARY.md` §11): reference accuracy `K_min 3, τ 3e-5`:
+  5. **Default stays τ = 3e-6, K_min 3 (user decision, Oct 22); faster settings: study deferred to the end (R5 plan).**
+     Settings and speeds (it. 39–40, `PINT_SUMMARY.md` §11): reference accuracy `K_min 3, τ 3e-5`:
      3.46× in the 100-window benchmark, **3.0× over a full 1 Gyr run** (36.2 min; 5 Gyr ≈ 3.1 h vs 9.1 h serial, asm
      kernel); dt 6–8 d class 3.5–3.8×; dt 12 d class 4.7× (benchmark figures).
   6. 1 Gyr runs: energy drift of parareal +7.5e-10/Gyr (old transformation) → −1.1e-10 (fix, 10 calls per slice) →

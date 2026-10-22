@@ -46,6 +46,9 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    the k = 0 prediction must be accurate too).
 
 ## Other open items
+* **Tolerance (user decision, Oct 22):** the default stays τ = 3e-6, K_min 3 (round-2 validated setting). When
+  everything else is done: a thorough study of faster settings (τ 1e-5 … 1e-4, K_min 2 with giants at 180 d) with
+  larger ensembles (≥ 16 ICs, ≥ 200 Myr: secular frequencies, Mercury statistics, energy) before adopting any of them.
 * Ensemble of Gyr runs (serial vs parareal) for secular and instability statistics — single runs cannot test them
   (iteration 39). E.g. 16 serial + 16 parareal runs of 200 Myr from perturbed ICs, compare distributions of g1, s1,
   Mercury's e_max.
