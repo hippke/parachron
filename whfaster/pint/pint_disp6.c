@@ -134,3 +134,88 @@ void pint_disp6(const struct pint_cfg* c, const double E[PINT_NP][6], const doub
         disp[i][1]+=1.5*n[i]*creal(sl0);
     }
 }
+
+// Round 5, step 1: the same displacements with one kernel per pair instead of one FFT + evaluation per element.
+// disp = sum_k F_k e^{i k.theta}/(k.nu) = (1/n^2) sum_g f(theta_g) W1(g) with W1 = FFT(e^{i k.theta}/(k.nu)), and the
+// shear term sum_k F_k e^{i k.theta}/(k.nu)^2 likewise with W2; W1, W2 do not depend on the element, so per pair two
+// FFTs replace six FFTs and six evaluations. Exact identity (agrees with pint_disp6 to round-off).
+static void kernels(int n, double na, double nb, double la, double lb, double complex* W1, double complex* W2){
+    double complex ea[NGM], eb[NGM];
+    for (int a=0;a<n;a++){ const int K=kfd(a,n); ea[a]=cexp(I*K*la); eb[a]=cexp(I*K*lb); }
+    for (int a=0;a<n;a++){ const int Ka=kfd(a,n);
+        for (int b=0;b<n;b++){ const double kk=Ka*na+kfd(b,n)*nb;
+            if (kk==0.){ W1[a*n+b]=0; W2[a*n+b]=0; continue; }
+            const double complex e=ea[a]*eb[b]; W1[a*n+b]=e/kk; W2[a*n+b]=e/(kk*kk); } }
+    fft2d(W1,n); fft2d(W2,n);
+}
+double pint_disp6k_t[3];   // timing of the last call: grids, pair fills, kernels + sums
+static double nowd(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
+void pint_disp6k(const struct pint_cfg* c, const double E[PINT_NP][6], const double* n_div, double disp[PINT_NI][6]){
+    const double t0=nowd(); double tf=0, tk=0;
+    const double* m=c->masses; double Mint[PINT_NP], mu[PINT_NP], n[PINT_NP]; double acc=0;
+    for (int i=0;i<PINT_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; n[i]= n_div ? n_div[i] : sqrt(mu[i]/exp(3.*E[i][0])); }
+    const int N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii);
+    static __thread double ri[PINT_NI][NGM][3], vi[PINT_NI][NGM][3], Di[PINT_NI][NGM][6][3], rj[PINT_NP][NGM][3];
+    static __thread double fa[6][NGM*NGM], fb[6][NGM*NGM];
+    static __thread double complex W1[NGM*NGM], W2[NGM*NGM];
+    for (int i=0;i<PINT_NI;i++){
+        double Eg[6]; memcpy(Eg,E[i],sizeof Eg);
+        for (int g=0;g<N1;g++){ Eg[1]=2.*M_PI*g/N1; el_to_rv6(mu[i],Eg,ri[i][g],vi[i][g]); dEdv6(mu[i],ri[i][g],vi[i][g],Di[i][g]); }
+        for (int e=0;e<6;e++) disp[i][e]=0;
+    }
+    for (int j=PINT_NI;j<=c->maxj;j++){ double Eg[6]; memcpy(Eg,E[j],sizeof Eg); double vd[3];
+        for (int g=0;g<c->ng_io;g++){ Eg[1]=2.*M_PI*g/c->ng_io; el_to_rv6(mu[j],Eg,rj[j][g],vd); } }
+    const double t1=nowd();
+    for (int i=0;i<PINT_NI;i++){
+        for (int j=i+1;j<=c->maxj;j++){
+            const double ta=nowd();
+            const int inner_j=j<PINT_NI;
+            const int hi=inner_j && c->ng_hi>0 && exp(E[i][0]-E[j][0])>=c->alpha_hi;
+            const int Ng= inner_j ? (hi ? N1 : c->ng_ii) : c->ng_io, si= inner_j ? N1/Ng : 1;
+            const int sio = inner_j ? 0 : N1/c->ng_io;
+            const double pf=inner_j ? -(Mint[j]+m[j+1])/Mint[j]*m[i+1] : 0.;
+            for (int a=0;a<Ng;a++){
+                const int ia = inner_j ? a*si : a*sio;
+                const double* r1=ri[i][ia];
+                for (int b=0;b<Ng;b++){
+                    const double* r2= inner_j ? ri[j][b*si] : rj[j][b];
+                    const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
+                    const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
+                    const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
+                    double ai[3]; for (int x=0;x<3;x++) ai[x]=m[j+1]*(d[x]*id3-r2[x]*irj3);
+                    double aj[3]={0,0,0};
+                    if (inner_j){ const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
+                        for (int x=0;x<3;x++) aj[x]=pf*(d[x]*id3-r2[x]*irj3+r1[x]*irj3-3.*r2[x]*(rdot/rj2*irj3)); }
+                    for (int e=0;e<6;e++){
+                        const double* De=Di[i][ia][e]; fa[e][a*Ng+b]=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2];
+                        if (inner_j){ const double* Dj=Di[j][b*si][e]; fb[e][a*Ng+b]=Dj[0]*aj[0]+Dj[1]*aj[1]+Dj[2]*aj[2]; }
+                    }
+                }
+            }
+            const double tb=nowd(); tf+=tb-ta;
+            kernels(Ng,n[i],n[j],E[i][1],E[j][1],W1,W2);
+            const double nrm=1./((double)Ng*Ng*Ng*Ng);    // 1/n^2 of F_k and 1/n^2 of the kernel sum
+            double sa[6]={0}, sb[6]={0}, ra0=0, rb0=0;
+            for (int g=0;g<Ng*Ng;g++){
+                const double w1=cimag(W1[g]);
+                for (int e=0;e<6;e++){ sa[e]+=fa[e][g]*w1; if (inner_j) sb[e]+=fb[e][g]*w1; }
+                ra0+=fa[0][g]*creal(W2[g]); if (inner_j) rb0+=fb[0][g]*creal(W2[g]);
+            }
+            for (int e=0;e<6;e++){ disp[i][e]+=sa[e]*nrm*Ng*Ng; if (inner_j) disp[j][e]+=sb[e]*nrm*Ng*Ng; }
+            disp[i][1]+=1.5*n[i]*ra0*nrm*Ng*Ng; if (inner_j) disp[j][1]+=1.5*n[j]*rb0*nrm*Ng*Ng;
+            tk+=nowd()-tb;
+        }
+        // GR single-planet term (as in pint_disp6)
+        double complex f1[6][NGM]; const double pre=-6.*m[0]*m[0]/(CGR*CGR);
+        for (int a=0;a<N1;a++){ const double* r1=ri[i][a]; const double rr=sqrt(r1[0]*r1[0]+r1[1]*r1[1]+r1[2]*r1[2]), r4=rr*rr*rr*rr;
+            double ag[3]; for (int x=0;x<3;x++) ag[x]=pre*r1[x]/r4;
+            for (int e=0;e<6;e++){ double s=0; for (int x=0;x<3;x++) s+=Di[i][a][e][x]*ag[x]; f1[e][a]=s; } }
+        double complex sl0=0;
+        for (int e=0;e<6;e++){ fftd(f1[e],N1,1); double complex s=0;
+            for (int a=0;a<N1;a++){ const int K=kfd(a,N1); if (!K) continue; const double kk=K*n[i];
+                const double complex ph=cexp(I*K*E[i][1])*f1[e][a]/N1; s+=ph/(I*kk); if (e==0) sl0+=ph/(kk*kk); }
+            disp[i][e]+=creal(s); }
+        disp[i][1]+=1.5*n[i]*creal(sl0);
+    }
+    pint_disp6k_t[0]=t1-t0; pint_disp6k_t[1]=tf; pint_disp6k_t[2]=tk;
+}
