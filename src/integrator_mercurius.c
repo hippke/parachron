@@ -788,7 +788,7 @@ static void reb_mercurius_encounter_forces_parallel(struct reb_simulation* r, st
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
             const double L = _L(r,_r,dcritmax);
-            double prefact = -G*particles[mj].m*(1.-L)/(_r*_r*_r);
+            double prefact = -(G*(1.-L)/(_r*_r*_r))*particles[mj].m; // same rounding as the serial loop
             particles[mi].ax    += prefact*dx;
             particles[mi].ay    += prefact*dy;
             particles[mi].az    += prefact*dz;
@@ -809,7 +809,7 @@ static void reb_mercurius_encounter_forces_parallel(struct reb_simulation* r, st
                 const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
                 const double dcritmax = MAX(dcrit[mi],dcrit[mj]);
                 const double L = _L(r,_r,dcritmax);
-                double prefact = -G*particles[mj].m*(1.-L)/(_r*_r*_r);
+                double prefact = -(G*(1.-L)/(_r*_r*_r))*particles[mj].m; // same rounding as the serial loop
                 particles[mi].ax    += prefact*dx;
                 particles[mi].ay    += prefact*dy;
                 particles[mi].az    += prefact*dz;
@@ -964,7 +964,7 @@ static void reb_mercurius_wh_forces_parallel(struct reb_simulation* r, struct re
             const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
             const double dcritmax = MAX(dcrit[i],dcrit[j]);
             const double L = _L(r,_r,dcritmax);
-            const double prefact = -G*particles[j].m*L/(_r*_r*_r);
+            const double prefact = -(G*L/(_r*_r*_r))*particles[j].m; // same rounding as the serial loop
             particles[i].ax    += prefact*dx;
             particles[i].ay    += prefact*dy;
             particles[i].az    += prefact*dz;
@@ -979,7 +979,7 @@ static void reb_mercurius_wh_forces_parallel(struct reb_simulation* r, struct re
                 const double _r = sqrt(dx*dx + dy*dy + dz*dz + softening2);
                 const double dcritmax = MAX(dcrit[i],dcrit[j]);
                 const double L = _L(r,_r,dcritmax);
-                const double prefact = -G*particles[j].m*L/(_r*_r*_r);
+                const double prefact = -(G*L/(_r*_r*_r))*particles[j].m; // same rounding as the serial loop
                 particles[i].ax    += prefact*dx;
                 particles[i].ay    += prefact*dy;
                 particles[i].az    += prefact*dz;
