@@ -29,6 +29,10 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
   6. 1 Gyr runs: energy drift of parareal +7.5e-10/Gyr (old transformation) → −1.1e-10 (fix, 10 calls per slice) →
      −6.7e-11/Gyr (fix, 2 calls per slice, default now) — serial runs +2.9…+6.4e-11/Gyr. CCD load balancing
      (`PINT_BAL`) was tried and rejected (it. 40).
+  8. Session 3 (it. 49–51): the residual energy drift was a rounding bias of the energy projection (fixed, validated
+     by an ensemble: parareal energy now statistically equivalent to serial); smarter stopping rules give nothing
+     (the update rule is Pareto-efficient); helpers pinned to the SMT siblings of the first cores: +5 % (default τ 3e-6
+     now ≈ 3.1×, 5 Gyr ≈ 2.9 h).
   7. Ensemble 16 × 200 Myr (it. 46): dynamics (Mercury e, secular frequencies) indistinguishable from serial; energy
      drift −1.25e-10 per Gyr relative to serial remains (3.5σ) — the first thing to investigate next (lead (0)).
 * Open leads (ranked): (0) the residual parareal energy drift of −1.25e-10 per Gyr (it. 46; not τ-dependent, it. 47):

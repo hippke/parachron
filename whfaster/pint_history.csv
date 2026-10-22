@@ -63,3 +63,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 49,energy projection rounding bias found and fixed (PINT_PROJ=2),16,986,,,,,yes,projection residual -1.0e-16 -> -0.03e-16 per projection; explains most of the -1.25e-10/Gyr drift
 50,smarter stopping rules (offline, 625 windows),16,986,,,,,no,update rule already Pareto-efficient; contraction-based rules no better
 49b,projection fix validated (16 ICs x 100 Myr tau 3e-6),16,986,K 3.69,,,,yes,drift vs serial -1.16e-10 -> -0.48e-10 +- 0.36e-10 per Gyr (consistent with 0); shift matches predicted bias
+51,lead 1: helper placement on SMT siblings of the first cores (default); sweeper / four-lane giants kernel / no giants corrector rejected,16,986,K 3.81,,,,yes,2.86-2.90 -> 3.09-3.14x at tau 3e-6; 200 Myr tau 3e-5 391 -> 370 s

@@ -1446,3 +1446,26 @@ itself; K_min 2 or 3; s = 1, 3, 10):
 All other R1 variants lie on or behind the R0 curve. → **The update rule is already on the efficient frontier**: at
 equal K̄ no contraction-based rule accepts better states (the contraction varies too much between windows to be
 predicted from the previous step), and K = 2 stops cost accuracy in the worst windows. Lead #2 closed (gain 0 %).
+
+### Iteration 51 — lead #1: a cheaper coarse hop (helper placement KEPT; the rest rejected)
+Interleaved repetitions on the idle 7950X (asm kernel, τ 3e-6, 100 windows, 8 helpers):
+| variant | speed-up (3 reps) | K̄ |
+|---|---|---|
+| baseline (helpers unpinned) | 2.86 / 2.86 / 2.90 | 3.81 |
+| giants' k = 0 trajectory precomputed by a sweeper thread (`PINT_GSWEEP=1`, bitwise identical) | 2.91 / 2.96 / 2.87 | 3.81 |
+| + giants' coarse run with the four-lane AVX2 C kernel (`PINT_GKERNEL=3`) | 2.95 / 2.89 / 2.88 | 3.81 |
+| giants' coarse run without corrector (`PINT_GCORR=0`) | 2.18–2.32 | **5.03** |
+| helpers pinned to the siblings of the last cores (CPUs 31…24) | 2.86–2.99 | 3.81 |
+| **helpers pinned to the siblings of the first cores (CPUs 23…16)** | **3.09 / 3.09 / 3.10** | 3.81 |
+* Trace with the sweeper: the k = 0 hop stays at 0.25 ms → under load the hop is not bound by the giants' run on the
+  calling core but by the helpers' table chain on hardware threads shared with fine solves. The sweeper and the
+  four-lane kernel therefore give ≤ 1.5 % (within the noise; kept as options, off). The giants' corrector is needed.
+* **Helper placement.** In iteration k the cores of slices 0 … k − 1 have no fine work, so the SMT siblings of the
+  *first* cores are the least contended hardware threads for most of the window. Pinning helper q to the sibling of
+  CPU q: 4 helpers 2.95–3.00, 6: 3.07, **8: 3.11–3.13**, 10–12 (siblings of cores 8–11 too): 2.86–2.90; τ 3e-5:
+  3.60 vs 3.42. With the sweeper on top: 3.00–3.07 (an unpinned extra thread competes).
+* Now the default (`pint_set_threads`: sibling of CPU q read from
+  `/sys/devices/system/cpu/cpu<q>/topology/thread_siblings_list`, so it works for both sibling numberings;
+  `PINT_HPIN=-1` off, `PINT_HPIN=c` manual). Bitwise identical (test_par; same final Δx). Benchmark: 3.36–3.37 s vs
+  3.48–3.59 s unpinned (**−5 % wall**, 3.14×); 200 Myr ensemble member 1 (τ 3e-5): 391 → **370 s** (≈ 3.6× vs the idle
+  serial 1333 s). Default setting τ 3e-6 now ≈ 3.1× (5 Gyr ≈ 2.9 h).
