@@ -111,6 +111,10 @@ The Python module is `parachron` and can be installed next to REBOUND. Its API i
 REBOUND run after replacing `import rebound` with `import parachron as rebound`. The C library keeps REBOUND's C API
 (`reb_*` functions, `rebound.h`) and is built as before (`make` in `src/`, or see the examples).
 
+## Contributing
+
+All my repositories embrace collaboration between humans and AI. Contributions are welcome, whether they are written by you, by an AI assistant, or by both together, and they will be handled promptly. Please open an [issue](https://github.com/hippke/parachron/issues) or a pull request.
+
 ## Credit and citation
 
 Parachron is built on REBOUND. Please cite REBOUND as described in its [documentation](https://rebound.hanno-rein.de/)
