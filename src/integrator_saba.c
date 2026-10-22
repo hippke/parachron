@@ -357,11 +357,12 @@ void reb_integrator_saba_synchronize(struct reb_simulation* const r, void* state
     struct reb_integrator_saba_state* saba = state;
     int type = saba->type;
     struct reb_particle* sync_pj  = NULL;
-    if (saba->keep_unsynchronized){
-        sync_pj = malloc(sizeof(struct reb_particle)*r->N);
-        memcpy(sync_pj,saba->p_jh,r->N*sizeof(struct reb_particle));
-    }
     if (r->is_synchronized == 0){
+        // Only copy p_jh if a synchronization is needed (p_jh is NULL before the first step).
+        if (saba->keep_unsynchronized){
+            sync_pj = malloc(sizeof(struct reb_particle)*r->N);
+            memcpy(sync_pj,saba->p_jh,r->N*sizeof(struct reb_particle));
+        }
         const int N = r->N;
         if (type>=0x100){ // correctors on
                           // Drift already done, just need corrector

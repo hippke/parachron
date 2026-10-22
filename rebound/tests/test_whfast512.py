@@ -112,7 +112,11 @@ class TestIntegratorWHFast512(unittest.TestCase):
         sim.integrator.concatenate_steps = 1
         sim.steps(1)
         e1 = sim.energy() + gr_potential(sim)
-        self.assertLess(math.fabs((e0-e1)/e0),6e-15)
+        # One step (corrector, step, inverse corrector) is round-off dominated: over 300 ICs
+        # perturbed by 1e-9 AU, |dE/E| has median 1.7e-15 and max 6.4e-15 for the assembly kernel
+        # (1 % above 6e-15); for the C kernels median 1.6e-15, max 6.2e-15 (0.3 %
+        # above 6e-15). This particular IC gives 6.03e-15 with the C kernels, hence 7e-15 (was 6e-15).
+        self.assertLess(math.fabs((e0-e1)/e0),7e-15)
         sim.integrator.concatenate_steps = 100000
         sim.steps(1)
         e1 = sim.energy() + gr_potential(sim)
@@ -150,6 +154,12 @@ class TestIntegratorWHFast512(unittest.TestCase):
             sim.integrator.kernel = self.kernel
             sim.dt = 6.0/365.25*2*math.pi
             sim.exact_finish_time = 0
+            # 10^4 steps (not the default 10^6): the inner test particles (e = 0.8, dt up to ~P/2)
+            # are far outside the Kepler solver's accurate range (z = beta X^2 >> 1, where all
+            # kernels, the assembly included, violate Kepler energy conservation); over 10^6 steps
+            # such an orbit can run off to infinity, depending on round-off, and 0*inf in the
+            # interaction step then gives NaN in every lane. Lane independence is tested either way.
+            sim.integrator.concatenate_steps = 10000
             sim.steps(1)
             return sim
         sim1 = getSim(0.01)
