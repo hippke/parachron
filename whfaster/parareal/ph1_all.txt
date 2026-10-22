@@ -1,6 +1,0 @@
-   all_comps                epoch     0:  1.13e+04       225      1.26
-   all_comps                epoch  1030:  2.47e+05  6.38e+03       420
-   all_comps                epoch  3400:  1.16e+04  1.88e+03      5.77
-   all_comps                epoch  6000:  3.35e+03        67      1.36
-   all_comps                epoch  9300:     3e+03      29.6     0.767
-== all_comps                median k1..: 1.13e+04 225 1.36 | worst: 2.47e+05 6.38e+03 420 | k2<=2 at 0/5 | 42s

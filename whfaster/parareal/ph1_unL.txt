@@ -1,5 +1,0 @@
-   all_mn1_g3_dt180_nsub10_un_L10 epoch  3400:       396      1.03     0.752
-   all_mn1_g3_dt180_nsub10_un_L10 epoch  4500:  3.38e+03      16.5      1.49
-   all_mn1_g3_dt180_nsub10_un_L10 epoch  8160:       997      1.44     0.547
-   all_mn1_g3_dt180_nsub10_un_L10 epoch  1030:  1.79e+03      4.91      2.83
-== all_mn1_g3_dt180_nsub10_un_L10 median k1..: 1.39e+03 3.17 1.12 | worst: 3.38e+03 16.5 2.83 | k2<=2 at 2/4 | 1234s

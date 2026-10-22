@@ -56,18 +56,3 @@ tags
 .nfs*
 *.asm_o
 utsc_nfs/
-
-# benchmarks/perf/run.py build-flag marker
-src/.bench_build_flags
-whfaster/parareal/*.pkl
-whfaster/parareal/*.npz
-whfaster/parareal/__pycache__/
-whfaster/pint/pint_test
-whfaster/pint/pint_run
-whfaster/pint/*.so
-whfaster/pint/pint_long
-whfaster/pint/*.bin
-whfaster/pint/pint_pipe
-whfaster/pint/ser_pert
-whfaster/pint/runs/
-whfaster/pint/libpint.so

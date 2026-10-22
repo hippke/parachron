@@ -1,5 +1,0 @@
-k=0 err/noise at n=5,10,20,40: ['2.4e+05', '1.8e+05', '1.7e+05', '1.7e+05']
-k=1: err/noise at n=5,10,20,30,40: 8.9e+01 6.2e+02 3.3e+03 7.3e+03 7.3e+03 | max 1.0e+04 | boundaries <=2x noise up to n=1
-k=2: err/noise at n=5,10,20,30,40: 2.2e-01 1.3e+00 1.9e+01 1.0e+02 1.0e+02 | max 1.4e+02 | boundaries <=2x noise up to n=10
-k=3: err/noise at n=5,10,20,30,40: 1.7e-01 3.9e-01 3.0e-01 6.7e-01 6.7e-01 | max 9.2e-01 | boundaries <=2x noise up to n=30
-k=4: err/noise at n=5,10,20,30,40: 2.2e-01 4.3e-01 3.5e-01 6.1e-01 6.1e-01 | max 6.7e-01 | boundaries <=2x noise up to n=30

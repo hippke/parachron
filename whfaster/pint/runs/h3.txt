@@ -1,1 +1,0 @@
-parareal: 215.52 s on 2 threads (serial 0.00 s); fine slices 27000 (2.70 per slice of the span), coarse steps 34000, coarse time 36.18 s

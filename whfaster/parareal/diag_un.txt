@@ -1,5 +1,0 @@
-all_mn1_g3_dt180_nsub10_un
-epoch  3400 k=2: Mer    0.7 Ven      1 Ear    2.1 Mar     12 Jup   0.13 Sat  0.047 Ura  0.056 Nep  0.019
-epoch  4500 k=2: Mer    3.7 Ven   0.18 Ear    1.8 Mar     13 Jup   0.26 Sat   0.23 Ura   0.11 Nep   0.11
-epoch  8160 k=2: Mer   0.25 Ven    7.4 Ear    8.1 Mar   0.53 Jup  0.058 Sat   0.36 Ura  0.067 Nep   0.14
-epoch  1030 k=2: Mer   0.83 Ven    3.7 Ear    4.6 Mar    1.9 Jup   0.29 Sat    0.1 Ura  0.031 Nep  0.032

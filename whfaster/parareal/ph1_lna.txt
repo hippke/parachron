@@ -1,6 +1,0 @@
-   lna_only                 epoch     0:  7.88e+03       245       1.1
-   lna_only                 epoch  1030:  3.78e+05  1.93e+04       869
-   lna_only                 epoch  3400:  1.06e+04  1.14e+03      5.17
-   lna_only                 epoch  6000:  2.13e+03      69.3       1.5
-   lna_only                 epoch  9300:  4.48e+03      39.7     0.628
-== lna_only                 median k1..: 7.88e+03 245 1.5 | worst: 3.78e+05 1.93e+04 869 | k2<=2 at 0/5 | 42s
