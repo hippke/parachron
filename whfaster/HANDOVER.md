@@ -20,11 +20,19 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
      parareal adds 1e-7 (τ 3e-6) … 2e-6 (τ 1e-4) and is unbiased → larger τ is defensible; τ = 1e-5 validated by a
      7-realisation ensemble (3.24×).
   4. Ceiling of this scheme on 16 cores ≈ 16/K̄ × 0.84 − coarse chain; K̄ cannot go below 3 with K_min = 3. K_min = 2
-     reaches K̄ 2.1–2.6 but with a systematic Saturn g6 error (coarse giants at 360 d) — see it. 37/38.
-* Open leads (ranked): (a) K_min = 2 with a more accurate giants' coarse step (the Saturn error) — it. 38 ensemble;
-  (b) the round-4 plan (cheap accurate inner coarse step) is still the only route to K = 2 at reference accuracy;
+     reaches K̄ 2.1–2.7 with systematic shifts at the dt 8–12 d level (giants' coarse step 180 d removes the Saturn
+     part) — it. 37/38.
+  5. **Recommended settings and speeds** (it. 39, `PINT_SUMMARY.md` §11): reference accuracy `K_min 3, τ 3e-5`:
+     3.46× (5 Gyr in 2.7 h with the asm kernel vs 9.2 h serial); dt 6–8 d class 3.5–3.8×; dt 12 d class 4.7×.
+  6. 1 Gyr runs: energy drift of parareal +7.4e-10 (old transformation) → −8.8e-11 (fix, 10 calls per slice; small
+     residual −0.9e-17 per call with corrector + GR); now 2 calls per slice by default (`p30c2` run checks it).
+* Open leads (ranked): (a) the round-4 plan (cheap accurate inner coarse step) is still the only route to K = 2 at
+  reference accuracy (the binding error is the λ of Venus/Earth/Mars, i.e. 3e-10 errors in their mean ln a);
+  (b) an ensemble of Gyr runs (serial vs parareal) to test instability/secular statistics, which single runs cannot;
   (c) per-core fine-time imbalance (second CCD 3–5 % slower; the slowest slice sets every iteration);
-  (d) residual per-call energy offset from the symplectic corrector (≈ −1.5e-17 ± 1.1e-17, not significant yet).
+  (d) the remaining per-call energy offset with corrector + GR (−0.9e-17; inverse corrector is algebraically exact,
+  so it is a round-off asymmetry, probably Kepler solver or GR kick); (e) report the WHFast512 synchronization bias
+  upstream (user decision).
 
 ## 0. Read this first
 1. **Goal (user):** make one long Solar System trajectory (Sun + 8 planets, WHFast512, Jacobi coordinates,

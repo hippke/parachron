@@ -125,4 +125,23 @@ ordinary serial WHFast512 runs with frequent outputs.
 **Accuracy yardstick (it. 35, 37):** frequency errors of serial runs vs dt = 3 d: dt 6 d up to 5.1e-6 ″/yr (Mars g4;
 scales as dt², a systematic bias), dt 8 d 1.0e-5, dt 12 d 2.6e-5. Parareal is unbiased (7-realisation ensemble) and
 adds, on top of the dt = 6 d error: τ 3e-6 → 1e-7, τ 1e-5 → 4e-7, τ 3e-5 → 7e-7, τ 1e-4 → 2e-6 (all with K_min 3).
-Allowing a stop at k = 2 (K_min 2) gives K̄ < 3 but a systematic Saturn g6 error (dt 8–12 d level).
+Allowing a stop at k = 2 (K_min 2) gives K̄ < 3 but systematic shifts (Saturn g6 from the coarse giants at 360 d,
+removed 20× by a 180 d giants step; Venus/Earth/Mars s2/s4 ≈ 1e-6 from the k = 2 stops themselves).
+
+**Speed at each accuracy class** (idle 7950X, 16 cores, `PINT_JR=1`, 8 helpers; it. 39):
+| class | setting (`pint_pipe 16 360000 K_min W kernel 1 1 τ 6 8 2`) | K̄ | speedup | 5 Gyr (asm) |
+|---|---|---|---|---|
+| serial reference, dt 6 d | — | — | 1 | 9.2 h |
+| A: reference accuracy (adds ≤ 7e-7 ″/yr rms, unbiased) | K_min 3, τ 3e-6 | 3.81 | 2.9–3.0× | 3.2 h |
+| A | **K_min 3, τ 3e-5** | 3.18 | **3.44–3.48×** | **2.7 h** |
+| B: between dt 6 and 8 d | K_min 3, τ 1e-4 | 3.05 | 3.5–3.6× | 2.6 h |
+| B | K_min 2, τ 3e-4, `PINT_DTOUT=180` | 2.66 | 3.7–3.8× | 2.4 h |
+| C: ≈ dt 12 d | K_min 2, τ 1e-3 | 2.16 | 4.7× | 1.9 h |
+At equal accuracy a serial run with a larger step is the fair competitor: dt 8 d (class B) 6.9 h, dt 12 d (class C)
+4.6 h → parareal is 2.4–2.9× faster than that.
+
+**1 Gyr runs** (asm kernel): energy at 0.986 Gyr — serial +2.9e-11 / +6.8e-11 (IC twin) / +3.5e-11 (with the fix);
+parareal with the old transformation **+7.4e-10** (linear), with the fix −8.8e-11 (a remaining −0.9e-17 per call
+with corrector + GR, ≈ 1e7 calls); default now 2 calls per fine slice (5× fewer, same speed). Single Gyr trajectories
+cannot test secular or instability statistics (even two serial runs differ significantly in a KS test of correlated
+20-Myr windows) — that needs an ensemble.
