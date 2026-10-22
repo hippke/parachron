@@ -18,13 +18,13 @@
  *          - 0.5*f*f'' in the Halley step is a multiplication by 0.5 (the assembly subtracts one from
  *            the exponent, which gives the same result for normal numbers, but not for zero).
  *          - Starting value of the Kepler solver: sixth-order series reversion of Kepler's equation in
- *            universal variables (whfaster it. 2; the assembly uses the first-order guess dt/r), so
+ *            universal variables (the assembly uses the first-order guess dt/r), so
  *            that a single Halley step is followed by a single Newton step for the Solar System at
  *            dt <= 6 days. The first Newton step uses an approximation of 1/f' from the Halley step
  *            (no division on the critical path). The Stiefel functions are evaluated again at the
  *            final X as in the assembly, with plain Horner plus a correction for the rounding of the
- *            leading constants instead of compensated Horner (see whfaster it. 2 for the round-off
- *            bias of the earlier shortcuts).
+ *            leading constants instead of compensated Horner (see w512_stiefel_Gs13_ for the
+ *            round-off bias that the plain shortcuts had).
  *          - MXCSR (flush-to-zero / denormals-are-zero) is not changed.
  *          All three instantiations use explicit fused multiply-adds, so they give bitwise
  *          identical results on every machine (the generic one uses fma() from libm).
@@ -190,10 +190,10 @@ REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs03_)(const int numTerms, const
 }
 
 // High accuracy (Gs1..Gs3), plain Horner with a correction for the rounding of the leading
-// constants (whfaster it. 2). The constants 1/k! are rounded to double, and since the leading terms
+// constants. The constants 1/k! are rounded to double, and since the leading terms
 // dominate the sums, plain Horner has a systematic relative error: 1/3! is stored 0.5 ulp low, so G3
-// comes out 5.6e-17 too small in every step, which biases the Kepler step (Kepler grid test, see
-// whfaster/RESEARCH_LOG.md). The rounding errors of the leading constants (W512_IF_ERR, rounded -
+// comes out 5.6e-17 too small in every step, which biases the Kepler step (seen as a systematic
+// drift of a in a grid of single Kepler orbits). The rounding errors of the leading constants (W512_IF_ERR, rounded -
 // true) are added before the final rounding (fused multiply-add), in parallel with the Horner chain.
 // numTerms odd.
 REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs13_)(const int numTerms, const V X, const V beta, V* G1, V* G2, V* G3){
@@ -338,7 +338,7 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
     const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
     const V zeta = w_fnmadd(beta, R, c->M);
-    // Starting value (whfaster it. 1): series reversion of the universal Kepler equation to sixth
+    // Starting value: series reversion of the universal Kepler equation to sixth
     // order in tau = dt/r,
     //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
     // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
@@ -428,16 +428,16 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
 
     // Newton iterations with the accurate series; lanes stop individually (masked: a converged
     // lane keeps its X, so its result does not depend on the other lanes).
-    // Correction form X <- X - f(X) RI (whfaster it. 2): in the first iteration RI is the
+    // Correction form X <- X - f(X) RI: in the first iteration RI is the
     // approximation from the Halley step (lanes with ri_ok), so that no division is on the critical
     // path; otherwise, and in later iterations, RI = 1/f'(X) exactly (quadratic convergence). A
     // relative error delta of RI changes X by delta*dX < 1e-8 * EPS.
-    // Bias (whfaster it. 2): the Stiefel functions are evaluated again at the final X (below), as in
+    // Bias: the Stiefel functions are evaluated again at the final X (below), as in
     // the assembly, and w512_stiefel_Gs13_ corrects for the rounding of the constants 1/k!. The
-    // earlier shortcuts (items 40/42/46: plain Horner without the correction, first-order update of
+    // earlier shortcuts (plain Horner without the correction, first-order update of
     // G1..G3 instead of a new evaluation) biased the round-off of the Kepler step: Mercury's
     // semi-major axis drifted by +1.4e-18 per step at dt = 6 d (t = +59 over 64 phases x 1e6 steps),
-    // Kepler grid <t^2> up to ~20 instead of ~1.2 (see whfaster/RESEARCH_LOG.md).
+    // and in a grid of single Kepler orbits the drift statistic <t^2> reached ~20 instead of ~1.2.
     K k4 = c->k1;
     int it = 0;
     const int all_ri_ok = !w_kany(w_kandnot(ri_ok, c->k1));
@@ -727,7 +727,8 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
 }
 
 // Out-of-line Kepler and interaction steps for the paired loop (eight-lane instantiations; the
-// four-lane ones define W_PAIR_INLINE and inline them, see item 51 in PERF_LOG.md) (one copy of the Kepler step and one
+// four-lane ones define W_PAIR_INLINE and inline them, because there the two systems must overlap inside one
+// function) (one copy of the Kepler step and one
 // interaction step per gr/nsys/encounter/escape combination used): the out-of-order core still
 // overlaps the two simulations' chains across the calls, and the paired kernels stay small.
 #if defined(_MSC_VER) && !defined(__clang__)

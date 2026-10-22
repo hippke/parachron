@@ -114,7 +114,7 @@ class TestIntegratorWHFast512(unittest.TestCase):
         e1 = sim.energy() + gr_potential(sim)
         # One step (corrector, step, inverse corrector) is round-off dominated: over 300 ICs
         # perturbed by 1e-9 AU, |dE/E| has median 1.7e-15 and max 6.4e-15 for the assembly kernel
-        # (1 % above 6e-15); for the C kernels (whfaster it. 2) median 1.6e-15, max 6.2e-15 (0.3 %
+        # (1 % above 6e-15); for the C kernels median 1.6e-15, max 6.2e-15 (0.3 %
         # above 6e-15). This particular IC gives 6.03e-15 with the C kernels, hence 7e-15 (was 6e-15).
         self.assertLess(math.fabs((e0-e1)/e0),7e-15)
         sim.integrator.concatenate_steps = 100000

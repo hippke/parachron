@@ -66,6 +66,29 @@ static void reb_collision_root_range(const double x, const double reach, const d
     *hi = (int)b;
 }
 
+/**
+ * @brief Root boxes (index ranges per axis, inclusive) whose centre lies within `reach` of the position of gb.
+ */
+static void reb_collision_root_box_ranges(const struct reb_simulation* const r, const struct reb_vec6d gb, const double reach, int* ilo, int* ihi, int* jlo, int* jhi, int* klo, int* khi){
+    reb_collision_root_range(gb.x, reach, r->root_size, r->N_root_x, ilo, ihi);
+    reb_collision_root_range(gb.y, reach, r->root_size, r->N_root_y, jlo, jhi);
+    reb_collision_root_range(gb.z, reach, r->root_size, r->N_root_z, klo, khi);
+}
+
+/**
+ * @brief Ghost box offsets of the inner ring (at most 3x3x3; the same for all particles), at index
+ * ((gbx+1)*3+(gby+1))*3+(gbz+1).
+ */
+static void reb_collision_ghostbox_table(struct reb_simulation* const r, const int N_ghost_xcol, const int N_ghost_ycol, const int N_ghost_zcol, struct reb_vec6d table[27]){
+    for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
+        for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
+            for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
+                table[((gbx+1)*3+(gby+1))*3+(gbz+1)] = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
+            }
+        }
+    }
+}
+
 void reb_collision_search(struct reb_simulation* const r){
     r->N_collisions = 0;
     size_t N_root = r->N_root_x*r->N_root_y*r->N_root_z;
@@ -243,15 +266,8 @@ void reb_collision_search(struct reb_simulation* const r){
                 int N_ghost_xcol = (r->N_ghost_x>1?1:r->N_ghost_x);
                 int N_ghost_ycol = (r->N_ghost_y>1?1:r->N_ghost_y);
                 int N_ghost_zcol = (r->N_ghost_z>1?1:r->N_ghost_z);
-                // Ghost box offsets (same for all particles; at most 3x3x3)
                 struct reb_vec6d gbtable[27];
-                for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
-                    for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
-                        for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
-                            gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)] = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
-                        }
-                    }
-                }
+                reb_collision_ghostbox_table(r, N_ghost_xcol, N_ghost_ycol, N_ghost_zcol, gbtable);
                 const struct reb_particle* const particles = r->particles;
                 // Find second largest radius
                 size_t l1 = SIZE_MAX;
@@ -305,9 +321,7 @@ void reb_collision_search(struct reb_simulation* const r){
                                 {
                                     const double reach = p1_r + largest_radius + 0.86602540378443*r->root_size;
                                     int ilo, ihi, jlo, jhi, klo, khi;
-                                    reb_collision_root_range(gb.x, reach, r->root_size, r->N_root_x, &ilo, &ihi);
-                                    reb_collision_root_range(gb.y, reach, r->root_size, r->N_root_y, &jlo, &jhi);
-                                    reb_collision_root_range(gb.z, reach, r->root_size, r->N_root_z, &klo, &khi);
+                                    reb_collision_root_box_ranges(r, gb, reach, &ilo, &ihi, &jlo, &jhi, &klo, &khi);
                                     for (int k=klo; k<=khi; k++){
                                         for (int j=jlo; j<=jhi; j++){
                                             for (int i=ilo; i<=ihi; i++){
@@ -349,15 +363,8 @@ void reb_collision_search(struct reb_simulation* const r){
                 int N_ghost_xcol = (r->N_ghost_x>1?1:r->N_ghost_x);
                 int N_ghost_ycol = (r->N_ghost_y>1?1:r->N_ghost_y);
                 int N_ghost_zcol = (r->N_ghost_z>1?1:r->N_ghost_z);
-                // Ghost box offsets (same for all particles; at most 3x3x3)
                 struct reb_vec6d gbtable[27];
-                for (int gbx=-N_ghost_xcol; gbx<=N_ghost_xcol; gbx++){
-                    for (int gby=-N_ghost_ycol; gby<=N_ghost_ycol; gby++){
-                        for (int gbz=-N_ghost_zcol; gbz<=N_ghost_zcol; gbz++){
-                            gbtable[((gbx+1)*3+(gby+1))*3+(gbz+1)] = reb_boundary_get_ghostbox(r, gbx,gby,gbz);
-                        }
-                    }
-                }
+                reb_collision_ghostbox_table(r, N_ghost_xcol, N_ghost_ycol, N_ghost_zcol, gbtable);
                 const struct reb_particle* const particles = r->particles;
                 // Loop over all particles
 #pragma omp parallel for schedule(guided) if(reb_omp_parallel(16.*(double)N_projectiles)) num_threads(reb_omp_threads())
@@ -401,9 +408,7 @@ void reb_collision_search(struct reb_simulation* const r){
                                 {
                                     const double reach = p1_r + fabs(p1_r_plus_dtv - p1_r) + fabs(maxdrift) + largest_radius + 0.86602540378443*r->root_size; // fabs: dt may be negative
                                     int ilo, ihi, jlo, jhi, klo, khi;
-                                    reb_collision_root_range(gb.x, reach, r->root_size, r->N_root_x, &ilo, &ihi);
-                                    reb_collision_root_range(gb.y, reach, r->root_size, r->N_root_y, &jlo, &jhi);
-                                    reb_collision_root_range(gb.z, reach, r->root_size, r->N_root_z, &klo, &khi);
+                                    reb_collision_root_box_ranges(r, gb, reach, &ilo, &ihi, &jlo, &jhi, &klo, &khi);
                                     for (int k=klo; k<=khi; k++){
                                         for (int j=jlo; j<=jhi; j++){
                                             for (int i=ilo; i<=ihi; i++){

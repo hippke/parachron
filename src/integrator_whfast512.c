@@ -844,6 +844,28 @@ static void whfast512_steps_single(struct reb_simulation* const r, uint64_t N_st
     whfast512->concatenate_steps = saved;
 }
 
+// The paired kernel for two simulations, or NULL if they cannot be stepped together (different settings, the same
+// simulation twice, or no paired version of the kernel).
+static whfast512_pair_kernel whfast512_select_pair_kernel(const struct reb_simulation* const r1, const struct reb_simulation* const r2){
+    const struct reb_integrator_whfast512_state* const w1 = r1->integrator.state;
+    const struct reb_integrator_whfast512_state* const w2 = r2->integrator.state;
+    const int enc1 = r1->exit_min_distance ? 1 : 0, esc1 = r1->exit_max_distance ? 1 : 0;
+    const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
+    if (r1 == r2 || w1->kernel_used != w2->kernel_used || w1->four_lanes != w2->four_lanes
+            || w1->gr_potential != w2->gr_potential || w1->N_systems != w2->N_systems
+            || enc1 != enc2 || esc1 != esc2){
+        return NULL;
+    }
+    switch (w1->kernel_used){
+        case REB_WHFAST512_KERNEL_C_AVX512: return reb_whfast512c_full_steps_pair_avx512;
+        // Eight-lane AVX2: one simulation already fills the 16 registers, pairing gains nothing
+        // (0.97-1.00x measured), so the two are stepped separately.
+        case REB_WHFAST512_KERNEL_C_AVX2: return w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : NULL;
+        case REB_WHFAST512_KERNEL_C_GENERIC: return w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic;
+        default: return NULL; // the assembly kernel has no paired version
+    }
+}
+
 void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct reb_simulation* const r2, uint64_t N_steps){
     struct reb_simulation* rs[2] = {r1, r2};
     for (int i=0; i<2; i++){
@@ -857,29 +879,16 @@ void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct
             return;
         }
     }
-    struct reb_integrator_whfast512_state* w1 = r1->integrator.state;
-    struct reb_integrator_whfast512_state* w2 = r2->integrator.state;
-    const int enc1 = r1->exit_min_distance ? 1 : 0, esc1 = r1->exit_max_distance ? 1 : 0;
-    const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
-    whfast512_pair_kernel kernel = NULL;
-    if (r1 != r2 && w1->kernel_used == w2->kernel_used && w1->four_lanes == w2->four_lanes
-            && w1->gr_potential == w2->gr_potential && w1->N_systems == w2->N_systems
-            && enc1 == enc2 && esc1 == esc2){
-        switch (w1->kernel_used){
-            case REB_WHFAST512_KERNEL_C_AVX512: kernel = reb_whfast512c_full_steps_pair_avx512; break;
-            // Eight-lane AVX2: one simulation already fills the 16 registers, pairing gains nothing
-            // (0.97-1.00x measured), so the two are stepped separately.
-            case REB_WHFAST512_KERNEL_C_AVX2: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_avx2x4 : NULL; break;
-            case REB_WHFAST512_KERNEL_C_GENERIC: kernel = w1->four_lanes ? reb_whfast512c_full_steps_pair_genericx4 : reb_whfast512c_full_steps_pair_generic; break;
-            default: break; // the assembly kernel has no paired version
-        }
-    }
+    const whfast512_pair_kernel kernel = whfast512_select_pair_kernel(r1, r2);
     if (!kernel){
         // Cannot be paired: integrate one after the other (same results).
         whfast512_steps_single(r1, N_steps);
         if (r1 != r2) whfast512_steps_single(r2, N_steps);
         return;
     }
+    struct reb_integrator_whfast512_state* const w1 = r1->integrator.state;
+    struct reb_integrator_whfast512_state* const w2 = r2->integrator.state;
+    const int enc = r1->exit_min_distance ? 1 : 0, esc = r1->exit_max_distance ? 1 : 0;   // the same for r2
     r1->status = REB_STATUS_RUNNING;
     r2->status = REB_STATUS_RUNNING;
     const int skip1 = whfast512_prepare(r1, w1);
@@ -887,7 +896,7 @@ void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1, struct
     uint64_t done = 0;
     int st1 = 0, st2 = 0;
     const int nsys = w1->four_lanes ? 2 : (int)w1->N_systems;
-    const int stopped = kernel(w1->data, w2->data, N_steps, &done, skip1, skip2, &reb_sigint, &st1, &st2, w1->gr_potential, nsys, enc1, esc1);
+    const int stopped = kernel(w1->data, w2->data, N_steps, &done, skip1, skip2, &reb_sigint, &st1, &st2, w1->gr_potential, nsys, enc, esc);
     for (int i=0; i<2; i++){
         struct reb_simulation* r = rs[i];
         r->t += r->dt*done;

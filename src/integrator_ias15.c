@@ -421,6 +421,108 @@ static void reb_integrator_ias15_stage_forces(const struct reb_simulation* const
     }
 }
 
+// Allocates the scratch memory of the stage-parallel mode and copies the masses; returns the number of row blocks.
+static size_t reb_integrator_ias15_stage_prepare(const struct reb_simulation* const r, struct reb_integrator_ias15_state* const ias15, const size_t N){
+    const size_t K = reb_integrator_ias15_stage_blocks(N);
+    const size_t need = 43*N + (K>1 ? 21*K*N : 0);
+    if (ias15->N_allocated_stage_buf<need){
+        free(ias15->stage_buf);
+        ias15->stage_buf = malloc(sizeof(double)*need);
+        ias15->N_allocated_stage_buf = need;
+    }
+    double* const stage_m = ias15->stage_buf + 42*N;
+    for (size_t i=0; i<N; i++) stage_m[i] = r->particles[i].m;
+    return K;
+}
+// Accelerations of substep n from the stage-parallel force evaluation into at.
+static inline void reb_integrator_ias15_stage_accelerations(const double* const stage_buf, const size_t n, const size_t N, double* const at){
+    const double* const sax = stage_buf + (n-1)*6*N + 3*N;
+    for (size_t k=0; k<N; k++){
+        at[3*k]   = sax[k];
+        at[3*k+1] = sax[N+k];
+        at[3*k+2] = sax[2*N+k];
+    }
+}
+// Default (serial) force evaluation at substep n: predicted positions (and velocities, if the forces need them)
+// into the particles, the force routine, and the accelerations into at. Adds substep n's MEGNO term to
+// *megno_thisdt. (Inlined into both clones of reb_integrator_ias15_step_try.)
+static inline __attribute__((always_inline)) void reb_integrator_ias15_substep_forces(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15, const size_t n, const struct reb_dpconst7 b, const size_t N, const size_t N_var, const size_t* const map, double* const megno_thisdt){
+    struct reb_particle* const particles = r->particles;
+    struct reb_particle* const particles_var = r->particles_var;
+    const size_t N3 = 3*(N+N_var);
+    double* REB_RESTRICT const csx = ias15->csx; 
+    double* REB_RESTRICT const csv = ias15->csv; 
+    double* REB_RESTRICT const at = ias15->at; 
+    double* REB_RESTRICT const x0 = ias15->x0; 
+    double* REB_RESTRICT const v0 = ias15->v0; 
+    double* REB_RESTRICT const a0 = ias15->a0; 
+    // Predictor coefficients at interval n, computed once instead of per particle and component.
+    // (Evaluating b*7.*h[n]/9. etc. inline costs a division per term and element.)
+    const double hn = h[n];
+    const double dt = r->dt;
+    const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
+    const double d6 = 7.*hn/8., d5 = 6.*hn/7., d4 = 5.*hn/6., d3 = 4.*hn/5., d2 = 3.*hn/4., d1 = 2.*hn/3., d0 = hn/2.;
+    // Prepare particles arrays for force calculation.
+    // The predictor is evaluated element-wise into the scratch array at (free here: its
+    // previous contents were consumed by the corrector, and it is refilled after the
+    // force evaluation), which vectorises, and then copied to the particles.
+    REB_IAS15_IVDEP
+    for(size_t k=0;k<N3;k++) {                      // Predict positions at interval n using b values
+        const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
+        at[k] = xk + x0[k];
+    }
+    for(size_t i=0;i<N;i++) {
+        const size_t mi = map ? map[i] : i;
+        particles[mi].x = at[3*i+0];
+        particles[mi].y = at[3*i+1];
+        particles[mi].z = at[3*i+2];
+    }
+    for(size_t mi=0;mi<N_var;mi++) {
+        const size_t i = mi + N;
+        particles_var[mi].x = at[3*i+0];
+        particles_var[mi].y = at[3*i+1];
+        particles_var[mi].z = at[3*i+2];
+    }
+    if (r->calculate_megno || (r->additional_forces && r->force_is_velocity_dependent)){
+        REB_IAS15_IVDEP
+        for(size_t k=0;k<N3;k++) {                  // Predict velocities at interval n using b values
+            const double vk =  -csv[k] + (((((((b.p6[k]*d6 + b.p5[k])*d5 + b.p4[k])*d4 + b.p3[k])*d3 + b.p2[k])*d2 + b.p1[k])*d1 + b.p0[k])*d0 + a0[k])*cv;
+            at[k] = vk + v0[k];
+        }
+        for(size_t i=0;i<N;i++) {
+            const size_t mi = map ? map[i] : i;
+            particles[mi].vx = at[3*i+0];
+            particles[mi].vy = at[3*i+1];
+            particles[mi].vz = at[3*i+2];
+        }
+        for(size_t mi=0;mi<N_var;mi++) {
+            const size_t i = mi + N;
+            particles_var[mi].vx = at[3*i+0];
+            particles_var[mi].vy = at[3*i+1];
+            particles_var[mi].vz = at[3*i+2];
+        }
+    }
+
+
+    reb_simulation_update_acceleration(r);             // Calculate forces at interval n
+    if (r->calculate_megno){
+        *megno_thisdt += w[n] * (r->t-r->megno_initial_t) * reb_tools_megno_deltad_delta(r);
+    }
+
+    for(size_t k=0;k<N;++k) {
+        size_t mk = map ? map[k] : k;
+        at[3*k]   = particles[mk].ax;
+        at[3*k+1] = particles[mk].ay;  
+        at[3*k+2] = particles[mk].az;
+    }
+    for(size_t mk=0;mk<N_var;++mk) {
+        size_t k = mk+N;;
+        at[3*k]   = particles_var[mk].ax;
+        at[3*k+1] = particles_var[mk].ay;  
+        at[3*k+2] = particles_var[mk].az;
+    }
+}
+
 REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation* r, struct reb_integrator_ias15_state* ias15) {
     reb_integrator_ias15_alloc(r, ias15);
 
@@ -440,21 +542,7 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
 
     reb_simulation_update_acceleration(r);
     const int stage_parallel = reb_integrator_ias15_stage_parallel_possible(r, ias15, N);
-    double* stage_buf = NULL;
-    double* stage_m = NULL;
-    size_t stage_K = 1;
-    if (stage_parallel){
-        stage_K = reb_integrator_ias15_stage_blocks(N);
-        const size_t need = 43*N + (stage_K>1 ? 21*stage_K*N : 0);
-        if (ias15->N_allocated_stage_buf<need){
-            free(ias15->stage_buf);
-            ias15->stage_buf = malloc(sizeof(double)*need);
-            ias15->N_allocated_stage_buf = need;
-        }
-        stage_buf = ias15->stage_buf;
-        stage_m = stage_buf + 42*N;
-        for (size_t i=0; i<N; i++) stage_m[i] = particles[i].m;
-    }
+    const size_t stage_K = stage_parallel ? reb_integrator_ias15_stage_prepare(r, ias15, N) : 1;
 
     double* REB_RESTRICT const csx = ias15->csx; 
     double* REB_RESTRICT const csv = ias15->csv; 
@@ -565,85 +653,15 @@ REB_TARGET_CLONES static int reb_integrator_ias15_step_try(struct reb_simulation
         integrator_megno_thisdt = integrator_megno_thisdt_init;
 
         if (stage_parallel){
-            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, stage_buf, stage_m, stage_buf + 43*N, stage_K);
+            reb_integrator_ias15_stage_forces(r, N, (struct reb_dpconst7){b.p0,b.p1,b.p2,b.p3,b.p4,b.p5,b.p6}, x0, v0, a0, csx, ias15->stage_buf, ias15->stage_buf + 42*N, ias15->stage_buf + 43*N, stage_K);
         }
         for(size_t n=1;n<8;n++) {                          // Loop over interval using Gauss-Radau spacings
             r->t = t_beginning + r->dt * h[n];
             if (stage_parallel){
-                const double* const sax = stage_buf + (n-1)*6*N + 3*N;
-                for (size_t k=0; k<N; k++){
-                    at[3*k]   = sax[k];
-                    at[3*k+1] = sax[N+k];
-                    at[3*k+2] = sax[2*N+k];
-                }
+                reb_integrator_ias15_stage_accelerations(ias15->stage_buf, n, N, at);
             }else{
-
-            // Predictor coefficients at interval n, computed once instead of per particle and component.
-            // (Evaluating b*7.*h[n]/9. etc. inline costs a division per term and element.)
-            const double hn = h[n];
-            const double dt = r->dt;
-            const double c6 = 7.*hn/9., c5 = 3.*hn/4., c4 = 5.*hn/7., c3 = 2.*hn/3., c2 = 3.*hn/5., c1 = hn/2., c0 = hn/3., ca = dt*hn/2., cv = dt*hn;
-            const double d6 = 7.*hn/8., d5 = 6.*hn/7., d4 = 5.*hn/6., d3 = 4.*hn/5., d2 = 3.*hn/4., d1 = 2.*hn/3., d0 = hn/2.;
-            // Prepare particles arrays for force calculation.
-            // The predictor is evaluated element-wise into the scratch array at (free here: its
-            // previous contents were consumed by the corrector, and it is refilled after the
-            // force evaluation), which vectorises, and then copied to the particles.
-            REB_IAS15_IVDEP
-            for(size_t k=0;k<N3;k++) {                      // Predict positions at interval n using b values
-                const double xk = -csx[k] + ((((((((b.p6[k]*c6 + b.p5[k])*c5 + b.p4[k])*c4 + b.p3[k])*c3 + b.p2[k])*c2 + b.p1[k])*c1 + b.p0[k])*c0 + a0[k])*ca + v0[k])*cv;
-                at[k] = xk + x0[k];
+                reb_integrator_ias15_substep_forces(r, ias15, n, b, N, N_var, map, &integrator_megno_thisdt);
             }
-            for(size_t i=0;i<N;i++) {
-                const size_t mi = map ? map[i] : i;
-                particles[mi].x = at[3*i+0];
-                particles[mi].y = at[3*i+1];
-                particles[mi].z = at[3*i+2];
-            }
-            for(size_t mi=0;mi<N_var;mi++) {
-                const size_t i = mi + N;
-                particles_var[mi].x = at[3*i+0];
-                particles_var[mi].y = at[3*i+1];
-                particles_var[mi].z = at[3*i+2];
-            }
-            if (r->calculate_megno || (r->additional_forces && r->force_is_velocity_dependent)){
-                REB_IAS15_IVDEP
-                for(size_t k=0;k<N3;k++) {                  // Predict velocities at interval n using b values
-                    const double vk =  -csv[k] + (((((((b.p6[k]*d6 + b.p5[k])*d5 + b.p4[k])*d4 + b.p3[k])*d3 + b.p2[k])*d2 + b.p1[k])*d1 + b.p0[k])*d0 + a0[k])*cv;
-                    at[k] = vk + v0[k];
-                }
-                for(size_t i=0;i<N;i++) {
-                    const size_t mi = map ? map[i] : i;
-                    particles[mi].vx = at[3*i+0];
-                    particles[mi].vy = at[3*i+1];
-                    particles[mi].vz = at[3*i+2];
-                }
-                for(size_t mi=0;mi<N_var;mi++) {
-                    const size_t i = mi + N;
-                    particles_var[mi].vx = at[3*i+0];
-                    particles_var[mi].vy = at[3*i+1];
-                    particles_var[mi].vz = at[3*i+2];
-                }
-            }
-
-
-            reb_simulation_update_acceleration(r);             // Calculate forces at interval n
-            if (r->calculate_megno){
-                integrator_megno_thisdt += w[n] * (r->t-r->megno_initial_t) * reb_tools_megno_deltad_delta(r);
-            }
-
-            for(size_t k=0;k<N;++k) {
-                size_t mk = map ? map[k] : k;
-                at[3*k]   = particles[mk].ax;
-                at[3*k+1] = particles[mk].ay;  
-                at[3*k+2] = particles[mk].az;
-            }
-            for(size_t mk=0;mk<N_var;++mk) {
-                size_t k = mk+N;;
-                at[3*k]   = particles_var[mk].ax;
-                at[3*k+1] = particles_var[mk].ay;  
-                at[3*k+2] = particles_var[mk].az;
-            }
-            } // end of serial substep force evaluation
             switch (n) {                            // Improve b and g values
                 case 1: 
                     REB_IAS15_IVDEP
