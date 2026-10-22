@@ -33,8 +33,9 @@ typedef double el[PINT_NP][6];
 static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 #include <stdatomic.h>
 // PINT_JR: WHFast512 jacobi_recursive for fine and serial runs (default 1, no energy offset per call);
-// PINT_CHUNKS: kernel calls per speculative fine slice (abandonment granularity)
-static int jr=1, nchunk=10;
+// PINT_CHUNKS: kernel calls per speculative fine slice (abandonment granularity; default 2: as fast as 10, 5x fewer
+// kernel calls, each of which carries a small energy offset, see RESEARCH_LOG it. 39)
+static int jr=1, nchunk=2;
 static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6, npar=0, parmode=1, M=1; static double tol=0.;   // M: slices per thread (1 or 2)
 // window state is double-buffered by window parity, so that the persistent slice threads can start window w+1 while
 // others still finish (abandon) speculative work of window w
