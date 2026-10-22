@@ -26,12 +26,12 @@ struct mep_cfg {
     int gcorr;              // symplectic corrector order of the giants' coarse run
     int gr;                 // 1: GR potential of WHFast512 included in the coarse step
 };
-void mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr);
-void mep_coarse(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6]);
-void mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par);
-void mep_coarse_giants(const struct mep_cfg* c, const double E_in[MEP_NP][6], double Eo[MEP_NP][6]);
-void mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]);
-void mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]);
-struct reb_simulation* mep_el_to_sim(const double* masses, const double E[MEP_NP][6]);
-void mep_set_threads(int nhelpers, int pin);
+void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr);
+void reb_mep_coarse(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6]);
+void reb_mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par);
+void reb_mep_coarse_giants(const struct mep_cfg* c, const double E_in[MEP_NP][6], double Eo[MEP_NP][6]);
+void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]);
+void reb_mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]);
+struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[MEP_NP][6]);
+void reb_mep_set_threads(int nhelpers, int pin);
 #endif

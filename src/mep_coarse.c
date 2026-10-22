@@ -1,5 +1,5 @@
 /**
- * @file    mep_coarse.c
+ * @file    reb_mep_coarse.c
  * @brief   Coarse propagator of mean-element parareal (MEP) for WHFast512 planetary systems.
  * @details Inner four planets: numerical first-order mean-element theory (Jacobi pair accelerations on 2-D grids of
  *          the mean longitudes, 2-D FFT, rebuilt from the input state at every call), Kepler + first-order secular
@@ -34,7 +34,7 @@ static const double CGR = 10065.32;
 #define MEP_RELAX() do {} while (0)
 #endif
 
-void mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr){
+void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr){
     memcpy(c->masses, masses, sizeof(double)*(MEP_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
     c->meann = 0; c->gcorr = 17; c->dual = 1; c->gr = gr;
@@ -132,9 +132,9 @@ static void fft2(double complex* a, int n){
     for (int c=0;c<n;c++) fft1(a+c,n,n);
 }
 static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq(n, 1/n)
-// short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised):
-// disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/n^2, with F_a(k) = (Z(k) + conj Z(-k))/2,
-// F_b(k) = (Z(k) - conj Z(-k))/(2i)
+                                                                // short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised):
+                                                                // disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/n^2, with F_a(k) = (Z(k) + conj Z(-k))/2,
+                                                                // F_b(k) = (Z(k) - conj Z(-k))/(2i)
 static __thread double nu_cut_t=0.;
 static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, double li, double lj, double* da, double* db){
     double complex ei[NGMAX], ej[NGMAX];
@@ -158,7 +158,7 @@ static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, d
 // table(): first-order ln a short-period displacements (disp) and secular rates (R) of the inner planets.
 // Organised as independent tasks (grids per planet; one task per inner-inner pair / per packed pair of giants; GR per
 // planet) whose results are reduced in the fixed serial order, so that the result is bitwise independent of the
-// number of threads. With a helper pool (mep_set_threads) the tasks of one call run on several cores.
+// number of threads. With a helper pool (reb_mep_set_threads) the tasks of one call run on several cores.
 #define NTASKMAX 32
 struct tctx {
     const struct mep_cfg* c; const double (*E)[6]; int nc;
@@ -299,7 +299,7 @@ static int smt_sibling(int q){
 // Helper threads of the coarse step (created once, kept sleeping between jobs). pin != 0: helper q is pinned to the
 // SMT sibling of logical CPU q, i.e. of the core of slice q (in iteration k the cores of slices 0..k-1 have no fine
 // work, so these hardware threads are the least contended ones; +5 % on a Ryzen 9 7950X).
-void mep_set_threads(int nhelpers, int pin){
+void reb_mep_set_threads(int nhelpers, int pin){
     pthread_mutex_lock(&pool_busy);
     for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen));
         const int cpu = pin ? smt_sibling(q) : -1;
@@ -481,14 +481,14 @@ static int coarse_staged(const struct mep_cfg* c, const double* mu, const double
     inner_correct(c,mu,E_in,CEL(p.R),CEL(R1),disp1,M2,E_out);
     return 1;
 }
-void mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par);
-void mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]);
-void mep_coarse(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6]){ mep_coarse_par(c,E_in,E_out,0); }
+void reb_mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par);
+void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]);
+void reb_mep_coarse(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6]){ reb_mep_coarse_par(c,E_in,E_out,0); }
 // the giants' part of G alone (their WH run; depends only on the giants' rows of E_in): rows MEP_NI.. of Eo
-void mep_coarse_giants(const struct mep_cfg* c, const double E_in[MEP_NP][6], double Eo[MEP_NP][6]){ outer_wh(c,E_in,Eo); }
-void mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par){ mep_coarse_pre(c,E_in,E_out,par,NULL); }
-// as mep_coarse_par, with the giants' end rows Mpre (= mep_coarse_giants(E_in)) precomputed; bitwise identical
-void mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]){
+void reb_mep_coarse_giants(const struct mep_cfg* c, const double E_in[MEP_NP][6], double Eo[MEP_NP][6]){ outer_wh(c,E_in,Eo); }
+void reb_mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par){ reb_mep_coarse_pre(c,E_in,E_out,par,NULL); }
+// as reb_mep_coarse_par, with the giants' end rows Mpre (= reb_mep_coarse_giants(E_in)) precomputed; bitwise identical
+void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]){
     const double* m=c->masses;
     double Mint[MEP_NP], mu[MEP_NP]; double acc=0;
     for (int i=0;i<MEP_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
@@ -509,7 +509,7 @@ void mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], doubl
         for (int i=0;i<MEP_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
     }
 }
-void mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]){
+void reb_mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]){
     for (int i=1;i<=MEP_NP;i++){
         struct reb_particle prim=reb_simulation_com_range(r,0,i);
         struct reb_orbit o=reb_orbit_from_particle(r->G,r->particles[i],prim);
@@ -518,7 +518,7 @@ void mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]){
         E[i-1][4]=si*cos(o.Omega); E[i-1][5]=si*sin(o.Omega);
     }
 }
-struct reb_simulation* mep_el_to_sim(const double* masses, const double E[MEP_NP][6]){
+struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[MEP_NP][6]){
     struct reb_simulation* s=reb_simulation_create();
     reb_simulation_add_fmt(s,"m",masses[0]);
     for (int j=0;j<MEP_NP;j++){

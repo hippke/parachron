@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <unistd.h>
 
 // Initial conditions for the Solar System from NASA Horizons (as in examples/whfast512_solar_system)
 double all_ss_pos[9][3] = {
@@ -59,7 +58,9 @@ int main(int argc, char* argv[]){
     const char* checkpoint = "checkpoint.mep";
     struct reb_mep* mep;
 
-    if (access(checkpoint, F_OK)==0){
+    FILE* f = fopen(checkpoint, "rb");
+    if (f){
+        fclose(f);
         mep = reb_mep_create_from_checkpoint(checkpoint, NULL);
         if (!mep){ fprintf(stderr, "Cannot read %s.\n", checkpoint); return 1; }
         printf("Resuming from %s at t = %.0f yr (%lld windows done).\n", checkpoint, mep->t/(2.*M_PI), (long long)mep->windows);

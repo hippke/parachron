@@ -2,7 +2,7 @@
  * @file    mep.c
  * @brief   Mean-element parareal (MEP): parallel-in-time integration of one WHFast512 planetary system on many cores.
  * @details The time axis is cut into windows of N slices; one thread per slice runs the fine WHFast512 integration of
- *          its slice while a cheap coarse propagator in mean elements (mep_coarse.c) links the slices (pipelined
+ *          its slice while a cheap coarse propagator in mean elements (reb_mep_coarse.c) links the slices (pipelined
  *          parareal, adaptive number of iterations, energy projection). The converged result is the serial WHFast512
  *          trajectory to within the tolerance. Designed and validated for the Sun and eight planets of the Solar
  *          System (four inner planets treated by perturbation theory, four giants integrated directly).
@@ -70,20 +70,20 @@ static double energy_sim(struct reb_simulation* s){
     }
     return E;
 }
-static double energy_el(const el E){ struct reb_simulation* s=mep_el_to_sim(M_->masses,E); double e=energy_sim(s); reb_simulation_free(s); return e; }
+static double energy_el(const el E){ struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,E); double e=energy_sim(s); reb_simulation_free(s); return e; }
 // energy projection: v += v d with d = (Et - E)/(2 Kin) (keeps the full relative precision of the tiny correction)
 static void project_energy(el E, double Et){
-    struct reb_simulation* s=mep_el_to_sim(M_->masses,CEL(E));
+    struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,CEL(E));
     for (int it=0; it<2; it++){
         const double e=energy_sim(s);
         double Kin=0; for (size_t i=0;i<s->N;i++){ struct reb_particle p=s->particles[i]; Kin+=0.5*p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz); }
         const double d=(Et-e)/(2.*Kin);
         for (size_t i=0;i<s->N;i++){ s->particles[i].vx+=s->particles[i].vx*d; s->particles[i].vy+=s->particles[i].vy*d; s->particles[i].vz+=s->particles[i].vz*d; }
     }
-    mep_sim_to_el(s,E); reb_simulation_free(s);
+    reb_mep_sim_to_el(s,E); reb_simulation_free(s);
 }
 static struct reb_simulation* fine_sim(const el Ein){
-    struct reb_simulation* s=mep_el_to_sim(M_->masses,Ein);
+    struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,Ein);
     s->dt=M_->dt; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
@@ -102,11 +102,11 @@ static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
         reb_simulation_steps(s,1);
         if (s->status!=REB_STATUS_RUNNING && s->status!=REB_STATUS_SUCCESS) atomic_store(&fine_interrupted,1);
     }
-    mep_sim_to_el(s,Eout); reb_simulation_free(s);
+    reb_mep_sim_to_el(s,Eout); reb_simulation_free(s);
     return 1;
 }
 static double poserr_el(const el A, const el B){
-    struct reb_simulation* a=mep_el_to_sim(M_->masses,A); struct reb_simulation* b=mep_el_to_sim(M_->masses,B);
+    struct reb_simulation* a=reb_mep_el_to_sim(M_->masses,A); struct reb_simulation* b=reb_mep_el_to_sim(M_->masses,B);
     double m=0; for (int i=1;i<=MEP_NP;i++){ const double d[3]={a->particles[i].x-b->particles[i].x,a->particles[i].y-b->particles[i].y,a->particles[i].z-b->particles[i].z}; for(int x=0;x<3;x++) if (fabs(d[x])>m) m=fabs(d[x]); }
     reb_simulation_free(a); reb_simulation_free(b); return m;
 }
@@ -126,11 +126,11 @@ static int ckpt_write(const struct reb_mep* m){
     FILE* f=fopen(tmp,"wb"); if (!f) return 1;
     const char magic[32]=MEP_MAGIC; const int32_t version=MEP_VERSION;
     int ok = fwrite(magic,1,32,f)==32 && fwrite(&version,4,1,f)==1
-          && fwrite(&m->opt,sizeof m->opt,1,f)==1
-          && fwrite(&m->t,8,1,f)==1 && fwrite(&m->t_start,8,1,f)==1 && fwrite(&m->dt,8,1,f)==1
-          && fwrite(&m->windows,8,1,f)==1 && fwrite(m->khist,8,KMAX,f)==KMAX
-          && fwrite(m->masses,8,MEP_NP+1,f)==MEP_NP+1 && fwrite(m->E,8,MEP_NP*6,f)==MEP_NP*6
-          && fwrite(&m->gr_potential,4,1,f)==1 && fwrite(&m->corrector,4,1,f)==1 && fwrite(&m->kernel,4,1,f)==1;
+    && fwrite(&m->opt,sizeof m->opt,1,f)==1
+    && fwrite(&m->t,8,1,f)==1 && fwrite(&m->t_start,8,1,f)==1 && fwrite(&m->dt,8,1,f)==1
+    && fwrite(&m->windows,8,1,f)==1 && fwrite(m->khist,8,KMAX,f)==KMAX
+    && fwrite(m->masses,8,MEP_NP+1,f)==MEP_NP+1 && fwrite(m->E,8,MEP_NP*6,f)==MEP_NP*6
+    && fwrite(&m->gr_potential,4,1,f)==1 && fwrite(&m->corrector,4,1,f)==1 && fwrite(&m->kernel,4,1,f)==1;
     ok = (fclose(f)==0) && ok;
     if (!ok || rename(tmp,m->checkpoint)!=0) return 1;     // rename is atomic: a crash leaves the previous checkpoint
     return 0;
@@ -139,11 +139,11 @@ static int ckpt_read(struct reb_mep* m, const char* fn){
     FILE* f=fopen(fn,"rb"); if (!f) return 1;
     char magic[32]; int32_t version=0;
     int ok = fread(magic,1,32,f)==32 && strncmp(magic,MEP_MAGIC,32)==0 && fread(&version,4,1,f)==1 && version==MEP_VERSION
-          && fread(&m->opt,sizeof m->opt,1,f)==1
-          && fread(&m->t,8,1,f)==1 && fread(&m->t_start,8,1,f)==1 && fread(&m->dt,8,1,f)==1
-          && fread(&m->windows,8,1,f)==1 && fread(m->khist,8,KMAX,f)==KMAX
-          && fread(m->masses,8,MEP_NP+1,f)==MEP_NP+1 && fread(m->E,8,MEP_NP*6,f)==MEP_NP*6
-          && fread(&m->gr_potential,4,1,f)==1 && fread(&m->corrector,4,1,f)==1 && fread(&m->kernel,4,1,f)==1;
+    && fread(&m->opt,sizeof m->opt,1,f)==1
+    && fread(&m->t,8,1,f)==1 && fread(&m->t_start,8,1,f)==1 && fread(&m->dt,8,1,f)==1
+    && fread(&m->windows,8,1,f)==1 && fread(m->khist,8,KMAX,f)==KMAX
+    && fread(m->masses,8,MEP_NP+1,f)==MEP_NP+1 && fread(m->E,8,MEP_NP*6,f)==MEP_NP*6
+    && fread(&m->gr_potential,4,1,f)==1 && fread(&m->corrector,4,1,f)==1 && fread(&m->kernel,4,1,f)==1;
     fclose(f);
     return ok ? 0 : 2;
 }
@@ -164,7 +164,7 @@ static void* slice_thread(void* arg){
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             el g;
             // G is not needed for boundaries that are already exact (n <= k-1)
-            if (k==0 || n>k-1) mep_coarse_par(&cfg,(const double (*)[6])Up[k][n],g,M_->opt.helpers>0);
+            if (k==0 || n>k-1) reb_mep_coarse_par(&cfg,(const double (*)[6])Up[k][n],g,M_->opt.helpers>0);
             if (k==0 || n<k-1){
                 if (k==0) memcpy(Up[0][n+1],g,sizeof(el)); else memcpy(Up[k][n+1],Up[k-1][n+1],sizeof(el));
             } else if (n==k-1){
@@ -261,7 +261,7 @@ struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_op
     m->dt=r->dt; m->t=r->t; m->t_start=r->t;
     m->gr_potential=w->gr_potential; m->corrector=w->corrector; m->kernel=w->kernel;
     for (int i=0;i<=MEP_NP;i++) m->masses[i]=r->particles[i].m;
-    mep_sim_to_el(r,m->E);
+    reb_mep_sim_to_el(r,m->E);
     // resolve the fine kernel now (kernel 0 = fastest available), so that a resumed run uses the same one
     if (m->kernel==0){
         struct reb_simulation* s=reb_simulation_copy(r);
@@ -295,12 +295,12 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     if (W<1){ pthread_mutex_unlock(&run_lock); return REB_STATUS_SUCCESS; }   // less than one window left: nothing to do
 
     M_=m; K=m->opt.k_min; Kmax=m->opt.k_max; tol=m->opt.tol; nst=m->opt.slice_steps;
-    mep_default_cfg(&cfg, m->masses, nst*m->dt/DAY, m->gr_potential);
+    reb_mep_default_cfg(&cfg, m->masses, nst*m->dt/DAY, m->gr_potential);
     const int helpers = m->opt.helpers>=0 ? m->opt.helpers : (N/2<8 ? N/2 : 8);
     m->opt.helpers=helpers;
     const int pin = m->opt.pin && N<=ncore;
     for (int n=0;n<N;n++) cpu_of_slice[n] = pin ? cores[n] : -1;
-    if (helpers>0) mep_set_threads(helpers, pin);
+    if (helpers>0) reb_mep_set_threads(helpers, pin);
     memcpy(Ecur,m->E,sizeof(el));
     atomic_store(&W_eff,W); W_done=0; stop_status=REB_STATUS_SUCCESS; atomic_store(&fine_interrupted,0);
     walltime_limit=m->opt.walltime; t_start_wall=now();
@@ -320,7 +320,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
 }
 
 void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r){
-    struct reb_simulation* s=mep_el_to_sim(m->masses,(const double (*)[6])m->E);
+    struct reb_simulation* s=reb_mep_el_to_sim(m->masses,(const double (*)[6])m->E);
     reb_simulation_remove_all_particles(r);
     for (size_t i=0;i<s->N;i++) reb_simulation_add(r,s->particles[i]);
     reb_simulation_free(s);
@@ -337,8 +337,8 @@ void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r
 void reb_mep_options_default(struct reb_mep_options* o){ memset(o,0,sizeof *o); }
 struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_options* o, const char* checkpoint){
     (void)o; (void)checkpoint; reb_simulation_error(r,"MEP (mean-element parareal) is only available on Linux."); return NULL; }
-struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o){ (void)checkpoint; (void)o; return NULL; }
-void reb_mep_free(struct reb_mep* m){ free(m); }
-enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){ (void)m; (void)tmax; return REB_STATUS_GENERIC_ERROR; }
-void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r){ (void)m; (void)r; }
+    struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o){ (void)checkpoint; (void)o; return NULL; }
+    void reb_mep_free(struct reb_mep* m){ free(m); }
+    enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){ (void)m; (void)tmax; return REB_STATUS_GENERIC_ERROR; }
+    void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r){ (void)m; (void)r; }
 #endif
