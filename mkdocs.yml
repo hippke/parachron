@@ -1,7 +1,6 @@
-site_name: REBOUND
-site_url: https://rebound.hanno-rein.de
-repo_url: https://github.com/hannorein/rebound
-repo_name: hannorein/rebound
+site_name: Parachron
+repo_url: https://github.com/hippke/parachron
+repo_name: hippke/parachron
 edit_uri: ""
 nav:
   - index.md
@@ -180,7 +179,7 @@ nav:
 
 theme:
   name: material
-  logo: img/rebound.png
+  logo: img/parachron_icon.svg
   favicon: img/favicon.ico
   features:
     - navigation.sections

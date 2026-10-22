@@ -1,6 +1,11 @@
-# Welcome to REBOUND
+# Welcome to Parachron
 
-![REBOUND Examples](img/reboundbanner.png)
+![Parachron](img/parachron_logo.svg)
+
+Parachron is a modified version of [REBOUND](https://github.com/hannorein/rebound) by Hanno Rein and contributors. It
+adds mean-element parareal ([MEP](ipython_examples/MEP.ipynb)), which integrates one planetary system on many cores at
+once, plus a set of speed-ups (see `CHANGES_FROM_REBOUND.md` in the repository). The Python module is `parachron`; the
+rest of this documentation is REBOUND's and applies unchanged.
 
 REBOUND is an N-body integrator, i.e. a software package that can integrate the motion of particles under the influence of gravity. The particles can represent stars, planets, moons, ring or dust particles. REBOUND is very flexible and can be customized to accurately and efficiently solve many problems in astrophysics. 
 
