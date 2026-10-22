@@ -68,13 +68,22 @@ static void eadd(eacc* a, double x){ pthread_mutex_lock(&acc_mx); a->s+=x; a->s2
 static void eprint(const char* name, const eacc* a){ const double m=a->s/a->n, sd=sqrt(a->s2/a->n-m*m);
     printf("ediag %s: n %ld, mean %+.3e +- %.1e, rms %.2e (relative to |E0|)\n", name, a->n, m, sd/sqrt(a->n), sd); }
 static double energy_sim(struct reb_simulation* s);
+// PINT_PROJ: 2 (default) scales the velocities as v += v*d with d = (Et - E)/(2 Kin), which keeps the full relative
+// precision of the tiny correction; 1 = the original v *= sqrt(1 + (Et - E)/Kin), whose factor is quantised to the
+// spacing of doubles near 1 and left a systematic residual of -1e-16 per projection (iteration 49).
+static int projmode=2;
 static void project_energy(el E, double Et){
     struct reb_simulation* s=pint_el_to_sim(ss_mass,E);
     for (int it=0; it<2; it++){
         const double e=energy_sim(s);
         double Kin=0; for (unsigned i=0;i<s->N;i++){ struct reb_particle p=s->particles[i]; Kin+=0.5*p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz); }
-        const double f=sqrt(1.+(Et-e)/Kin);
-        for (unsigned i=0;i<s->N;i++){ s->particles[i].vx*=f; s->particles[i].vy*=f; s->particles[i].vz*=f; }
+        if (projmode==1){
+            const double f=sqrt(1.+(Et-e)/Kin);
+            for (unsigned i=0;i<s->N;i++){ s->particles[i].vx*=f; s->particles[i].vy*=f; s->particles[i].vz*=f; }
+        } else {
+            const double d=(Et-e)/(2.*Kin);
+            for (unsigned i=0;i<s->N;i++){ s->particles[i].vx+=s->particles[i].vx*d; s->particles[i].vy+=s->particles[i].vy*d; s->particles[i].vz+=s->particles[i].vz*d; }
+        }
     }
     pint_sim_to_el(s,E); reb_simulation_free(s);
 }
@@ -259,6 +268,7 @@ int main(int argc, char** argv){
     if (getenv("PINT_UPDDIAG")) upd_diag=atoi(getenv("PINT_UPDDIAG"));
     if (getenv("PINT_JR")) jr=atoi(getenv("PINT_JR"));
     if (getenv("PINT_EDIAG")) ediag=atoi(getenv("PINT_EDIAG"));
+    if (getenv("PINT_PROJ")) projmode=atoi(getenv("PINT_PROJ"));
     if (getenv("PINT_CHUNKS")) nchunk=atoi(getenv("PINT_CHUNKS"));
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     pint_default_cfg(&cfg, ss_mass, slice_days);
