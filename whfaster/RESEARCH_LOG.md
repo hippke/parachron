@@ -1356,5 +1356,9 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
 * Helpers (τ 3e-5, asm, 2 reps): 4: 3.42 / 3.27; 6: 3.55 / 3.49; 8: 3.53 / 3.36; 10: 3.32 / 3.28; 12: 3.29 / 3.30 →
   6 ≈ 8 within the noise; 8 stays the documented setting.
 * Ensemble (`runs/ens_gyr.sh`, `pint/ens_stat.py`): 16 IC realisations (all planets x + q × 1e-10 AU), 200 Myr each,
+* Portability (local i5-13500, AVX2 only): `pint_pipe` with kernel 3 runs end to end (6 slices, unpinned on the mixed
+  P/E cores: 1.32×; trajectory output fine). The coarse step's default giants kernel was the AVX-512 C kernel, so
+  `test_par` and the Python wrapper failed on AVX2 CPUs → default now falls back to the AVX2 C kernel (bitwise
+  identical results by design), `PINT_KERNEL` overrides; unchanged on AVX-512 machines.
   asm kernel; serial runs (16 at once on cores 0–15) and parareal runs (K_min 3, τ 3e-5, defaults) from the same ICs.
   Results below.
