@@ -1347,3 +1347,7 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
   pass) ≈ 0.54 ms → ≈ 30.5 ms (+3 %). **Verdict: config C (lead A) does not pay on 16 cores**; it becomes worthwhile
   only with more cores (longer windows, where config B needs K ≥ 4) or if the coarse chain can be shortened
   structurally.
+* Structural variant tested (`ph16.py mix0`): accurate step (`all_mn1_g3_dt180_nsub1_un`) only for the k = 0
+  prediction, config B for all corrections (the k = 0 sweep could be moved off the chain). k1 errors 4.8e-5 … 4.7e-4,
+  k2 8.6e-7 … 7.1e-5, k2 updates 4.8e-5 … 4.8e-4 → **0/10 K = 2 stops**; it only helps the hard windows (epoch 1030:
+  k3 update 3.9e-4 → 1.1e-5). The accurate step's value is its Jacobian in the corrections (as in round 3).

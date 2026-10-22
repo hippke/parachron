@@ -4,6 +4,7 @@
 # relative to the asm-vs-C noise of the epoch, and the max boundary update |U^k - U^(k-1)| [AU] (what the stop rule
 # of pint_pipe sees; the window stops at k when that is <= tau).
 #   python3 ph16.py variant epoch     variant: B (config B, C) | Cmn64 (C, mean-n + 64^2 V-E) | best (round-3 Python G)
+#                                     | mix0 (accurate step for the k = 0 prediction only, config B afterwards)
 #                                     | any ph1mn.py spec string (e.g. ablations of 'best')
 import numpy as np, sys, os, time
 from ptlib import *
@@ -15,14 +16,17 @@ import ptc
 d=np.fromfile('../pint/runs/m10_ser2.bin',dtype=np.float64).reshape(-1,50); X=d[:,2:].reshape(-1,8,6)
 ref=X[ep:ep+N+1]
 noise=float(np.load('phase0_jac.npz')[f'noise{ep}'])
+G0=None
 if var in ('B','Cmn64'): G=ptc.CoarseC(days,heun=1)
+elif var=='mix0':   # accurate step only for the k = 0 prediction, config B for all corrections
+    import ph1mn; G0=ph1mn.build('all_mn1_g3_dt180_nsub1_un'); G=ptc.CoarseC(days,heun=1)
 else:   # 'best' = the round-3 configuration; anything else is a ph1mn spec string (ablations)
     import ph1mn; G=ph1mn.build('all_mn1_g3_dt180_nsub2_un_ga120_w2k_frzs' if var=='best' else var)
 def F(E): return to_el(prop(from_el(E),days,6))
 t0=time.time()
 E0=ref[0]; U=[E0]
-for n in range(N): U.append(G(U[-1]))
-Gold=[None]+U[1:]
+for n in range(N): U.append((G0 or G)(U[-1]))
+Gold=[None]+(U[1:] if G0 is None else [G(U[n]) for n in range(N)])
 out=[]
 for k in range(1,4):
     Fv=[F(U[n]) for n in range(N)]
