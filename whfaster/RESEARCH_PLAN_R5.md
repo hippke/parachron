@@ -25,6 +25,10 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    **Status (iteration 42):** (a) done in part — `pint_disp6k` (one kernel per pair, exact) 0.286 ms per pass on the
    7950X (was 0.640); estimate for the whole config C step ≈ 0.5 ms on the chain → still needs: dual-number/analytic
    dE/dv (0.100 ms of the pass), one packed FFT for both kernels, inner–inner rates frozen across RK4 stages.
+   **Iteration 43:** dual-number dE/dv done (`pint_dual.h`, exact; grids 0.095 → 0.036 ms). Estimate for the whole
+   step ≈ 2 ms serial / ≈ 0.55 ms on the chain as a straight port; ≈ 0.3 ms with inner–inner rates frozen across the
+   RK4 stages, a divisor-only mean-n re-evaluation and one end evaluation (to be checked against the Python
+   prototype's accuracy: the end map in Python is a 3-step fixed point at the osculating angles).
 2. **E–M–J term** (`so2.resonant_U2`, `g3.G3`): compute once per slice at k = 0 on a helper (off the chain; iteration
    24 showed per-slice freezing is as good as live), apply analytically in the drift.
 3. **Config C in `pint_coarse.c`** behind a cfg flag (default stays config B), bitwise serial = parallel

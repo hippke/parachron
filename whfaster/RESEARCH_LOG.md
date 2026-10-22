@@ -1314,3 +1314,14 @@ central, h = 1e-6) were only good to ≈ 1e-6 in some components.
   τ 3e-6: 3.03 / 2.89 vs 2.84 / 2.86 (less helper work next to the fine solves); 10 Myr hard ICs τ 3e-5: same K
   histogram (557/66/2), extra error vs dt 6 d 6.6e-7 (was 6.9e-7). → default `dual = 1` (`PINT_DUAL=0` restores the
   old numerics; earlier iterations used the finite differences).
+
+### Iteration 44 — giants' coarse step 360–500 d; final benchmark with all defaults
+* Giants' step (τ 3e-5, asm): 360 d K̄ 3.18 (3.33×), 400 d 3.44 (3.19×), 450 d 4.10 (2.82×), 500 d 5.35 (2.22×) —
+  convergence degrades smoothly (iteration 32's "never converges" at 540–1000 d is the end of this trend); 360 d stays.
+* **Final benchmark** (host2 idle, asm kernel, 100 windows = 1.58 Myr, defaults `PINT_JR=1`, 2 chunks, `dual = 1`,
+  8 helpers, mode 2; 3 repetitions): τ 3e-6: **2.86 / 2.86 / 2.95×** (3.60–3.67 s vs 10.48–10.60 s serial);
+  τ 3e-5: **3.46 / 3.56 / 3.32×** (2.95–3.19 s). Run-to-run spread ≈ ±4 %.
+* Refined config C cost estimate (R5): start 2 transform passes, RK4 4 rate passes, end 1–3 transform passes →
+  ≈ 2 ms serial, ≈ 0.55 ms on the chain with 8 helpers; with the inner–inner rates frozen across the RK4 stages (only
+  inner–giant pairs re-evaluated), the mean-n step as a divisor-only re-evaluation and a single end evaluation
+  ≈ 0.3 ms — at the gate. The design is plausible but needs these reductions to pay.

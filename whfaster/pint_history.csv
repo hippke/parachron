@@ -54,3 +54,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 41,round-3 coarse step at N=16 + ablation (Python),16,986,K ~2.4 (6/10 K=2 at tau 3e-5),,,,research,config C minimal set found (no U2/gavg needed; giants 180 d + RK4 with sampled giants essential); gate T_G<=0.35 ms
 42,R5 step 1: all-component transform with one kernel per pair (pint_disp6k),,,,,,,,yes,exact (6e-18); 0.640 -> 0.286 ms per pass on 7950X; config C est. 0.5 ms vs gate 0.35
 43,exact dE/dv by dual numbers (config B default; transform grids 2.6x faster),16,986,K 3.18 (unchanged),,,,yes,speedup tau3e-5 3.56-3.59 vs 3.30-3.41; same accuracy
+44,giants coarse step 360-500 d; final benchmark all defaults (asm),16,986,K 3.81/3.18,,,,ref,tau3e-6 2.86-2.95x; tau3e-5 3.32-3.56x; 360 d optimal
