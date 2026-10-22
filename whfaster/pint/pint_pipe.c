@@ -36,6 +36,10 @@ static double now(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); retur
 // PINT_CHUNKS: kernel calls per speculative fine slice (abandonment granularity; default 2: as fast as 10, 5x fewer
 // kernel calls, each of which carries a small energy offset, see RESEARCH_LOG it. 39)
 static int jr=1, nchunk=2;
+// PINT_BAL=d: load balance between the two CCDs of the 7950X — slices n < N/2 get (1 + d) x the steps, slices
+// n >= N/2 (cores 8-15, measured 3-5 % slower under load) (1 - d) x; same window length (rounded to 10 steps)
+#define NSL 128
+static long nstep_s[NSL]; static double tcum[NSL+1]; static struct pint_cfg cfgs[NSL];
 static double slice_days; static int fkern=2, K, N, pin=1, Kmax=6, npar=0, parmode=1, M=1; static double tol=0.;   // M: slices per thread (1 or 2)
 // window state is double-buffered by window parity, so that the persistent slice threads can start window w+1 while
 // others still finish (abandon) speculative work of window w
@@ -65,13 +69,13 @@ static void project_energy(el E, double Et){
     pint_sim_to_el(s,E); reb_simulation_free(s);
 }
 // fine slice; returns 0 if abandoned because the window stopped at an iteration < kneed
-static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
+static int fine(const el Ein, el Eout, int kneed, atomic_int* stp, int n){
     struct reb_simulation* s=pint_el_to_sim(ss_mass,Ein);
     s->dt=6.*DAY; s->exact_finish_time=0;
     reb_simulation_set_integrator(s,"whfast512");
     struct reb_integrator_whfast512_state* w=s->integrator.state;
     w->gr_potential=1; w->corrector=17; w->jacobi_recursive=jr; w->kernel=fkern;
-    const long nst=lround(slice_days/6.);
+    const long nst=nstep_s[n];
     if (tol>0. && nchunk>1 && nst%nchunk==0){
         w->concatenate_steps=nst/nchunk;
         for (int q=0;q<nchunk;q++){
@@ -157,7 +161,7 @@ static void* slice_thread(void* arg){
         double t0=now();
         el g;
         // G is not needed for boundaries that are already exact (n <= k-1): skip it (saves coarse time on the chain)
-        if (k==0 || n>k-1) pint_coarse_par(&cfg,Up[k][n],g, npar>0 && (parmode==2 || k==0));
+        if (k==0 || n>k-1) pint_coarse_par(&cfgs[n],Up[k][n],g, npar>0 && (parmode==2 || k==0));
         if (k==0 || n<k-1){
             if (k==0) memcpy(Up[0][n+1],g,sizeof(el)); else memcpy(Up[k][n+1],Up[k-1][n+1],sizeof(el));
         } else if (n==k-1){
@@ -215,7 +219,7 @@ static void* slice_thread(void* arg){
             } else tr(w,c,k,2,t1,now());
         } else if (nneed==1){
             const int j=need[0]?0:1;
-            if (fine(Up[k][n0+j],Fprev[j],k+1,stp)){ EUprev[j]=energy_el(Up[k][n0+j]); EFprev[j]=energy_el(Fprev[j]); have_F[j]=1; tr(w,c,k,1,t1,now()); }
+            if (fine(Up[k][n0+j],Fprev[j],k+1,stp,n0+j)){ EUprev[j]=energy_el(Up[k][n0+j]); EFprev[j]=energy_el(Fprev[j]); have_F[j]=1; tr(w,c,k,1,t1,now()); }
             else tr(w,c,k,2,t1,now());
         }
         tbusyF[c]+=now()-t1;
@@ -243,6 +247,18 @@ int main(int argc, char** argv){
     if (getenv("PINT_CHUNKS")) nchunk=atoi(getenv("PINT_CHUNKS"));
     if (Kmax>KMAX-1) Kmax=KMAX-1;
     pint_default_cfg(&cfg, ss_mass, slice_days);
+    {   const double bal = getenv("PINT_BAL") ? atof(getenv("PINT_BAL")) : 0.;
+        const long nst=lround(slice_days/6.), d=10*lround(nst*bal/10.);
+        if (bal!=0. && (N%2 || M!=1)){ fprintf(stderr,"PINT_BAL needs an even N and M = 1\n"); return 1; }
+        tcum[0]=0.;
+        for (int n=0;n<N;n++){
+            nstep_s[n] = bal==0. ? nst : (n<N/2 ? nst+d : nst-d);
+            if (bal==0.) cfgs[n]=cfg; else pint_default_cfg(&cfgs[n], ss_mass, 6.*nstep_s[n]);
+            if (fkern!=2) cfgs[n].kernel=fkern;
+            tcum[n+1]=tcum[n]+6.*nstep_s[n]*DAY;
+        }
+        if (bal!=0.) fprintf(stderr,"load balance: %ld / %ld steps per slice\n",nstep_s[0],nstep_s[N-1]);
+    }
     if (fkern!=2) cfg.kernel = fkern;
     const char* outp=getenv("PINT_OUT"); const double pert = getenv("PINT_PERT") ? atof(getenv("PINT_PERT")) : 0.;
     const double Tsl=slice_days*DAY;
@@ -279,7 +295,7 @@ int main(int argc, char** argv){
     for (int c=0;c<N/M;c++) pthread_create(&th[c],NULL,slice_thread,(void*)(long)c);
     if (fo) for (int w=0;w<W;w++){
         sem_wait(&out_ready);
-        for (int n=0;n<N;n++) write_rec(fo,((long)w*N+n+1)*Tsl,(const double (*)[6])ring[w%RING][n]);
+        for (int n=0;n<N;n++) write_rec(fo,(double)w*N*Tsl+tcum[n+1],(const double (*)[6])ring[w%RING][n]);
         sem_post(&out_free);
         if (w%1000==999) fflush(fo);
     }
