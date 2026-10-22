@@ -64,6 +64,7 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
 | `pint/README.md` | build/run of the C code |
 | `tools/bench_workflow.yml` | template for a GitHub Actions self-hosted-runner benchmark workflow (optional) |
 | `HANDOVER.md` | this file |
+| `WHFAST512_SYNC_BIAS.md` | draft upstream bug report: WHFast512 energy change per synchronization, fix `jacobi_recursive` |
 | `MACHINES.md` | test machines: host2 (7950X, `ssh root@23.239.118.238`) and the local i5-13500 workstation (no AVX-512) |
 
 ## 2. Code map
