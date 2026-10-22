@@ -1381,3 +1381,16 @@ per pass; with 64² V–E 0.462 → 0.18–0.21 ms (the single 64² task dominat
   (−2.8e-18 ± 3.1e-18 each) are too small. Candidates for the next session: the energy projection target (it uses
   the fine energy increment of the previous iterate, F(U^(K−1)), whose WH energy oscillation does not telescope along
   the accepted chain), or a τ dependence (test τ 3e-6 vs 3e-5 with ≥ 16 members).
+
+### Iteration 47 — is the residual energy drift τ-dependent? (`pint/drift_tau.py`, `runs/ens_tau.sh`)
+The 16 ensemble ICs again at τ = 3e-6 for 100 Myr (235 s each, K̄ 3.69); linear energy trend over the first 100 Myr,
+15 members (the 16th finished after the analysis), paired by IC:
+| | trend per Gyr (mean ± sem) | minus serial (paired) |
+|---|---|---|
+| serial | +3.3e-11 ± 3.2e-11 | — |
+| parareal τ 3e-5 | −1.29e-10 ± 4.2e-11 | −1.62e-10 ± 5.1e-11 |
+| parareal τ 3e-6 | −8.2e-11 ± 4.7e-11 | −1.15e-10 ± 6.2e-11 |
+τ 3e-6 − τ 3e-5 (paired): +4.7e-11 ± 6.9e-11 — **no significant τ dependence**: a 10× tighter tolerance does not
+remove the drift, which points away from incomplete convergence and towards a per-slice systematic of the driver
+(energy-projection target, per-call or conversion offsets). Next: an energy budget per slice in `pint_pipe` (log
+E(F(U^(K−1)_n)) − E(U^(K−1)_n), the projection correction and the conversions separately over ~1e5 slices).

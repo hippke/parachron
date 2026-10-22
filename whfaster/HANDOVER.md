@@ -30,8 +30,8 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
      (`PINT_BAL`) was tried and rejected (it. 40).
   7. Ensemble 16 × 200 Myr (it. 46): dynamics (Mercury e, secular frequencies) indistinguishable from serial; energy
      drift −1.25e-10 per Gyr relative to serial remains (3.5σ) — the first thing to investigate next (lead (0)).
-* Open leads (ranked): (0) the residual parareal energy drift of −1.25e-10 per Gyr (it. 46): projection target vs
-  telescoping, τ dependence, per-call residuals; (a) K = 2 at reference accuracy needs the accurate coarse step ("config C",
+* Open leads (ranked): (0) the residual parareal energy drift of −1.25e-10 per Gyr (it. 46; not τ-dependent, it. 47):
+  next step an energy budget per slice in `pint_pipe` (projection target vs telescoping, per-call and conversion offsets); (a) K = 2 at reference accuracy needs the accurate coarse step ("config C",
   `RESEARCH_PLAN_R5.md`): it reaches K̄ ≈ 2.4 at N = 16 (it. 41), but its measured parallel cost under load makes it
   break-even at best on 16 cores (it. 45) — worth it only on machines with more cores;
   (b) an ensemble of Gyr runs (serial vs parareal) to test instability/secular statistics, which single runs cannot;

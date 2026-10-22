@@ -58,3 +58,4 @@ iteration,coarse,slices,slice_yr,k_to_noise,r_est_C,S_model_N5,S_model_N10,kept,
 45,task-parallel all-component pass (pint_disp6k_par),,,,,,,,research,0.299 -> 0.091 ms with 4-8 helpers (idle, local); config C chain 0.4-0.6 ms under load vs gate 0.35 -> break-even on 16 cores
 45b,config C pass cost under load on 7950X,,,,,,,,no,0.068 ms idle / 0.140 ms loaded per pass -> config C -11%..+3% vs config B on 16 cores: no-go
 46,16-member 200 Myr ensemble serial vs parareal (tau 3e-5),16,986,K 3.06-3.27,,,,ref,dynamics indistinguishable (KS p>=0.06); residual energy drift -1.25e-10/Gyr vs serial (3.5 sigma); parareal 405 s vs serial 1330 s idle per 200 Myr
+47,tau dependence of the residual energy drift (16 ICs x 100 Myr at tau 3e-6),16,986,K 3.69,,,,research,drift vs serial -1.15e-10/Gyr (tau 3e-6) vs -1.62e-10 (3e-5): not tau-dependent -> per-slice systematic in driver
