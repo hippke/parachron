@@ -31,7 +31,8 @@ Config C with K̄ 2.4: T_G 0.3 ms → 26 ms (+20 %, ≈ 4.1×); 0.45 ms → 29 m
    prototype's accuracy: the end map in Python is a 3-step fixed point at the osculating angles).
    **Iteration 45 verdict (measured on the 7950X):** one task-parallel pass costs 0.068 ms idle but 0.140 ms under
    the pipeline's load → config C chain 0.7–1.0 ms (optimistic 0.54 ms) → −11 % … +3 % vs config B on 16 cores.
-   **No-go for the 16-core machine.** Revisit only for ≥ 24–32 cores (config B then needs K ≥ 4) or with a structural
+   **No-go for the 16-core machine.** More cores do not change this by themselves (iteration 48: at N = 40 config B ≈ 5.5×,
+   config C ≈ 4.7×, because the coarse chain grows with N too). Revisit only if the hop reaches ≈ 0.35 ms or with a structural
    way to shorten the coarse chain.
 2. **E–M–J term** (`so2.resonant_U2`, `g3.G3`): compute once per slice at k = 0 on a helper (off the chain; iteration
    24 showed per-slice freezing is as good as live), apply analytically in the drift.

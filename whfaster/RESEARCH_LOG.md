@@ -1394,3 +1394,10 @@ The 16 ensemble ICs again at τ = 3e-6 for 100 Myr (235 s each, K̄ 3.69); linea
 remove the drift, which points away from incomplete convergence and towards a per-slice systematic of the driver
 (energy-projection target, per-call or conversion offsets). Next: an energy budget per slice in `pint_pipe` (log
 E(F(U^(K−1)_n)) − E(U^(K−1)_n), the projection correction and the conversions separately over ~1e5 slices).
+
+### Iteration 48 — correction: config C on more cores
+Iterations 45 and the summary said config C "becomes attractive on machines with more cores". That is wrong: the
+serial coarse chain (N × T_G) grows with the slice count just like config B's iteration count. Model at N = 40
+(T_F ≈ 8.6–8.9 ms loaded; iteration 25: config B needs K ≈ 4 for 40 slices, the accurate step ≈ 3):
+config B 40 × 0.26 + 4.2 × 8.9 ≈ 48 ms per window → ≈ 5.5×; config C 40 × 0.7 + 3 × 9.3 ≈ 56 ms → ≈ 4.7×.
+Break-even needs T_G(config C) ≈ 0.35–0.4 ms at any N. Docs corrected (`PINT_SUMMARY.md`, `HANDOVER.md`, plan R5).

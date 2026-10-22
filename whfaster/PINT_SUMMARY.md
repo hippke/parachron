@@ -154,7 +154,8 @@ stop at k = 2 at τ 3e-5, with better accuracy); its minimal ingredient set is k
 transform, Earth–Mars–Jupiter term, giants at 180 d with samples, one RK4 step with sampled giants; no second-order
 secular rates). The all-component transform was made 2.2× cheaper (one kernel FFT per pair, exact) and task-parallel,
 but one pass costs 0.14 ms on the chain under load → config C ≈ 0.7–1.0 ms per hop → −11 … +3 % vs config B. **Not worth
-it on 16 cores**; it becomes attractive on machines with more cores (`RESEARCH_PLAN_R5.md`).
+it on 16 cores**, and more cores alone do not change that (the coarse chain grows with the slice count too; it. 48);
+it pays only if one hop costs ≲ 0.35 ms on the chain (`RESEARCH_PLAN_R5.md`).
 
 **1 Gyr runs** (asm kernel): energy at 0.986 Gyr — serial +2.9e-11 / +6.8e-11 (IC twin) / +3.5e-11 (with the fix);
 parareal with the old transformation **+7.4e-10** (linear), with the fix −8.8e-11 (a remaining −0.9e-17 per call

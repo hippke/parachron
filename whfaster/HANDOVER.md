@@ -33,7 +33,7 @@ The user's local copy is `/home/michael/Downloads/rebound/whfaster`; the 16-core
 * Open leads (ranked): (0) the residual parareal energy drift of −1.25e-10 per Gyr (it. 46; not τ-dependent, it. 47):
   next step an energy budget per slice in `pint_pipe` (projection target vs telescoping, per-call and conversion offsets); (a) K = 2 at reference accuracy needs the accurate coarse step ("config C",
   `RESEARCH_PLAN_R5.md`): it reaches K̄ ≈ 2.4 at N = 16 (it. 41), but its measured parallel cost under load makes it
-  break-even at best on 16 cores (it. 45) — worth it only on machines with more cores;
+  break-even at best on 16 cores (it. 45), and not better on more cores (it. 48) unless a hop costs ≲ 0.35 ms;
   (b) an ensemble of Gyr runs (serial vs parareal) to test instability/secular statistics, which single runs cannot;
   (c) per-core fine-time imbalance (second CCD 3–5 % slower; the slowest slice sets every iteration);
   (d) the remaining per-call energy offset with corrector + GR (−0.9e-17; inverse corrector is algebraically exact,
