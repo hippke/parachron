@@ -56,6 +56,8 @@ typedef double el[MEP_NP][6];
 
 static double now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
 static double wrapd(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
+static void set_error(char* buf, const char* msg){ snprintf(buf, REB_MEP_MSG, "%s", msg); }
+static int el_finite(const el E){ for (int i=0;i<MEP_NP;i++) for (int e=0;e<6;e++) if (!isfinite(E[i][e])) return 0; return 1; }
 
 // ------------------------------------------------------------------------------------------------ run state (one run at a time)
 static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -207,9 +209,13 @@ static void* slice_thread(void* arg){
                 // last slice: all updates of iteration k are known -> decide
                 const int interrupted = reb_sigint>0 || atomic_load(&fine_interrupted);
                 const int converged = (k>=K && upd_max[p][k]<=tol) || k==Kmax;
-                if (converged || interrupted){
+                const int nonfinite = !el_finite(CEL(Up[k][N]));   // never accept a non-finite state
+                if (converged || interrupted || nonfinite){
                     long Wnext = atomic_load(&W_eff);
-                    if (interrupted){
+                    if (nonfinite && !interrupted){
+                        set_error(M_->message,"MEP stopped: non-finite state in a window (the last completed window is kept).");
+                        stop_status = REB_STATUS_GENERIC_ERROR; Wnext = w+1;
+                    } else if (interrupted){
                         // some fine or coarse integration of this window may have been cut short: discard the window
                         stop_status = REB_STATUS_SIGINT; Wnext = w+1;
                     } else {
@@ -263,7 +269,6 @@ void reb_mep_options_default(struct reb_mep_options* o){
     o->cores = 0; o->helpers = -1; o->pin = 1; o->k_min = 3; o->k_max = 6; o->tol = 3e-6; o->slice_steps = 60000;
     o->checkpoint_every = 100; o->walltime = 0.;
 }
-static void set_error(char* buf, const char* msg){ snprintf(buf, REB_MEP_MSG, "%s", msg); }
 
 struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_options* o, const char* checkpoint){
     struct reb_mep* m=calloc(1,sizeof *m);

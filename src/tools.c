@@ -1148,6 +1148,10 @@ struct reb_orbit reb_orbit_from_particle_err(double G, struct reb_particle p, st
         //ea = acos2((1.-o.d/o.a)/o.e, vr);// from definition of eccentric anomaly.  If vr < 0, must be going from apo to peri, so ea = [pi, 2pi] so ea = -acos(cosea)
         // 2026-09-14: New calculation for eccentric anomaly that avoids catastrophic cancellation near pericenter.
         double arg = vr*o.d/(o.n*o.a*o.a*o.e);
+        // arg = sin(E). Near quadrature (E = +-pi/2) round-off can make |arg| exceed 1, and asin would return NaN for
+        // E, M and l (Parachron fix; NaN for ~4% of orbits within 1e-7 rad of quadrature before the fix).
+        if (arg > 1.) arg = 1.;
+        if (arg < -1.) arg = -1.;
         if (fabs(arg)>TINY){
             ea = asin(arg);
             if ((o.a-o.d) < 0.0){
