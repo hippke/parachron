@@ -92,14 +92,44 @@ static double energy_sim(struct reb_simulation* s){
     return E;
 }
 static double energy_el(const el E){ struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,E); double e=energy_sim(s); reb_simulation_free(s); return e; }
-// energy projection: v += v d with d = (Et - E)/(2 Kin) (keeps the full relative precision of the tiny correction)
-static void project_energy(el E, double Et){
+// Projection of a corrected boundary state onto the target energy Et and angular-momentum vector Lt (targets: the
+// start state's values plus the increments of one fine solve, so each slice carries the energy and angular-momentum
+// changes of the fine integrator, and the parareal fixed point is unchanged). The barycentric velocities change by
+// dv_i = alpha v_i + beta x r_i, the minimal mass-weighted change that reaches both targets; linearised,
+//   dE = 2K alpha + L.beta,   dL = alpha L + I beta,   I = sum m (r^2 1 - r r^T);
+// two Newton passes, applied as increments (keeps the full relative precision of the tiny corrections). The total
+// momentum stays zero. Without the angular-momentum part, |L| drifted by -2.6e-10 per Gyr (16 Solar System runs).
+static void L_sim(struct reb_simulation* s, double L[3]){ struct reb_vec3d l=reb_simulation_angular_momentum(s); L[0]=l.x; L[1]=l.y; L[2]=l.z; }
+static void L_el(const el E, double L[3]){ struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,E); L_sim(s,L); reb_simulation_free(s); }
+static int solve4(double A[4][4], double b[4]){
+    for (int c=0;c<4;c++){
+        int p=c; for (int r=c+1;r<4;r++) if (fabs(A[r][c])>fabs(A[p][c])) p=r;
+        if (A[p][c]==0.) return 1;
+        if (p!=c){ for (int q=0;q<4;q++){ const double t=A[c][q]; A[c][q]=A[p][q]; A[p][q]=t; } const double t=b[c]; b[c]=b[p]; b[p]=t; }
+        for (int r=c+1;r<4;r++){ const double f=A[r][c]/A[c][c]; for (int q=c;q<4;q++) A[r][q]-=f*A[c][q]; b[r]-=f*b[c]; }
+    }
+    for (int c=3;c>=0;c--){ double v=b[c]; for (int q=c+1;q<4;q++) v-=A[c][q]*b[q]; b[c]=v/A[c][c]; }
+    return 0;
+}
+static void project_EL(el E, double Et, const double Lt[3]){
     struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,CEL(E));
     for (int it=0; it<2; it++){
-        const double e=energy_sim(s);
-        double Kin=0; for (size_t i=0;i<s->N;i++){ struct reb_particle p=s->particles[i]; Kin+=0.5*p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz); }
-        const double d=(Et-e)/(2.*Kin);
-        for (size_t i=0;i<s->N;i++){ s->particles[i].vx+=s->particles[i].vx*d; s->particles[i].vy+=s->particles[i].vy*d; s->particles[i].vz+=s->particles[i].vz*d; }
+        const double e=energy_sim(s); double L[3]; L_sim(s,L);
+        double K2=0, I[3][3]={{0}};
+        for (size_t i=0;i<s->N;i++){
+            const struct reb_particle p=s->particles[i]; const double r[3]={p.x,p.y,p.z};
+            K2+=p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz);
+            const double r2=r[0]*r[0]+r[1]*r[1]+r[2]*r[2];
+            for (int a=0;a<3;a++) for (int c=0;c<3;c++) I[a][c]+=p.m*((a==c?r2:0.)-r[a]*r[c]);
+        }
+        double A[4][4]={{K2,L[0],L[1],L[2]},{L[0],I[0][0],I[0][1],I[0][2]},{L[1],I[1][0],I[1][1],I[1][2]},{L[2],I[2][0],I[2][1],I[2][2]}};
+        double x[4]={Et-e, Lt[0]-L[0], Lt[1]-L[1], Lt[2]-L[2]};
+        if (solve4(A,x)) break;
+        for (size_t i=0;i<s->N;i++){
+            struct reb_particle* p=&s->particles[i];
+            const double bx=x[2]*p->z-x[3]*p->y, by=x[3]*p->x-x[1]*p->z, bz=x[1]*p->y-x[2]*p->x;   // beta x r
+            p->vx+=p->vx*x[0]+bx; p->vy+=p->vy*x[0]+by; p->vz+=p->vz*x[0]+bz;
+        }
     }
     reb_mep_sim_to_el(s,E); reb_simulation_free(s);
 }
@@ -178,7 +208,7 @@ static void* slice_thread(void* arg){
     for (long w=0; w<atomic_load(&W_eff); w++){
         const int p=w&1; el (*Up)[NMAX+1]=U[p]; sem_t (*rdy)[NMAX+1]=ready[p]; atomic_int* stp=&stop_at[p];
         if (n==0 && w>0) sem_wait(&win_start[p]);
-        double EFprev=0, EUprev=0; int have_F=0;
+        double EFprev=0, EUprev=0, LFprev[3]={0}, LUprev[3]={0}; int have_F=0;
         for (int k=0;k<=kend;k++){
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             if (n>0) sem_wait(&rdy[k][n]);
@@ -197,7 +227,8 @@ static void* slice_thread(void* arg){
                     Up[k][n+1][i][e]=g[i][e]+d;
                 }
                 for (int i=0;i<MEP_NP;i++) Up[k][n+1][i][1]=wrapd(Up[k][n+1][i][1]);
-                project_energy(Up[k][n+1], energy_el(CEL(Up[k][n])) + (EFprev-EUprev));
+                double Lt[3]; L_el(CEL(Up[k][n]),Lt); for (int a=0;a<3;a++) Lt[a]+=LFprev[a]-LUprev[a];
+                project_EL(Up[k][n+1], energy_el(CEL(Up[k][n])) + (EFprev-EUprev), Lt);
             }
             memcpy(Gold,g,sizeof(el));
             if (k>0){
@@ -239,7 +270,7 @@ static void* slice_thread(void* arg){
             // fine slice for the next iteration (speculative: abandoned if the window stops)
             have_F=0;
             if (k<kend && n>=k){
-                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp)){ EUprev=energy_el(CEL(Up[k][n])); EFprev=energy_el(CEL(Fprev)); have_F=1; }
+                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp)){ EUprev=energy_el(CEL(Up[k][n])); EFprev=energy_el(CEL(Fprev)); L_el(CEL(Up[k][n]),LUprev); L_el(CEL(Fprev),LFprev); have_F=1; }
             }
         }
         sem_wait(&win_done[p]);    // a thread can finish k = Kmax before the window is decided
