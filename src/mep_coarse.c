@@ -33,6 +33,14 @@
 #include "mep.h"
 #include <stdio.h>
 #include "integrator_whfast512.h"
+// The coarse step is compiled for the baseline instruction set (portable builds, e.g. wheels). Its hot functions get an
+// x86-64-v3 (AVX2) clone that is selected at load time by CPU features (ifunc), which makes MEP ~5% faster. Results are
+// bitwise identical either way (the builds use -ffp-contract=off, so the clone uses no fused multiply-adds).
+#if defined(__x86_64__) && !defined(__AVX2__) && defined(__GNUC__) && !defined(__clang__) && __GNUC__>=12
+#define MEP_CLONES __attribute__((target_clones("arch=x86-64-v3","default")))
+#else
+#define MEP_CLONES
+#endif
 #include "mep_dual.h"
 #include <math.h>
 #include <complex.h>
@@ -66,7 +74,7 @@ void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_d
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 
-static void el_to_rv(double mu, const double* E, double* r, double* v){
+MEP_CLONES static void el_to_rv(double mu, const double* E, double* r, double* v){
     const double a=exp(E[0]), lam=E[1], k=E[2], h=E[3], q=E[4], p=E[5];
     const double e=hypot(k,h), pom=atan2(h,k), si=hypot(q,p), Om=atan2(p,q);
     const double inc=2.*asin(si<1.?si:1.);
@@ -81,7 +89,7 @@ static void el_to_rv(double mu, const double* E, double* r, double* v){
     const double Q[3]={-cO*so-sO*co*ci, -sO*so+cO*co*ci, co*s_i};
     for (int d=0; d<3; d++){ r[d]=xp*P[d]+yp*Q[d]; v[d]=vxp*P[d]+vyp*Q[d]; }
 }
-static void rv_to_el(double mu, const double* r, const double* v, double* E){
+MEP_CLONES static void rv_to_el(double mu, const double* r, const double* v, double* E){
     const double rn=sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]), v2=v[0]*v[0]+v[1]*v[1]+v[2]*v[2];
     const double a=1./(2./rn-v2/mu);
     const double hv[3]={r[1]*v[2]-r[2]*v[1], r[2]*v[0]-r[0]*v[2], r[0]*v[1]-r[1]*v[0]};
@@ -106,7 +114,7 @@ static void rv_to_el(double mu, const double* r, const double* v, double* E){
 }
 // dE/dv: ln a analytically (d ln a = 2a v.dv/mu); the other components (if ncomp > 1) by forward differences
 static __thread int dual_t=0;
-static void dEdv(double mu, const double* r, const double* v, double D[6][3], int ncomp){
+MEP_CLONES static void dEdv(double mu, const double* r, const double* v, double D[6][3], int ncomp){
     if (dual_t && ncomp>1){ mep_dedv_dual(mu,r,v,D); return; }
     const double rn=sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]), v2=v[0]*v[0]+v[1]*v[1]+v[2]*v[2];
     const double a=1./(2./rn-v2/mu);
@@ -128,7 +136,7 @@ static void dEdv(double mu, const double* r, const double* v, double D[6][3], in
 static double complex tw[NGMAX+1][NGMAX/2];
 static pthread_once_t tw_once = PTHREAD_ONCE_INIT;
 static void tw_init(void){ for (int n=2;n<=NGMAX;n<<=1) for (int j=0;j<n/2;j++) tw[n][j]=cos(-2.*M_PI*j/n)+I*sin(-2.*M_PI*j/n); }
-static void fft1(double complex* a, int n, int s){
+MEP_CLONES static void fft1(double complex* a, int n, int s){
     pthread_once(&tw_once, tw_init);
     double complex t[NGMAX];
     for (int i=0,j=0;i<n;i++){
@@ -146,7 +154,7 @@ static void fft1(double complex* a, int n, int s){
     }
     for (int i=0;i<n;i++) a[i*s]=t[i];
 }
-static void fft2(double complex* a, int n){
+MEP_CLONES static void fft2(double complex* a, int n){
     for (int r=0;r<n;r++) fft1(a+r*n,n,1);
     for (int c=0;c<n;c++) fft1(a+c,n,n);
 }
@@ -155,7 +163,7 @@ static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq
                                                                 // disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/n^2, with F_a(k) = (Z(k) + conj Z(-k))/2,
                                                                 // F_b(k) = (Z(k) - conj Z(-k))/(2i)
 static __thread double nu_cut_t=0.;
-static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, double li, double lj, double* da, double* db){
+MEP_CLONES static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, double li, double lj, double* da, double* db){
     double complex ei[NGMAX], ej[NGMAX];
     for (int a=0;a<n;a++){ const int K=kf(a,n); ei[a]=cos(K*li)+I*sin(K*li); ej[a]=cos(K*lj)+I*sin(K*lj); }
     double sa=0, sb=0; const double nrm=1./(n*n);
@@ -188,7 +196,7 @@ struct tctx {
     int ntask; int ti[NTASKMAX], tj0[NTASKMAX], tj1[NTASKMAX], tkind[NTASKMAX];   // kind 0 inner pair, 1 giants, 2 GR, 3 grid
     double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];
 };
-static void task_grid(struct tctx* x, int p){
+MEP_CLONES static void task_grid(struct tctx* x, int p){
     const struct mep_cfg* c=x->c; dual_t=c->dual;
     if (p<MEP_NI){
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg);
@@ -198,7 +206,7 @@ static void task_grid(struct tctx* x, int p){
         for (int g=0; g<x->N2; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
     }
 }
-static void task_pair(struct tctx* x, int t){
+MEP_CLONES static void task_pair(struct tctx* x, int t){
     const struct mep_cfg* c=x->c; const double* m=c->masses; const double (*E)[6]=x->E; const int nc=x->nc;
     static __thread double complex buf[NGMAX*NGMAX];
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
@@ -249,7 +257,7 @@ static void task_pair(struct tctx* x, int t){
         if (jhi>jlo){ sp_eval_pair(buf,Ng,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
     }
 }
-static void task_gr(struct tctx* x, int t){
+MEP_CLONES static void task_gr(struct tctx* x, int t){
     const double* m=x->c->masses; const int i=x->ti[t]; const int N1=x->N1;
     double complex f1[NGMAX]; double Rg[6]={0};
     const double pre= x->c->gr ? -6.*m[0]*m[0]/(CGR*CGR) : 0.;

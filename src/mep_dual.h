@@ -43,7 +43,7 @@ static inline dn dacos_clamped(dn a){ if (a.x>=1. || a.x<=-1.) return dc(a.x>=1.
 static inline dn datan2(dn y, dn x){ const double r2=x.x*x.x+y.x*y.x; dn r={atan2(y.x,x.x),{0,0,0}};
     for (int c=0;c<3;c++) r.d[c]=(x.x*y.d[c]-y.x*x.d[c])/r2;
     return r; }
-    static void mep_dedv_dual(double mu, const double* r, const double* v, double D[6][3]){
+    MEP_CLONES static void mep_dedv_dual(double mu, const double* r, const double* v, double D[6][3]){
         dn V[3]; for (int x=0;x<3;x++){ V[x]=dc(v[x]); V[x].d[x]=1.; }
         const double rn=sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
         const dn v2=dadd(dadd(dmul(V[0],V[0]),dmul(V[1],V[1])),dmul(V[2],V[2]));

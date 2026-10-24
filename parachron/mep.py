@@ -15,7 +15,7 @@ Msun, yr/2pi), N_systems = 1. The method was designed and validated for the Sola
 Runs can be checkpointed to a small file and resumed later (also in another process); a resumed run is bitwise
 identical to an uninterrupted one.
 """
-from ctypes import Structure, c_int, c_int64, c_uint, c_double, c_char, c_char_p, POINTER, byref
+from ctypes import Structure, CFUNCTYPE, c_int, c_int64, c_uint, c_double, c_char, c_char_p, c_void_p, POINTER, byref
 from . import clibrebound
 import sys
 
@@ -32,10 +32,14 @@ class MEPOptions(Structure):
 
 class _MEPState(Structure):
     """Mirror of struct reb_mep (see rebound.h)."""
-    _fields_ = [("opt", MEPOptions), ("t", c_double), ("t_start", c_double), ("dt", c_double),
-                ("windows", c_int64), ("khist", c_int64 * REB_MEP_KHIST), ("masses", c_double * 9),
-                ("E", (c_double * 6) * 8), ("gr_potential", c_uint), ("corrector", c_uint), ("kernel", c_uint),
-                ("walltime_last", c_double), ("checkpoint", c_char * REB_MEP_PATH), ("message", c_char * REB_MEP_MSG)]
+
+
+_HEARTBEAT = CFUNCTYPE(None, POINTER(_MEPState))
+_MEPState._fields_ = [("opt", MEPOptions), ("t", c_double), ("t_start", c_double), ("dt", c_double),
+                      ("windows", c_int64), ("khist", c_int64 * REB_MEP_KHIST), ("masses", c_double * 9),
+                      ("E", (c_double * 6) * 8), ("gr_potential", c_uint), ("corrector", c_uint), ("kernel", c_uint),
+                      ("walltime_last", c_double), ("checkpoint", c_char * REB_MEP_PATH), ("message", c_char * REB_MEP_MSG),
+                      ("heartbeat", _HEARTBEAT), ("ref", c_void_p)]
 
 
 _create = clibrebound.reb_mep_create
@@ -152,6 +156,26 @@ class MEP:
         if status == 6:
             raise KeyboardInterrupt
         return status == 0
+
+    @property
+    def heartbeat(self):
+        """
+        Function called as heartbeat(mep) after every completed window, or None. `mep.t`, `mep.windows` and
+        `mep.state` are current inside it (`mep.sim` is updated only at the end of `integrate`). It runs on a worker
+        thread inside the parallel schedule and holds up the next window while it runs, so keep it short (e.g. store
+        `mep.state`). Exceptions inside it are printed and ignored.
+        """
+        return getattr(self, "_heartbeat_py", None)
+
+    @heartbeat.setter
+    def heartbeat(self, func):
+        if func is None:
+            self._heartbeat_c = None
+            self._p.contents.heartbeat = _HEARTBEAT()
+        else:
+            self._heartbeat_c = _HEARTBEAT(lambda _p: func(self))     # keep a reference: C holds only the pointer
+            self._p.contents.heartbeat = self._heartbeat_c
+        self._heartbeat_py = func
 
     @property
     def t(self):

@@ -257,6 +257,7 @@ static void* slice_thread(void* arg){
                         memcpy(m->E,Ecur,sizeof(el));
                         if (walltime_limit>0. && now()-t_start_wall>=walltime_limit && w+1<Wnext){ stop_status = REB_STATUS_USER; Wnext = w+1; }
                         if (m->opt.checkpoint_every>0 && m->windows%m->opt.checkpoint_every==0) ckpt_write(m);
+                        if (m->heartbeat) m->heartbeat(m);
                     }
                     atomic_store(&W_eff,Wnext);
                     // every thread has entered this window, so none uses the other parity's state any more

@@ -60,6 +60,22 @@ class TestMEP(unittest.TestCase):
         self.assertEqual(a.state, c.state)
         self.assertEqual(a.t, c.t)
 
+    def test_heartbeat(self):
+        # one call with a heartbeat after every window gives the same states as one call per window
+        a = parachron.MEP(solar_system(), **self.kw)
+        rec = []
+        a.heartbeat = lambda m: rec.append((m.windows, m.t, m.state))
+        a.integrate(6 * a.window_length)
+        b = parachron.MEP(solar_system(), **self.kw)
+        ref = []
+        for w in range(1, 7):
+            b.integrate(w * b.window_length)
+            ref.append((b.windows, b.t, b.state))
+        self.assertEqual(rec, ref)
+        a.heartbeat = None
+        a.integrate(7 * a.window_length)
+        self.assertEqual(len(rec), 6)
+
     def test_partial_window_not_integrated(self):
         mep = parachron.MEP(solar_system(), **self.kw)
         mep.integrate(0.5 * mep.window_length)

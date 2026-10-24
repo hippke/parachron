@@ -562,6 +562,10 @@ struct reb_mep {
     double walltime_last;               // Wall clock [s] of the last reb_mep_integrate call.
     char checkpoint[REB_MEP_PATH];      // Checkpoint file ("" = none).
     char message[REB_MEP_MSG];          // Error message of the last call ("" = none).
+    void (*heartbeat)(struct reb_mep* m); // Called after every completed window (t, windows, E updated), or NULL. Runs on
+                                        // a worker thread inside the parallel schedule: keep it short (e.g. write a
+                                        // record). Not saved in checkpoints.
+    void* ref;                          // Free for the user (e.g. data for the heartbeat).
 };
 REB_API void reb_mep_options_default(struct reb_mep_options* o);
 // Starts a run from the current state of r (which is not modified). o may be NULL (defaults); checkpoint may be NULL.
