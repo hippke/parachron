@@ -32,13 +32,28 @@
 #include <signal.h>
 #include "integrator_whfast512_data.h"
 
+// REB_W512_AVX2_VL (set by integrator_whfast512_c_avx2vl.c): the same 256-bit kernel compiled with AVX-512VL, whose
+// EVEX encoding gives it 32 vector registers instead of 16 (fewer spills of the 8-lane = 2 x 4 state). Same
+// operations, so bitwise identical results; selected automatically for kernel 3 on CPUs with AVX-512VL.
+#ifdef REB_W512_AVX2_VL
+#define W512_A2(name) name##avx2vl
+#else
+#define W512_A2(name) name##avx2
+#endif
+
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && (defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5) || defined(_MSC_VER))
 
-#if defined(__clang__)
+#if defined(__clang__) && defined(REB_W512_AVX2_VL)
+#pragma clang attribute push (__attribute__((target("avx2,fma,avx512f,avx512vl"))), apply_to = function)
+#elif defined(__clang__)
 #pragma clang attribute push (__attribute__((target("avx2,fma"))), apply_to = function)
 #elif defined(__GNUC__)
 #pragma GCC push_options
+#ifdef REB_W512_AVX2_VL
+#pragma GCC target("avx2,fma,avx512f,avx512vl")
+#else
 #pragma GCC target("avx2,fma")
+#endif
 #endif
 #define REB_W512_TARGET
 #include <immintrin.h>
@@ -114,7 +129,11 @@ W_INL V w_perm_b3(V a){ return w_make(a.h, _mm256_permute4x64_pd(a.l, 0x39)); } 
 W_INL V w_perm_b4(V a){ return w_make(_mm256_permute4x64_pd(a.h, 0x39), _mm256_permute4x64_pd(a.l, 0x4E)); } // 5674 2301
 W_INL V w_perm_b34(V a){ return w_make(_mm256_permute4x64_pd(a.h, 0x93), a.l); }                         // 7456 0123
 
+#ifdef REB_W512_AVX2_VL
+#define REB_W512_SUFFIX avx2vl
+#else
 #define REB_W512_SUFFIX avx2
+#endif
 #include "integrator_whfast512_kernel.h"
 
 #if defined(__clang__)
@@ -123,21 +142,29 @@ W_INL V w_perm_b34(V a){ return w_make(_mm256_permute4x64_pd(a.h, 0x93), a.l); }
 #pragma GCC pop_options
 #endif
 
+#ifdef REB_W512_AVX2_VL
+int reb_whfast512c_avx2vl_compiled(void){ return 1; }
+#else
 int reb_whfast512c_avx2_compiled(void){ return 1; }
+#endif
 
 #else // not x86
-int reb_whfast512c_full_steps_avx2(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
+int W512_A2(reb_whfast512c_full_steps_)(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
     (void)data; (void)N_steps; (void)skip_first_kepler_step; (void)sigint; (void)gr; (void)nsys; (void)encounter; (void)escape;
     return 1; // never called (see reb_whfast512c_avx2_compiled)
 }
-void reb_whfast512c_kepler_step_avx2(struct simd_data* data){ (void)data; }
-int reb_whfast512c_full_steps_comp_avx2(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
+void W512_A2(reb_whfast512c_kepler_step_)(struct simd_data* data){ (void)data; }
+int W512_A2(reb_whfast512c_full_steps_comp_)(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
     (void)data; (void)N_steps; (void)skip_first_kepler_step; (void)sigint; (void)gr; (void)nsys; (void)encounter; (void)escape;
     return 1; // never called
 }
-void reb_whfast512c_corrector_step_avx2(struct simd_data* data, double inv, int gr, int nsys){ (void)data; (void)inv; (void)gr; (void)nsys; }
+void W512_A2(reb_whfast512c_corrector_step_)(struct simd_data* data, double inv, int gr, int nsys){ (void)data; (void)inv; (void)gr; (void)nsys; }
+#ifdef REB_W512_AVX2_VL
+int reb_whfast512c_avx2vl_compiled(void){ return 0; }
+#else
 int reb_whfast512c_avx2_compiled(void){ return 0; }
-int reb_whfast512c_full_steps_pair_avx2(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape){
+#endif
+int W512_A2(reb_whfast512c_full_steps_pair_)(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape){
     (void)da; (void)db; (void)N_steps; (void)N_done; (void)skip_a; (void)skip_b; (void)sigint; (void)status_a; (void)status_b; (void)gr; (void)nsys; (void)encounter; (void)escape;
     return -1; // never called
 }

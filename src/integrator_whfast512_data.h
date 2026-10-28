@@ -93,6 +93,7 @@ enum REB_WHFAST512_KERNEL {
     int reb_whfast512c_full_steps_pair_##suffix(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape);
 REB_WHFAST512_C_KERNEL_DECLARE(avx512)
 REB_WHFAST512_C_KERNEL_DECLARE(avx2)
+REB_WHFAST512_C_KERNEL_DECLARE(avx2vl)   // AVX2 kernel compiled with AVX-512VL (32 registers; same results)
 REB_WHFAST512_C_KERNEL_DECLARE(avx2x4)   // AVX2, four lanes: one system with at most four planets
 REB_WHFAST512_C_KERNEL_DECLARE(generic)
 REB_WHFAST512_C_KERNEL_DECLARE(genericx4) // generic, four lanes: one system with at most four planets
@@ -100,5 +101,6 @@ REB_WHFAST512_C_KERNEL_DECLARE(genericx4) // generic, four lanes: one system wit
 // 1 if the C kernel for this instruction set was compiled in (x86 compilers that support the target).
 int reb_whfast512c_avx512_compiled(void);
 int reb_whfast512c_avx2_compiled(void);
+int reb_whfast512c_avx2vl_compiled(void);
 
 #endif // _INTEGRATOR_WHFAST512_DATA_H

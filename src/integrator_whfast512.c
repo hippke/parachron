@@ -220,6 +220,21 @@ static int whfast512_avx2_fma_available(void){
 #endif
 }
 
+// Returns 1 if kernel 3 (C AVX2) should run its AVX-512VL build (same results, 32 vector registers): compiled in and
+// supported by this CPU and OS. Compile with -DREB_W512_NO_AVX2VL to always use the plain AVX2 build.
+static int whfast512_avx2vl(void){
+#if !defined(REB_W512_NO_AVX2VL) && (defined(__i386__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+    static int vl = -1;
+    if (vl < 0){
+        __builtin_cpu_init();
+        vl = reb_whfast512c_avx2vl_compiled() && reb_avx512_available() && __builtin_cpu_supports("avx512vl") ? 1 : 0;
+    }
+    return vl;
+#else
+    return 0;
+#endif
+}
+
 static const char* whfast512_kernel_name(unsigned int k){
     switch (k){
         case REB_WHFAST512_KERNEL_ASM: return "AVX-512 assembly";
@@ -392,6 +407,9 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
                 if (whfast512->four_lanes){
                     return reb_whfast512c_full_steps_comp_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
                 }
+                if (whfast512_avx2vl()){
+                    return reb_whfast512c_full_steps_comp_avx2vl(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                }
                 return reb_whfast512c_full_steps_comp_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             case REB_WHFAST512_KERNEL_C_GENERIC:
                 if (whfast512->four_lanes){
@@ -408,6 +426,9 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
         case REB_WHFAST512_KERNEL_C_AVX2:
             if (whfast512->four_lanes){
                 return reb_whfast512c_full_steps_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+            }
+            if (whfast512_avx2vl()){
+                return reb_whfast512c_full_steps_avx2vl(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             }
             return reb_whfast512c_full_steps_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         case REB_WHFAST512_KERNEL_C_GENERIC:
@@ -462,6 +483,9 @@ static void whfast512_corrector_step(struct reb_integrator_whfast512_state* whfa
             if (whfast512->four_lanes){
                 reb_whfast512c_corrector_step_avx2x4(data, inv, whfast512->gr_potential, 2); return;
             }
+            if (whfast512_avx2vl()){
+                reb_whfast512c_corrector_step_avx2vl(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
+            }
             reb_whfast512c_corrector_step_avx2(data, inv, whfast512->gr_potential, whfast512->N_systems); return;
         case REB_WHFAST512_KERNEL_C_GENERIC:
             if (whfast512->four_lanes){
@@ -497,6 +521,9 @@ static void whfast512_kepler_step(struct reb_integrator_whfast512_state* whfast5
         case REB_WHFAST512_KERNEL_C_AVX2:
             if (whfast512->four_lanes){
                 reb_whfast512c_kepler_step_avx2x4(data); return;
+            }
+            if (whfast512_avx2vl()){
+                reb_whfast512c_kepler_step_avx2vl(data); return;
             }
             reb_whfast512c_kepler_step_avx2(data); return;
         case REB_WHFAST512_KERNEL_C_GENERIC:

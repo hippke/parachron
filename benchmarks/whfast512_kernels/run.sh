@@ -97,6 +97,7 @@ build(){   # name, extra OPT flags, compiler
 VARIANTS=()
 build default ""                    gcc && VARIANTS+=(default)
 build hwrsqrt "-DREB_W512_HW_RSQRT" gcc && VARIANTS+=(hwrsqrt)
+build novl    "-DREB_W512_NO_AVX2VL" gcc && VARIANTS+=(novl)
 build newton  "-DREB_W512_NEWTON_RSQRT" gcc && VARIANTS+=(newton)
 build native  "-march=native"       gcc && VARIANTS+=(native)
 if command -v clang >/dev/null; then
@@ -172,11 +173,12 @@ chk default 2 default 3
 chk newton 2 newton 3
 chk default 2 native 2
 chk default 2 clang 2
+chk default 3 novl 3
 chk newton 2 clang_newton 2
 
 # ------------------------------------------------------------------------------------------------ 2. counters
 say "2. hardware counters per step (perf; counts do not depend on the background load, cycles a little)"
-PERF_RUNS=("default 1" "default 2" "default 3" "newton 2" "native 3")
+PERF_RUNS=("default 1" "default 2" "default 3" "novl 3" "newton 2" "native 3")
 if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
     P=fp_ops_retired_by_type
     GROUPS_=("cycles,instructions")
@@ -199,7 +201,7 @@ fi
 # ------------------------------------------------------------------------------------------------ 3. 16 cores busy
 P16=16; [ "$NPHYS" -lt 16 ] && P16=$NPHYS
 say "3. per-core speed with $P16 copies at the same time (most idle cores), ABBA against the assembly kernel, 3 blocks"
-LOADED=("default 1" "default 2" "default 3" "newton 2" "native 2" "native 3")
+LOADED=("default 1" "default 2" "default 3" "novl 3" "newton 2" "native 3")
 multi(){ # variant kernel -> median ns/step over the copies (cores in $PICK)
     local i=0
     rm -f "$OUT/raw/load_$$_"*

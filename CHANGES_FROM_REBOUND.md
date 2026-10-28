@@ -203,7 +203,7 @@ Summary of the changes (details in `changelog.md`):
 * `rebound/vectors.py` → `parachron/vectors.py` (renamed only)
 * `rebound/widget.py` → `parachron/widget.py` (renamed and modified)
 
-## New files (34)
+## New files (35)
 * `CHANGES_FROM_REBOUND.md`
 * `RELEASING.md` — how to publish on PyPI
 * `benchmarks/whfast512_kernels/README.md` — WHFast512 kernel and MEP benchmark
@@ -227,6 +227,7 @@ Summary of the changes (details in `changelog.md`):
 * `parachron/tests/test_tree_group.py`
 * `parachron/tests/test_whfast512.py`
 * `src/integrator_whfast512_c_avx2.c`
+* `src/integrator_whfast512_c_avx2vl.c` — AVX2 kernel built with AVX-512VL (32 registers)
 * `src/integrator_whfast512_c_avx2x4.c`
 * `src/integrator_whfast512_c_avx512.c`
 * `src/integrator_whfast512_c_generic.c`

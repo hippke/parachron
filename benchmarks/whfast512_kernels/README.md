@@ -19,7 +19,8 @@ idle fraction of the cores used.
 | variant | what it tests |
 |---|---|
 | `default` kernel 1 | the original WHFast512 assembly (reference) |
-| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves), 1/sqrt as sqrt + division |
+| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves, built with AVX-512VL where available), 1/sqrt as sqrt + division |
+| `novl` | kernel 3 without its AVX-512VL build (plain AVX2 encoding, 16 registers), for comparison |
 | `hwrsqrt` | Newton 1/sqrt with the hardware estimate as seed (`-DREB_W512_HW_RSQRT`) |
 | `newton` | C kernels with the earlier Newton 1/sqrt from a bit-trick seed (`-DREB_W512_NEWTON_RSQRT`; faster on Intel Sapphire Rapids) |
 | `native` | the default compiled with `-march=native` (compiler tuning for this CPU) |
