@@ -9,12 +9,14 @@
  *          operations in the same order, and the same operands in each fused multiply-add, so that
  *          results agree with the assembly to round-off. Differences to the assembly:
  *          - In the interaction step, 1/sqrt(r^2) (planet-planet forces, Jacobi term, central body and
- *            GR terms) is computed by w512_rsqrt(): an integer bit-trick seed, three Newton iterations
- *            and one fused-multiply-add correction (at most 1 ulp error, mean 0.14 ulp; more accurate
- *            than sqrt followed by a division). The assembly uses vrsqrt14pd plus Newton iterations
- *            (vrsqrt14pd does not exist for AVX2, and its result is not specified bit for bit), and
- *            square roots and divisions for the other terms. Distance checks for encounters and
- *            escapes compare squared distances.
+ *            GR terms) is a square root followed by a division (W512_RSQRT). Both are correctly
+ *            rounded, so every instruction set gives the same bits. The assembly uses vrsqrt14pd plus
+ *            Newton iterations for the planet-planet terms (vrsqrt14pd does not exist for AVX2, and its
+ *            result is not specified bit for bit), and square roots and divisions for the other terms.
+ *            Compile-time alternative REB_W512_NEWTON_RSQRT: an integer bit-trick seed, three Newton
+ *            iterations and one fused-multiply-add correction (at most 1 ulp error), faster where
+ *            512-bit divisions are slow (Intel Sapphire Rapids), slower on AMD Zen 4 and Zen 5.
+ *            Distance checks for encounters and escapes compare squared distances.
  *          - 0.5*f*f'' in the Halley step is a multiplication by 0.5 (the assembly subtracts one from
  *            the exponent, which gives the same result for normal numbers, but not for zero).
  *          - Starting value of the Kepler solver: sixth-order series reversion of Kepler's equation in
@@ -36,7 +38,7 @@
  *            w_klt(a,b) = a<b, w_kgt(a,b) = a>b, w_kle(a,b) = a<=b  (ordered, quiet: false for NaN)
  *            w_kand(k,l), w_kandnot(k,l) = (~k)&l, w_knot(k), w_kany(k), w_kall(), w_kbits(unsigned)
  *            w_sel(k,a,b) = k ? a : b, w_maskz(k,a) = k ? a : 0
- *            w_rsqrt_seed(a): bits 0x5FE6EB50C7B537A9 - (bits(a) >> 1) as an integer operation
+ *            w_rsqrt_seed(a): bits 0x5FE6EB50C7B537A9 - (bits(a) >> 1) as an integer operation (used only with REB_W512_NEWTON_RSQRT)
  *            w_perm_3201(a), w_perm_2310(a), w_perm_3012(a)  (within each group of four lanes)
  *            w_swap_pairs(a)                                  (1032 5476)
  *            w_perm_b3(a) (45671230), w_perm_b4(a) (56742301), w_perm_b34(a) (74560123)
@@ -527,10 +529,16 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_comp_)(const W512_CONSTS*
 ///////////////////////////////////////////////////////////////////////////////
 // Interaction step
 
-// 1/sqrt(a) for a > 0 (at most 1 ulp error). Deterministic: the same operations on every
-// instruction set, so all C kernels agree bit for bit.
-// W512_RSQRT_NR: Newton steps after the seed (3 for the bit-trick seed; an instantiation may define fewer with a more
-// accurate seed, see REB_W512_HW_RSQRT).
+// 1/sqrt(a) for a > 0. Default: a square root and a division. Both are correctly rounded, so all C kernels agree bit
+// for bit; fewer operations than the Newton iteration below, and faster on CPUs with fast dividers (Zen 4 +4 %,
+// Zen 5 +11 % per step), slower where 512-bit divisions are slow (Sapphire Rapids).
+// REB_W512_NEWTON_RSQRT (compile-time, off): integer bit-trick seed and W512_RSQRT_NR Newton steps plus a correction
+// (at most 1 ulp, deterministic). REB_W512_HW_RSQRT (experimental, implies it): the hardware estimate as the seed, one
+// Newton step fewer; results then differ between instruction sets at round-off level.
+#if defined(REB_W512_HW_RSQRT) && !defined(REB_W512_NEWTON_RSQRT)
+#define REB_W512_NEWTON_RSQRT
+#endif
+#ifdef REB_W512_NEWTON_RSQRT
 #ifndef W512_RSQRT_NR
 #define W512_RSQRT_NR 3
 #endif
@@ -543,14 +551,9 @@ REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
     const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
     return w_fmadd(w_mul(w_set1(0.5), y), e, y);
 }
-#ifdef REB_W512_SQRTDIV
-// Experimental (compile-time option, off by default): 1/sqrt as a square root and a division, as the assembly does for
-// the Jacobi, central and GR terms. Both are correctly rounded, so the C kernels stay bitwise identical to each other,
-// but results differ from the default at round-off level. Fewer FP operations; faster on CPUs with fast dividers
-// (Zen 4), slower where 512-bit divisions are slow (Sapphire Rapids).
-#define W512_RSQRT(a) w_div(w_set1(1.0), w_sqrt(a))
-#else
 #define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)))
+#else
+#define W512_RSQRT(a) w_div(w_set1(1.0), w_sqrt(a))
 #endif
 
 // 8x8 matrix (stored transposed: element (i,k) at mat[i+8k]) times three vectors (mat8_mul3).

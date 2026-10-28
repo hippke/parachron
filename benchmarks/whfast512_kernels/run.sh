@@ -97,12 +97,11 @@ build(){   # name, extra OPT flags, compiler
 VARIANTS=()
 build default ""                    gcc && VARIANTS+=(default)
 build hwrsqrt "-DREB_W512_HW_RSQRT" gcc && VARIANTS+=(hwrsqrt)
-build sqrtdiv "-DREB_W512_SQRTDIV"  gcc && VARIANTS+=(sqrtdiv)
+build newton  "-DREB_W512_NEWTON_RSQRT" gcc && VARIANTS+=(newton)
 build native  "-march=native"       gcc && VARIANTS+=(native)
-build native_sqrtdiv "-march=native -DREB_W512_SQRTDIV" gcc && VARIANTS+=(native_sqrtdiv)
 if command -v clang >/dev/null; then
     build clang "" clang && VARIANTS+=(clang)
-    build clang_sqrtdiv "-DREB_W512_SQRTDIV" clang && VARIANTS+=(clang_sqrtdiv)
+    build clang_newton "-DREB_W512_NEWTON_RSQRT" clang && VARIANTS+=(clang_newton)
 fi
 HAVE_UP=0
 if [ "${SKIP_UPSTREAM:-0}" != 1 ]; then
@@ -170,14 +169,14 @@ chk(){ [ -n "$(h $1 $2)" ] && [ -n "$(h $3 $4)" ] && { [ "$(h $1 $2)" = "$(h $3 
 echo "bitwise checks:"
 [ $HAVE_UP = 1 ] && chk upstream 1 default 1
 chk default 2 default 3
-chk sqrtdiv 2 sqrtdiv 3
+chk newton 2 newton 3
 chk default 2 native 2
-chk sqrtdiv 2 native_sqrtdiv 3
-chk sqrtdiv 2 clang_sqrtdiv 2
+chk default 2 clang 2
+chk newton 2 clang_newton 2
 
 # ------------------------------------------------------------------------------------------------ 2. counters
 say "2. hardware counters per step (perf; counts do not depend on the background load, cycles a little)"
-PERF_RUNS=("default 1" "default 2" "default 3" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 3")
+PERF_RUNS=("default 1" "default 2" "default 3" "newton 2" "native 3")
 if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
     P=fp_ops_retired_by_type
     GROUPS_=("cycles,instructions")
@@ -200,7 +199,7 @@ fi
 # ------------------------------------------------------------------------------------------------ 3. 16 cores busy
 P16=16; [ "$NPHYS" -lt 16 ] && P16=$NPHYS
 say "3. per-core speed with $P16 copies at the same time (most idle cores), ABBA against the assembly kernel, 3 blocks"
-LOADED=("default 1" "default 2" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 2" "native_sqrtdiv 3")
+LOADED=("default 1" "default 2" "default 3" "newton 2" "native 2" "native 3")
 multi(){ # variant kernel -> median ns/step over the copies (cores in $PICK)
     local i=0
     rm -f "$OUT/raw/load_$$_"*
@@ -244,7 +243,7 @@ if [ "${SKIP_MEP:-0}" != 1 ]; then
         echo "$(taskset -c "$PICK_ALL" "$OUT/build/$1/mepbench" mep "$2" "$3" "$4" 2>&1 | tail -1 | cut -d' ' -f1,2) $PICK_IDLE"
     }
     printf "%-20s %-6s %-7s %-9s %-9s %-7s %s\n" "variant/kernel" "cores" "tol" "wall [s]" "speed-up" "K mean" "least idle core" | tee "$OUT/raw/mep.txt"
-    for run in "default 1" "default 2" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 3"; do
+    for run in "default 1" "default 2" "default 3" "newton 2" "native 3"; do
         set -- $run; [ -x "$OUT/build/$1/mepbench" ] || continue
         if [ "$run" = "default 1" ]; then CASES=("16 3e-6" "16 3e-5" "32 3e-6" "64 3e-6"); else CASES=("16 3e-6"); fi
         unset W K I; declare -A W K I

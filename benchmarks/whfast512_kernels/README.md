@@ -19,11 +19,11 @@ idle fraction of the cores used.
 | variant | what it tests |
 |---|---|
 | `default` kernel 1 | the original WHFast512 assembly (reference) |
-| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves) |
-| `hwrsqrt` | C kernels with the hardware 1/sqrt estimate as Newton seed (`-DREB_W512_HW_RSQRT`) |
-| `sqrtdiv` | C kernels with 1/sqrt as sqrt + division (`-DREB_W512_SQRTDIV`; faster on Zen 4) |
-| `native`, `native_sqrtdiv` | the same compiled with `-march=native` (compiler tuning for this CPU) |
-| `clang`, `clang_sqrtdiv` | built with clang, if installed |
+| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves), 1/sqrt as sqrt + division |
+| `hwrsqrt` | Newton 1/sqrt with the hardware estimate as seed (`-DREB_W512_HW_RSQRT`) |
+| `newton` | C kernels with the earlier Newton 1/sqrt from a bit-trick seed (`-DREB_W512_NEWTON_RSQRT`; faster on Intel Sapphire Rapids) |
+| `native` | the default compiled with `-march=native` (compiler tuning for this CPU) |
+| `clang`, `clang_newton` | built with clang, if installed |
 | `upstream` | unmodified REBOUND, assembly kernel (speed and bitwise check of Parachron's assembly path) |
 
 Run time: about 15 minutes. Uses one core for most of the time, and 16 to 64 cores briefly (sections 3 and 4).
