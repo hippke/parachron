@@ -120,6 +120,14 @@ const struct reb_binarydata_field_descriptor reb_integrator_whfast512_field_desc
         "1: the recursive Jacobi transformations of REBOUND (round-off depends on the state; no systematic drift). "
         "Results differ from 0 at round-off level. ",
         REB_UINT,        "jacobi_recursive", offsetof(struct reb_integrator_whfast512_state, jacobi_recursive), 0, 0, 0},
+    { "Compensated summation of the coordinate updates. 0 (default): the Kepler and interaction steps round the new "
+        "positions and velocities directly. 1: the updates are written as increments and added with compensated "
+        "(Kahan-Babuska) summation; the low-order parts are kept for the duration of an integration call "
+        "(concatenate_steps) and added to the coordinates at its end. Lowers the round-off error of long integrations at "
+        "a cost of a few per cent. Needs a C kernel (kernel 0 then picks the fastest C kernel; the assembly kernel is not "
+        "supported); the C kernels stay bitwise identical to each other. Simulations are not paired by the ensemble "
+        "runner in this mode. Results differ from 0 at round-off level. ",
+        REB_UINT,        "compensated",     offsetof(struct reb_integrator_whfast512_state, compensated), 0, 0, 0},
     { "Kernel used by the last step (read only). Same values as `kernel`.",
         REB_UINT,        "kernel_used",     offsetof(struct reb_integrator_whfast512_state, kernel_used), 0, 0, 0},
     { "", REB_POINTER_ALIGNED, "data",        offsetof(struct reb_integrator_whfast512_state, data), SIZE_MAX, sizeof(struct simd_data), 0},
@@ -241,6 +249,21 @@ static int whfast512_kernel_available(unsigned int k){
 // Picks the kernel: the requested one, or the fastest available one for REB_WHFAST512_KERNEL_AUTO.
 // Returns 0 (and prints an error) if the requested kernel is not available.
 static unsigned int whfast512_select_kernel(struct reb_simulation* r, unsigned int requested){
+    const struct reb_integrator_whfast512_state* const w = r->integrator.state;
+    if (w && w->compensated){
+        // the compensated mode exists only in the C kernels
+        if (requested == REB_WHFAST512_KERNEL_ASM){
+            reb_simulation_error(r, "WHFast512: compensated = 1 needs a C kernel (0 = auto, 2, 3 or 4), not the assembly kernel.");
+            return 0;
+        }
+        if (requested == REB_WHFAST512_KERNEL_AUTO){
+            static const unsigned int order_c[] = {REB_WHFAST512_KERNEL_C_AVX512, REB_WHFAST512_KERNEL_C_AVX2, REB_WHFAST512_KERNEL_C_GENERIC};
+            for (unsigned int i=0; i<sizeof(order_c)/sizeof(order_c[0]); i++){
+                if (whfast512_kernel_available(order_c[i])) return order_c[i];
+            }
+            return REB_WHFAST512_KERNEL_C_GENERIC;
+        }
+    }
     if (requested == REB_WHFAST512_KERNEL_AUTO){
         static const unsigned int order[] = {REB_WHFAST512_KERNEL_ASM, REB_WHFAST512_KERNEL_C_AVX2, REB_WHFAST512_KERNEL_C_GENERIC};
         for (unsigned int i=0; i<sizeof(order)/sizeof(order[0]); i++){
@@ -361,6 +384,24 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
     struct simd_data* data = whfast512->data;
     const int encounter = r->exit_min_distance ? 1 : 0;
     const int escape = r->exit_max_distance ? 1 : 0;
+    if (whfast512->compensated){
+        switch (whfast512->kernel_used){
+            case REB_WHFAST512_KERNEL_C_AVX512:
+                return reb_whfast512c_full_steps_comp_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            case REB_WHFAST512_KERNEL_C_AVX2:
+                if (whfast512->four_lanes){
+                    return reb_whfast512c_full_steps_comp_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                }
+                return reb_whfast512c_full_steps_comp_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            case REB_WHFAST512_KERNEL_C_GENERIC:
+                if (whfast512->four_lanes){
+                    return reb_whfast512c_full_steps_comp_genericx4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                }
+                return reb_whfast512c_full_steps_comp_generic(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            default:
+                return 1; // REB_STATUS_GENERIC_ERROR (not reached: whfast512_select_kernel refuses the assembly kernel)
+        }
+    }
     switch (whfast512->kernel_used){
         case REB_WHFAST512_KERNEL_C_AVX512:
             return reb_whfast512c_full_steps_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
@@ -854,7 +895,7 @@ static whfast512_pair_kernel whfast512_pair_kernel_for(struct reb_simulation* co
     const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
     if (r1 == r2 || w1->kernel_used != w2->kernel_used || w1->four_lanes != w2->four_lanes
             || w1->gr_potential != w2->gr_potential || w1->N_systems != w2->N_systems
-            || enc1 != enc2 || esc1 != esc2) return NULL;
+            || enc1 != enc2 || esc1 != esc2 || w1->compensated || w2->compensated) return NULL;
     switch (w1->kernel_used){
         case REB_WHFAST512_KERNEL_C_AVX512: return reb_whfast512c_full_steps_pair_avx512;
         // Eight-lane AVX2: one simulation already fills the 16 registers (pairing: 0.97-1.00x).
@@ -930,7 +971,7 @@ static whfast512_pair_kernel whfast512_select_pair_kernel(const struct reb_simul
     const int enc2 = r2->exit_min_distance ? 1 : 0, esc2 = r2->exit_max_distance ? 1 : 0;
     if (r1 == r2 || w1->kernel_used != w2->kernel_used || w1->four_lanes != w2->four_lanes
             || w1->gr_potential != w2->gr_potential || w1->N_systems != w2->N_systems
-            || enc1 != enc2 || esc1 != esc2){
+            || enc1 != enc2 || esc1 != esc2 || w1->compensated || w2->compensated){
         return NULL;
     }
     switch (w1->kernel_used){

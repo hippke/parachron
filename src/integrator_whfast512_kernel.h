@@ -159,9 +159,11 @@ struct REB_W512_NAME(w512_consts_) {
 };
 #define W512_CONSTS struct REB_W512_NAME(w512_consts_)
 
-// State (registers .LX ... .LVZ in the assembly).
+// State (registers .LX ... .LVZ in the assembly). CX ... CVZ: the low-order parts of the coordinates in the
+// compensated mode (see w512_add_comp_), zero otherwise.
 struct REB_W512_NAME(w512_state_) {
     V X, Y, Z, VX, VY, VZ;
+    V CX, CY, CZ, CVX, CVY, CVZ;
 };
 #define W512_STATE struct REB_W512_NAME(w512_state_)
 
@@ -332,7 +334,18 @@ REB_W512_NOINLINE_FALLBACK void REB_W512_NAME(w512_kepler_fallback_)(const W512_
     *XXp = XX;
 }
 
-REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
+// x += d with compensated (Kahan-Babuska) summation: c holds the rounding error of the coordinate, which is added to
+// the next increment. Needs floating-point contraction off (as all builds of this file).
+REB_W512_INLINE void REB_W512_NAME(w512_add_comp_)(V* x, V* c, const V d){
+    const V y = w_add(d, *c);
+    const V t = w_add(*x, y);
+    const V bp = w_sub(t, *x);
+    *c = w_add(w_sub(*x, w_sub(t, bp)), w_sub(y, bp));     // exact: (x + y) - t
+    *x = t;
+}
+
+// Kepler step; comp = 1: the update is written as increments and added with compensation (compile-time constant).
+REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512_STATE* s, const int comp){
     const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
     const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
     V R = w_sqrt(r2);
@@ -477,6 +490,23 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     const V ngd = w_mul(mg2, irn);                  // -gd
     const V g = w_fnmadd(G3, c->M, c->DT);
     const V nfd = w_mul(w_mul(w_mul(c->M, G1), IR), irn);  // -fd
+    if (comp){
+        // x' - x = g v - nf x, v' - v = -nfd x - ngd v (f = 1 - nf, gd = 1 - ngd)
+        const V zero = w_zero();
+        const V dx = w_maskz(c->k1, w_fmadd(g, s->VX, w_fnmadd(nf, s->X, zero)));
+        const V dy = w_maskz(c->k1, w_fmadd(g, s->VY, w_fnmadd(nf, s->Y, zero)));
+        const V dz = w_maskz(c->k1, w_fmadd(g, s->VZ, w_fnmadd(nf, s->Z, zero)));
+        const V dvx = w_maskz(c->k1, w_fnmadd(nfd, s->X, w_fnmadd(ngd, s->VX, zero)));
+        const V dvy = w_maskz(c->k1, w_fnmadd(nfd, s->Y, w_fnmadd(ngd, s->VY, zero)));
+        const V dvz = w_maskz(c->k1, w_fnmadd(nfd, s->Z, w_fnmadd(ngd, s->VZ, zero)));
+        REB_W512_NAME(w512_add_comp_)(&s->X, &s->CX, dx);
+        REB_W512_NAME(w512_add_comp_)(&s->Y, &s->CY, dy);
+        REB_W512_NAME(w512_add_comp_)(&s->Z, &s->CZ, dz);
+        REB_W512_NAME(w512_add_comp_)(&s->VX, &s->CVX, dvx);
+        REB_W512_NAME(w512_add_comp_)(&s->VY, &s->CVY, dvy);
+        REB_W512_NAME(w512_add_comp_)(&s->VZ, &s->CVZ, dvz);
+        return;
+    }
     const V nx = w_maskz(c->k1, w_fmadd(g, s->VX, w_fnmadd(nf, s->X, s->X)));
     const V ny = w_maskz(c->k1, w_fmadd(g, s->VY, w_fnmadd(nf, s->Y, s->Y)));
     const V nz = w_maskz(c->k1, w_fmadd(g, s->VZ, w_fnmadd(nf, s->Z, s->Z)));
@@ -487,18 +517,29 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W
     s->Y = ny;
     s->Z = nz;
 }
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
+    REB_W512_NAME(w512_kepler_core_)(c, s, 0);
+}
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_comp_)(const W512_CONSTS* c, W512_STATE* s){
+    REB_W512_NAME(w512_kepler_core_)(c, s, 1);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Interaction step
 
 // 1/sqrt(a) for a > 0 (at most 1 ulp error). Deterministic: the same operations on every
 // instruction set, so all C kernels agree bit for bit.
+// W512_RSQRT_NR: Newton steps after the seed (3 for the bit-trick seed; an instantiation may define fewer with a more
+// accurate seed, see REB_W512_HW_RSQRT).
+#ifndef W512_RSQRT_NR
+#define W512_RSQRT_NR 3
+#endif
 REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
     const V th = w_set1(1.5);
     V y = w_rsqrt_seed(a);
-    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
-    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
-    y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    for (int q=0; q<W512_RSQRT_NR; q++){
+        y = w_mul(y, w_fnmadd(w_mul(half_a, y), y, th));
+    }
     const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
     return w_fmadd(w_mul(w_set1(0.5), y), e, y);
 }
@@ -550,16 +591,24 @@ REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, c
     }
 }
 
-REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status){
+// Interaction step; comp = 1: the velocity kick is added with compensation (compile-time constant).
+REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status, const int comp){
     const struct simd_data* const data = c->data;
     // Jacobi term in Jacobi coordinates (undoes the Kepler-step force of the interior mass).
+    V JTX = w_zero(), JTY = w_zero(), JTZ = w_zero();    // comp: the Jacobi-term kick, added with the interaction kick
     {
         const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
         const V y = W512_RSQRT(r2);
         const V a = w_mul(w_mul(c->DT, c->M), w_mul(w_mul(y, y), y));    // dt*M/r^3
-        s->VX = w_maskz(c->k1, w_fmadd(a, s->X, s->VX));
-        s->VY = w_maskz(c->k1, w_fmadd(a, s->Y, s->VY));
-        s->VZ = w_maskz(c->k1, w_fmadd(a, s->Z, s->VZ));
+        if (comp){
+            JTX = w_maskz(c->k1, w_mul(a, s->X));
+            JTY = w_maskz(c->k1, w_mul(a, s->Y));
+            JTZ = w_maskz(c->k1, w_mul(a, s->Z));
+        }else{
+            s->VX = w_maskz(c->k1, w_fmadd(a, s->X, s->VX));
+            s->VY = w_maskz(c->k1, w_fmadd(a, s->Y, s->VY));
+            s->VZ = w_maskz(c->k1, w_fmadd(a, s->Z, s->VZ));
+        }
     }
     V HX, HY, HZ;
     REB_W512_NAME(w512_mat8_mul3_)(data->mat8_jacobi_to_heliocentric, s->X, s->Y, s->Z, &HX, &HY, &HZ);
@@ -657,9 +706,21 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS*
     // Velocity kicks from heliocentric to Jacobi.
     V J0, J1, J2;
     REB_W512_NAME(w512_mat8_mul3_)(data->mat8_inertial_to_jacobi, A0, A1, A2, &J0, &J1, &J2);
+    if (comp){
+        REB_W512_NAME(w512_add_comp_)(&s->VX, &s->CVX, w_add(J0, JTX));
+        REB_W512_NAME(w512_add_comp_)(&s->VY, &s->CVY, w_add(J1, JTY));
+        REB_W512_NAME(w512_add_comp_)(&s->VZ, &s->CVZ, w_add(J2, JTZ));
+        return;
+    }
     s->VX = w_add(J0, s->VX);
     s->VY = w_add(J1, s->VY);
     s->VZ = w_add(J2, s->VZ);
+}
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status){
+    REB_W512_NAME(w512_interaction_core_)(c, s, gr, nsys, encounter, escape, status, 0);
+}
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_interaction_step_comp_)(const W512_CONSTS* c, W512_STATE* s, const int gr, const int nsys, const int encounter, const int escape, int* status){
+    REB_W512_NAME(w512_interaction_core_)(c, s, gr, nsys, encounter, escape, status, 1);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -680,6 +741,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_load_)(const struct simd_data* data, W51
     s->VX = w_load(data->vx.lanes);
     s->VY = w_load(data->vy.lanes);
     s->VZ = w_load(data->vz.lanes);
+    s->CX = s->CY = s->CZ = s->CVX = s->CVY = s->CVZ = w_zero();
 }
 
 REB_W512_INLINE void REB_W512_NAME(w512_store_)(struct simd_data* data, const W512_STATE* s){
@@ -724,6 +786,46 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
         ret = -1; // REB_STATUS_RUNNING
         break;
     }
+    REB_W512_NAME(w512_store_)(data, &s);
+    return ret;
+}
+
+// Compensated main loop (option `compensated`): as w512_full_steps_, with the coordinate updates of the Kepler and
+// interaction steps added with compensated summation. The low-order parts live in registers for the duration of the
+// call and are added to the coordinates (rounded) at its end. encounter/escape are run-time flags here.
+REB_W512_INLINE int REB_W512_NAME(w512_full_steps_comp_)(struct simd_data* data, uint64_t* N_steps, const int skip_first_kepler_step, volatile sig_atomic_t* sigint, const int gr, const int nsys, const int encounter, const int escape){
+    W512_CONSTS c;
+    W512_STATE s;
+    REB_W512_NAME(w512_load_)(data, &c, &s);
+    int64_t remaining = (int64_t)*N_steps;
+    int status = 0;
+    int ret;
+    int skip = skip_first_kepler_step;
+    while (1){
+        if (!skip){
+            REB_W512_NAME(w512_kepler_step_comp_)(&c, &s);
+        }
+        skip = 0;
+        REB_W512_NAME(w512_interaction_step_comp_)(&c, &s, gr, nsys, encounter, escape, &status);
+        if (*sigint){
+            ret = 6; // REB_STATUS_SIGINT
+            remaining--;
+            *N_steps -= (uint64_t)remaining;
+            break;
+        }
+        if ((encounter || escape) && status){
+            ret = status;
+            remaining--;
+            *N_steps -= (uint64_t)remaining;
+            break;
+        }
+        remaining--;
+        if (remaining > 0) continue;
+        ret = -1; // REB_STATUS_RUNNING
+        break;
+    }
+    s.X = w_add(s.X, s.CX); s.Y = w_add(s.Y, s.CY); s.Z = w_add(s.Z, s.CZ);
+    s.VX = w_add(s.VX, s.CVX); s.VY = w_add(s.VY, s.CVY); s.VZ = w_add(s.VZ, s.CVZ);
     REB_W512_NAME(w512_store_)(data, &s);
     return ret;
 }
@@ -849,6 +951,25 @@ REB_W512_TARGET int REB_W512_CAT(reb_whfast512c_full_steps_, REB_W512_SUFFIX)(st
     W512_FULL_STEPS_CASES_NSYS(1, 2)
     W512_FULL_STEPS_CASES_NSYS(1, 4)
 #endif
+    return -1;
+}
+
+REB_W512_TARGET int REB_W512_CAT(reb_whfast512c_full_steps_comp_, REB_W512_SUFFIX)(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
+    gr = gr ? 1 : 0;
+    encounter = encounter ? 1 : 0;
+    escape = escape ? 1 : 0;
+    if (nsys != 2 && nsys != 4) nsys = 1;
+#define W512_COMP_CASE(GR, NSYS) \
+    if (gr==GR && nsys==NSYS) \
+        return REB_W512_NAME(w512_full_steps_comp_)(data, N_steps, skip_first_kepler_step, sigint, GR, NSYS, encounter, escape);
+#ifdef W_ONLY_NSYS2
+    nsys = 2;
+    W512_COMP_CASE(0, 2) W512_COMP_CASE(1, 2)
+#else
+    W512_COMP_CASE(0, 1) W512_COMP_CASE(0, 2) W512_COMP_CASE(0, 4)
+    W512_COMP_CASE(1, 1) W512_COMP_CASE(1, 2) W512_COMP_CASE(1, 4)
+#endif
+#undef W512_COMP_CASE
     return -1;
 }
 

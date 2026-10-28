@@ -113,6 +113,10 @@ int reb_whfast512c_full_steps_avx2x4(struct simd_data* data, uint64_t* N_steps, 
     return 1; // never called (the 8-lane AVX2 kernel is not available either)
 }
 void reb_whfast512c_kepler_step_avx2x4(struct simd_data* data){ (void)data; }
+int reb_whfast512c_full_steps_comp_avx2x4(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
+    (void)data; (void)N_steps; (void)skip_first_kepler_step; (void)sigint; (void)gr; (void)nsys; (void)encounter; (void)escape;
+    return 1; // never called
+}
 void reb_whfast512c_corrector_step_avx2x4(struct simd_data* data, double inv, int gr, int nsys){ (void)data; (void)inv; (void)gr; (void)nsys; }
 int reb_whfast512c_full_steps_pair_avx2x4(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape){
     (void)da; (void)db; (void)N_steps; (void)N_done; (void)skip_a; (void)skip_b; (void)sigint; (void)status_a; (void)status_b; (void)gr; (void)nsys; (void)encounter; (void)escape;

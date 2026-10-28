@@ -9,6 +9,7 @@ This changelog only includes the most important changes in recent updates. For a
 * MEP stops with an error (and keeps the last completed window) if a window ends in a non-finite state.
 * MEP projects each corrected boundary state onto the target energy and angular-momentum vector (before: energy only). The energy-only projection let |L| drift by about -2.6e-10 per Gyr (Solar System, default tolerance; up to -1.2e-7 per Gyr at loose tolerances); results change at round-off level.
 * MEP is about 6% faster in portable builds (e.g. the Python wheels) on CPUs with AVX2: the hot functions of the coarse step get an x86-64-v3 clone that is selected at load time (GCC >= 12; results bitwise unchanged).
+* New WHFast512 option `compensated` (default 0, bitwise unchanged): the coordinate updates of the Kepler and interaction steps are added with compensated summation (C kernels; the C kernels stay bitwise identical to each other; the assembly kernel is not supported). Solar System, dt = 6 d: the round-off part of the energy error over 5e7 steps is about 200 times smaller. (Experimental; cost to be measured.)
 * New: MEP heartbeat, a function called after every completed window (`reb_mep.heartbeat`, `parachron.MEP.heartbeat`). Output after every window no longer needs one `integrate` call per window, which drained the parallel pipeline and cost about 8%.
 
 ### Parachron 1.0 (a modified version of REBOUND 5.2.2; see CHANGES_FROM_REBOUND.md)

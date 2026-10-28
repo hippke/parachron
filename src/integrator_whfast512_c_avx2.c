@@ -94,7 +94,15 @@ W_INL K w_kbits(unsigned int bits){
 W_INL V w_sel(K k, V a, V b){ return w_make(_mm256_blendv_pd(b.l, a.l, k.l), _mm256_blendv_pd(b.h, a.h, k.h)); }
 W_INL V w_maskz(K k, V a){ return w_make(_mm256_and_pd(a.l, k.l), _mm256_and_pd(a.h, k.h)); }
 // Bit-trick seed for 1/sqrt(a): integer 0x5FE6EB50C7B537A9 - (bits(a) >> 1) (deterministic, same on every machine).
+#ifdef REB_W512_HW_RSQRT
+// Experimental (compile-time option, off by default): the hardware single-precision estimate (12 bits) as the seed
+// of 1/sqrt, one Newton step fewer (at most 1 ulp, as the default). Results differ from the other kernels at
+// round-off level (no longer bitwise identical across instruction sets).
+W_INL __m256d w_rsqrt_seed4(__m256d a){ return _mm256_cvtps_pd(_mm_rsqrt_ps(_mm256_cvtpd_ps(a))); }
+#define W512_RSQRT_NR 2
+#else
 W_INL __m256d w_rsqrt_seed4(__m256d a){ return _mm256_castsi256_pd(_mm256_sub_epi64(_mm256_set1_epi64x(0x5FE6EB50C7B537A9LL), _mm256_srli_epi64(_mm256_castpd_si256(a), 1))); }
+#endif
 W_INL V w_rsqrt_seed(V a){ return w_make(w_rsqrt_seed4(a.l), w_rsqrt_seed4(a.h)); }
 // Within each group of four lanes (same immediates as vpermpd in the assembly).
 W_INL V w_perm_3201(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x4B), _mm256_permute4x64_pd(a.h, 0x4B)); }
@@ -123,6 +131,10 @@ int reb_whfast512c_full_steps_avx2(struct simd_data* data, uint64_t* N_steps, in
     return 1; // never called (see reb_whfast512c_avx2_compiled)
 }
 void reb_whfast512c_kepler_step_avx2(struct simd_data* data){ (void)data; }
+int reb_whfast512c_full_steps_comp_avx2(struct simd_data* data, uint64_t* N_steps, int skip_first_kepler_step, volatile sig_atomic_t* sigint, int gr, int nsys, int encounter, int escape){
+    (void)data; (void)N_steps; (void)skip_first_kepler_step; (void)sigint; (void)gr; (void)nsys; (void)encounter; (void)escape;
+    return 1; // never called
+}
 void reb_whfast512c_corrector_step_avx2(struct simd_data* data, double inv, int gr, int nsys){ (void)data; (void)inv; (void)gr; (void)nsys; }
 int reb_whfast512c_avx2_compiled(void){ return 0; }
 int reb_whfast512c_full_steps_pair_avx2(struct simd_data* da, struct simd_data* db, uint64_t N_steps, uint64_t* N_done, int skip_a, int skip_b, volatile sig_atomic_t* sigint, int* status_a, int* status_b, int gr, int nsys, int encounter, int escape){
