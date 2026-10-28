@@ -42,12 +42,12 @@ your user until the next reboot (optional; skip if you prefer not to change it):
 sudo sysctl -w kernel.perf_event_paranoid=1
 ```
 
-Download the benchmark branch and run (no git needed; `git clone -b zen5-bench https://github.com/hippke/parachron.git`
+Download Parachron and run (no git needed; `git clone https://github.com/hippke/parachron.git`
 works too where git can reach GitHub without credentials):
 
 ```bash
-wget https://github.com/hippke/parachron/archive/refs/heads/zen5-bench.tar.gz
-tar xzf zen5-bench.tar.gz && cd parachron-zen5-bench
+wget https://github.com/hippke/parachron/archive/refs/heads/main.tar.gz
+tar xzf main.tar.gz && cd parachron-main
 benchmarks/whfast512_kernels/run.sh
 ```
 
