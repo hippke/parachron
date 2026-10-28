@@ -543,7 +543,15 @@ REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
     const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
     return w_fmadd(w_mul(w_set1(0.5), y), e, y);
 }
+#ifdef REB_W512_SQRTDIV
+// Experimental (compile-time option, off by default): 1/sqrt as a square root and a division, as the assembly does for
+// the Jacobi, central and GR terms. Both are correctly rounded, so the C kernels stay bitwise identical to each other,
+// but results differ from the default at round-off level. Fewer FP operations; faster on CPUs with fast dividers
+// (Zen 4), slower where 512-bit divisions are slow (Sapphire Rapids).
+#define W512_RSQRT(a) w_div(w_set1(1.0), w_sqrt(a))
+#else
 #define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)))
+#endif
 
 // 8x8 matrix (stored transposed: element (i,k) at mat[i+8k]) times three vectors (mat8_mul3).
 REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a, const V b, const V cc, V* oa, V* ob, V* oc){
