@@ -298,7 +298,7 @@ static int physical_cores(int* list, int max){
 // ------------------------------------------------------------------------------------------------ public API
 void reb_mep_options_default(struct reb_mep_options* o){
     memset(o,0,sizeof *o);
-    o->cores = 0; o->helpers = -1; o->pin = 1; o->k_min = 3; o->k_max = 6; o->tol = 3e-6; o->slice_steps = 60000;
+    o->cores = 0; o->helpers = -1; o->pin = 1; o->k_min = 3; o->k_max = 6; o->tol = 2e-6; o->slice_steps = 60000;
     o->checkpoint_every = 100; o->walltime = 0.;
 }
 

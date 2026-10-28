@@ -540,7 +540,7 @@ struct reb_mep_options {
     int k_min;                          // Minimum number of parareal iterations per window. Default 3.
     int k_max;                          // Maximum number of parareal iterations per window (<= 11). Default 6.
     double tol;                         // A window is accepted when the largest change of a planet position between two
-                                        // iterations is <= tol [AU]. Default 3e-6.
+                                        // iterations is <= tol [AU]. Default 2e-6.
     int64_t slice_steps;                // Time steps per slice (even). Default 60000 (986 yr at dt = 6 d).
     int64_t checkpoint_every;           // Write the checkpoint every this many windows (0: only at the end of each
                                         // reb_mep_integrate call). Default 100.

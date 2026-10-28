@@ -68,7 +68,7 @@ class MEP:
     >>> mep.integrate(2e6 * 2 * np.pi)              # continues bitwise identically
     """
 
-    def __init__(self, sim, cores=None, tol=3e-6, k_min=3, k_max=6, slice_steps=60000, helpers=None, pin=True,
+    def __init__(self, sim, cores=None, tol=2e-6, k_min=3, k_max=6, slice_steps=60000, helpers=None, pin=True,
                  checkpoint=None, checkpoint_every=100):
         """
         Arguments
@@ -80,8 +80,9 @@ class MEP:
             Slices per window, one thread each. Default: the number of physical cores available to the process.
         tol : float
             Tolerance [AU] of the stopping rule: a window is accepted when no planet position changes by more than
-            `tol` between two iterations. Default 3e-6 (reference accuracy; 3e-5 is faster and was validated by
-            ensembles).
+            `tol` between two iterations. Default 2e-6 (reference accuracy: secular frequencies within a few 1e-8
+            arcsec/yr of serial WHFast512 over 10 Myr); 3e-6 and 1e-5 are 4% and 10% faster and were validated by
+            ensembles.
         k_min, k_max : int
             Minimum and maximum number of parareal iterations per window (defaults 3 and 6).
         slice_steps : int
