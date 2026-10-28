@@ -27,7 +27,8 @@ REB_MEP_MSG = 256
 class MEPOptions(Structure):
     """Mirror of struct reb_mep_options (see rebound.h)."""
     _fields_ = [("cores", c_int), ("helpers", c_int), ("pin", c_int), ("k_min", c_int), ("k_max", c_int),
-                ("tol", c_double), ("slice_steps", c_int64), ("checkpoint_every", c_int64), ("walltime", c_double)]
+                ("tol", c_double), ("slice_steps", c_int64), ("checkpoint_every", c_int64), ("walltime", c_double),
+                ("calibration", c_int), ("coarse_giants_steps", c_int)]
 
 
 class _MEPState(Structure):
@@ -39,7 +40,8 @@ _MEPState._fields_ = [("opt", MEPOptions), ("t", c_double), ("t_start", c_double
                       ("windows", c_int64), ("khist", c_int64 * REB_MEP_KHIST), ("masses", c_double * 9),
                       ("E", (c_double * 6) * 8), ("gr_potential", c_uint), ("corrector", c_uint), ("kernel", c_uint),
                       ("walltime_last", c_double), ("checkpoint", c_char * REB_MEP_PATH), ("message", c_char * REB_MEP_MSG),
-                      ("heartbeat", _HEARTBEAT), ("ref", c_void_p)]
+                      ("heartbeat", _HEARTBEAT), ("ref", c_void_p), ("boundaries", POINTER(c_double)),
+                      ("calibration_residual", c_double), ("internal", c_void_p)]
 
 
 _create = clibrebound.reb_mep_create
@@ -69,7 +71,7 @@ class MEP:
     """
 
     def __init__(self, sim, cores=None, tol=2e-6, k_min=3, k_max=6, slice_steps=60000, helpers=None, pin=True,
-                 checkpoint=None, checkpoint_every=100):
+                 checkpoint=None, checkpoint_every=100, calibration=0, coarse_giants_steps=0):
         """
         Arguments
         ---------
@@ -96,6 +98,17 @@ class MEP:
             every `integrate` call. Resume with `MEP.from_checkpoint`.
         checkpoint_every : int
             Windows between checkpoints (0: only at the end of each `integrate` call). Default 100.
+        calibration : int
+            Secular calibration of the coarse step: number of previous windows whose coarse defects are fitted by a
+            linear map of the eccentricity and inclination vectors (at most 64; 0, default: off). Removes the
+            secular-frequency bias of windows that stop after two iterations; use with k_min = 2 (e.g. 40).
+        coarse_giants_steps : int
+            Fine time steps per step of the outer planets' coarse integration (0, default: 360 days). Use 30 (180
+            days) with k_min = 2.
+
+        Accuracy classes for the Solar System (16 cores, 7950X): tol 2e-6 (default, 3.2x); tol 1e-5 (3.5x);
+        k_min = 2, tol 3e-4, calibration = 40, coarse_giants_steps = 30 (4.0x, secular frequencies within a few
+        1e-6 arcsec/yr of serial WHFast512, unbiased).
         """
         if not sys.platform.startswith("linux"):
             raise RuntimeError("MEP (mean-element parareal) is only available on Linux.")
@@ -105,6 +118,7 @@ class MEP:
         o.helpers = -1 if helpers is None else int(helpers)
         o.pin = 1 if pin else 0
         o.k_min, o.k_max, o.tol, o.slice_steps, o.checkpoint_every = int(k_min), int(k_max), float(tol), int(slice_steps), int(checkpoint_every)
+        o.calibration, o.coarse_giants_steps = int(calibration), int(coarse_giants_steps)
         ptr = _create(byref(sim), byref(o), c_char_p(checkpoint.encode("utf-8")) if checkpoint else None)
         sim.process_messages()
         if not ptr:
@@ -116,7 +130,8 @@ class MEP:
     def from_checkpoint(cls, filename, helpers=None, pin=True, checkpoint_every=None):
         """
         Resume a run from a checkpoint file. The options that change the result (cores, tol, k_min, k_max,
-        slice_steps, time step, masses, WHFast512 settings) are taken from the file; `helpers`, `pin` and
+        slice_steps, calibration and its fit state, coarse_giants_steps, time step, masses, WHFast512 settings) are
+        taken from the file; `helpers`, `pin` and
         `checkpoint_every` may be changed. Returns a new MEP object; its `sim` holds the checkpointed state.
         """
         if not sys.platform.startswith("linux"):
@@ -177,6 +192,23 @@ class MEP:
             self._heartbeat_c = _HEARTBEAT(lambda _p: func(self))     # keep a reference: C holds only the pointer
             self._p.contents.heartbeat = self._heartbeat_c
         self._heartbeat_py = func
+
+    @property
+    def boundaries(self):
+        """
+        Inside the heartbeat: the end states of the `cores` slices of the completed window, as a list of 8 x 6
+        lists of Jacobi elements (see `state`); None outside the heartbeat.
+        """
+        b = self._p.contents.boundaries
+        if not b:
+            return None
+        n = self._p.contents.opt.cores
+        return [[[b[(s * 8 + i) * 6 + e] for e in range(6)] for i in range(8)] for s in range(n)]
+
+    @property
+    def calibration_residual(self):
+        """Fraction of the eccentricity-defect variance left unexplained by the last calibration fit (0: off)."""
+        return self._p.contents.calibration_residual
 
     @property
     def t(self):
