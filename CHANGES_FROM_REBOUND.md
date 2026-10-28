@@ -203,9 +203,13 @@ Summary of the changes (details in `changelog.md`):
 * `rebound/vectors.py` → `parachron/vectors.py` (renamed only)
 * `rebound/widget.py` → `parachron/widget.py` (renamed and modified)
 
-## New files (30)
+## New files (34)
 * `CHANGES_FROM_REBOUND.md`
 * `RELEASING.md` — how to publish on PyPI
+* `benchmarks/whfast512_kernels/README.md` — WHFast512 kernel and MEP benchmark
+* `benchmarks/whfast512_kernels/kbench.c`
+* `benchmarks/whfast512_kernels/mepbench.c`
+* `benchmarks/whfast512_kernels/run.sh`
 * `docs/img/parachron_icon.svg`
 * `docs/img/parachron_logo.svg`
 * `docs/openmp.md`
