@@ -2,8 +2,10 @@
  * @file    mep_coarse.c
  * @brief   Coarse propagator of mean-element parareal (MEP) for WHFast512 planetary systems.
  * @details Inner four planets: numerical first-order mean-element theory (Jacobi pair accelerations on 2-D grids of
- *          the mean longitudes, 2-D FFT, rebuilt from the input state at every call), Kepler + first-order secular
- *          drift with the trapezoidal rule. Outer four planets: WHFast512 at a large step in a reduced system.
+ *          the mean longitudes, 2-D FFT, rebuilt from the input state at every call; close pairs on a grid of
+ *          (lambda_i, lambda_i - lambda_j) that resolves the synodic harmonics, small divisors at the mean motions of
+ *          the mean semi-major axes), Kepler + first-order secular drift with the trapezoidal rule. Outer four
+ *          planets: WHFast512 at a large step in a reduced system.
  *          Derived from the research code of the MEP paper (results bitwise identical).
  *          Linux only (pthreads, CPU affinity); on other platforms the file compiles to nothing.
  *
@@ -64,7 +66,10 @@ static const double CGR = 10065.32;
 void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr){
     memcpy(c->masses, masses, sizeof(double)*(MEP_NP+1));
     c->slice_days = slice_days; c->dt_out_days = 360.; c->ng_ii = 32; c->ng_io = 16; c->maxj = 5; c->heun = 1; c->pcut_yr = 0.; c->ng_hi = 0; c->alpha_hi = 0.6;
-    c->meann = 0; c->gcorr = 17; c->dual = 1; c->gr = gr;
+    c->gcorr = 17; c->dual = 1; c->gr = gr;
+    // synodic grids for the close inner pairs (Venus-Earth in the Solar System) and the mean motions of the mean ln a
+    // in the small divisors (research log it. 54): 3.1x -> 3.4x on 16 cores at the default tolerance
+    c->ng_th = 16; c->ng_ph = 64; c->alpha_an = 0.7; c->meann = 2;
     // giants' kernel: the C kernels are bitwise identical across instruction sets; use the fastest available one
     c->kernel = 4;
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
@@ -154,26 +159,29 @@ MEP_CLONES static void fft1(double complex* a, int n, int s){
     }
     for (int i=0;i<n;i++) a[i*s]=t[i];
 }
-MEP_CLONES static void fft2(double complex* a, int n){
-    for (int r=0;r<n;r++) fft1(a+r*n,n,1);
-    for (int c=0;c<n;c++) fft1(a+c,n,n);
+// 2-D FFT of an n1 x n2 array (row-major, rows of length n2)
+MEP_CLONES static void fft2(double complex* a, int n1, int n2){
+    for (int r=0;r<n1;r++) fft1(a+r*n2,n2,1);
+    for (int c=0;c<n2;c++) fft1(a+c,n1,n2);
 }
 static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq(n, 1/n)
-                                                                // short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised):
-                                                                // disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/n^2, with F_a(k) = (Z(k) + conj Z(-k))/2,
-                                                                // F_b(k) = (Z(k) - conj Z(-k))/(2i)
+// short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised, n1 x n2
+// points of the angles (theta, phi) with rates (ni, nj) and current values (li, lj)):
+// disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/(n1 n2), with F_a(k) = (Z(k) + conj Z(-k))/2,
+// F_b(k) = (Z(k) - conj Z(-k))/(2i). For a synodic grid the caller passes phi = lambda_i - lambda_j, nj = n_i - n_j.
 static __thread double nu_cut_t=0.;
-MEP_CLONES static void sp_eval_pair(const double complex* Z, int n, double ni, double nj, double li, double lj, double* da, double* db){
+MEP_CLONES static void sp_eval_pair(const double complex* Z, int n1, int n2, double ni, double nj, double li, double lj, double* da, double* db){
     double complex ei[NGMAX], ej[NGMAX];
-    for (int a=0;a<n;a++){ const int K=kf(a,n); ei[a]=cos(K*li)+I*sin(K*li); ej[a]=cos(K*lj)+I*sin(K*lj); }
-    double sa=0, sb=0; const double nrm=1./(n*n);
-    for (int a=0;a<n;a++){
-        const int Ka=kf(a,n); const int am=(n-a)%n;
-        for (int b=0;b<n;b++){
-            const double kk=Ka*ni+kf(b,n)*nj;
+    for (int a=0;a<n1;a++){ const int K=kf(a,n1); ei[a]=cos(K*li)+I*sin(K*li); }
+    for (int b=0;b<n2;b++){ const int K=kf(b,n2); ej[b]=cos(K*lj)+I*sin(K*lj); }
+    double sa=0, sb=0; const double nrm=1./((double)n1*n2);
+    for (int a=0;a<n1;a++){
+        const int Ka=kf(a,n1); const int am=(n1-a)%n1;
+        for (int b=0;b<n2;b++){
+            const double kk=Ka*ni+kf(b,n2)*nj;
             if (kk==0. || fabs(kk)<nu_cut_t) continue;
-            const int bm=(n-b)%n;
-            const double complex z=Z[a*n+b], zc=conj(Z[am*n+bm]);
+            const int bm=(n2-b)%n2;
+            const double complex z=Z[a*n2+b], zc=conj(Z[am*n2+bm]);
             const double complex Fa=0.5*(z+zc), Fb=-0.5*I*(z-zc);
             const double complex e=ei[a]*ej[b];
             sa+=cimag(Fa*e)/kk; sb+=cimag(Fb*e)/kk;
@@ -190,76 +198,116 @@ MEP_CLONES static void sp_eval_pair(const double complex* Z, int n, double ni, d
 struct tctx {
     const struct mep_cfg* c; const double (*E)[6]; int nc;
     double Mint[MEP_NP], mu[MEP_NP], n[MEP_NP];
-    int N1, N2, Nlo;
+    int N1, N2, Nlo, Ng1[MEP_NI];       // N1: largest inner grid, N2: giants' grid; Ng1[p]: grid points of inner planet p
     double ri[MEP_NI][NGMAX][3], vi[MEP_NI][NGMAX][3], Di[MEP_NI][NGMAX][6][3], rj[MEP_NP][NGMAX][3];
     // tasks
     int ntask; int ti[NTASKMAX], tj0[NTASKMAX], tj1[NTASKMAX], tkind[NTASKMAX];   // kind 0 inner pair, 1 giants, 2 GR, 3 grid
-    double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];
+    int tNa[NTASKMAX], tNb[NTASKMAX], tsyn[NTASKMAX], zoff[NTASKMAX];   // grid of the task (Na x Nb; GR: Ng1[i] x 1), synodic flag, offset of its transform in Z
+    double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];   // tNg: grid points of the task
+    double complex* Z; int zcap;        // transforms of all tasks, kept for the re-evaluation with other mean motions (meann 2)
 };
-MEP_CLONES static void task_grid(struct tctx* x, int p){
+// Grid tasks: the inner planets' grids are built in chunks of GCH points (the dual-number dE/dv per point is the
+// expensive part, and the stage time on the helpers is that of its longest task), the giants' grids in one task each.
+// Task t < ngrid_inner: planet t / nch, chunk t % nch (empty when beyond the planet's grid), where nch = largest
+// inner grid of the configuration / GCH; the giants follow. The task count depends only on the configuration.
+#define GCH 8
+static int gmax_cfg(const struct mep_cfg* c){
+    int g=c->ng_ii; if (c->ng_hi>g) g=c->ng_hi;
+    if (c->ng_th>0){ if (c->ng_th>g) g=c->ng_th; if (c->ng_ph>g) g=c->ng_ph; }
+    return g;
+}
+static int ngrid_inner(const struct mep_cfg* c){ return MEP_NI*(gmax_cfg(c)/GCH); }
+static int ngrid_all(const struct mep_cfg* c){ return ngrid_inner(c)+(c->maxj+1-MEP_NI); }
+MEP_CLONES static void task_grid(struct tctx* x, int t){
     const struct mep_cfg* c=x->c; dual_t=c->dual;
-    if (p<MEP_NI){
+    const int nch=gmax_cfg(c)/GCH, ni=MEP_NI*nch;
+    if (t<ni){
+        const int p=t/nch, g0=(t%nch)*GCH, ng=x->Ng1[p]; if (g0>=ng) return;
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg);
-        for (int g=0; g<x->N1; g++){ Eg[1]=2.*M_PI*g/x->N1; el_to_rv(x->mu[p],Eg,x->ri[p][g],x->vi[p][g]); dEdv(x->mu[p],x->ri[p][g],x->vi[p][g],x->Di[p][g],x->nc); }
-    } else if (p<=c->maxj){
+        for (int g=g0; g<g0+GCH; g++){ Eg[1]=2.*M_PI*g/ng; el_to_rv(x->mu[p],Eg,x->ri[p][g],x->vi[p][g]); dEdv(x->mu[p],x->ri[p][g],x->vi[p][g],x->Di[p][g],x->nc); }
+    } else {
+        const int p=MEP_NI+(t-ni); if (p>c->maxj) return;
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg); double vdum[3];
         for (int g=0; g<x->N2; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
     }
 }
+// short-period ln a of a pair task from its transform Z (x->n: mean motions of the small divisors)
+MEP_CLONES static void pair_eval(struct tctx* x, int t){
+    const double (*E)[6]=x->E; const int i=x->ti[t], jlo=x->tj0[t], jhi=x->tj1[t], Na=x->tNa[t], Nb=x->tNb[t];
+    const double complex* Z=x->Z+x->zoff[t];
+    double da,db;
+    if (x->tkind[t]==0){
+        if (x->tsyn[t]) sp_eval_pair(Z,Na,Nb,x->n[i],x->n[i]-x->n[jlo],E[i][1],E[i][1]-E[jlo][1],&da,&db);
+        else sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db);
+        x->tda[t]=da; x->tdb[t]=db;
+    } else {
+        sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=0;
+        if (jhi>jlo){ sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
+    }
+}
 MEP_CLONES static void task_pair(struct tctx* x, int t){
-    const struct mep_cfg* c=x->c; const double* m=c->masses; const double (*E)[6]=x->E; const int nc=x->nc;
-    static __thread double complex buf[NGMAX*NGMAX];
+    const struct mep_cfg* c=x->c; const double* m=c->masses; const int nc=x->nc;
+    double complex* buf=x->Z+x->zoff[t];
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
     const int i=x->ti[t];
     const int jlo=x->tj0[t], jhi=x->tj1[t];
     const int inner_j = x->tkind[t]==0;
     for (int s=0;s<2;s++) for (int e=0;e<6;e++) x->tRi[t][s][e]=0;
     for (int e=0;e<6;e++) x->tRj[t][e]=0;
-    int Ng=0;
+    // grid of the pair: Na x Nb points; plain: (lambda_i, lambda_j) = 2 pi (a/Na, b/Nb) with Na = Nb;
+    // synodic (inner pair): (lambda_i, phi) = 2 pi (a/Na, b/Nb), lambda_j = lambda_i - phi. Planet i's grid has Ng1[i]
+    // points, planet j's Ng1[j] (inner) / N2 (giants); sa, sb are the strides of a and b on them.
+    const int Na=x->tNa[t], Nb=x->tNb[t], synodic=x->tsyn[t];
+    const int sa=x->Ng1[i]/Na;
     for (int j=jlo;j<=jhi;j++){
-        const int hi = inner_j && c->ng_hi>0 && exp(E[i][0]-E[j][0])>=c->alpha_hi;
-        Ng = inner_j ? (hi ? x->N1 : x->Nlo) : x->N2; const int si = inner_j ? x->N1/Ng : x->N1/x->N2;
+        const int Ngj = inner_j ? x->Ng1[j] : x->N2, sb=Ngj/Nb, saj=Ngj/Na;
         const int slot=j-jlo;
         double Ri[6]={0}, Rj[6]={0};
         const double pf=inner_j ? -(x->Mint[j]+m[j+1])/x->Mint[j]*m[i+1] : 0.;
-        for (int a=0;a<Ng;a++){
-            const double* r1=x->ri[i][a*si]; const double* D1=x->Di[i][a*si][0];
-            for (int b=0;b<Ng;b++){
-                const double* r2 = inner_j ? x->ri[j][b*(x->N1/Ng)] : x->rj[j][b];
+        for (int a=0;a<Na;a++){
+            const double* r1=x->ri[i][a*sa]; const double* D1=x->Di[i][a*sa][0];
+            int gj = synodic ? a*saj : 0;            // planet j's grid point: lambda_j = lambda_i - phi (synodic) or 2 pi b/Nb
+            for (int b=0;b<Nb;b++, gj = synodic ? (gj>=sb ? gj-sb : gj-sb+Ngj) : gj+sb){
+                const double* r2 = inner_j ? x->ri[j][gj] : x->rj[j][gj];
                 const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
                 const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
                 const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
                 double ai[3];
                 for (int q=0;q<3;q++) ai[q]=m[j+1]*(d[q]*id3-r2[q]*irj3);
                 const double f=D1[0]*ai[0]+D1[1]*ai[1]+D1[2]*ai[2];
-                if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[i][a*si][e]; Ri[e]+=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2]; }
+                if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[i][a*sa][e]; Ri[e]+=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2]; }
                 if (inner_j){
                     const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
                     double aj[3];
                     for (int q=0;q<3;q++) aj[q]=pf*(d[q]*id3-r2[q]*irj3+r1[q]*irj3-3.*r2[q]*(rdot/rj2*irj3));
-                    const double* D2=x->Di[j][b*si][0];
+                    const double* D2=x->Di[j][gj][0];
                     const double g=D2[0]*aj[0]+D2[1]*aj[1]+D2[2]*aj[2];
-                    buf[a*Ng+b]=f+I*g;
-                    if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[j][b*si][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
+                    buf[a*Nb+b]=f+I*g;
+                    if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[j][gj][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
                 } else {
-                    if (slot==0) buf[a*Ng+b]=f; else buf[a*Ng+b]+=I*f;
+                    if (slot==0) buf[a*Nb+b]=f; else buf[a*Nb+b]+=I*f;
                 }
             }
         }
         for (int e=0;e<6;e++){ x->tRi[t][slot][e]=Ri[e]; if (inner_j) x->tRj[t][e]=Rj[e]; }
     }
-    x->tNg[t]=Ng;
-    fft2(buf,Ng);
-    double da,db;
-    if (inner_j){ sp_eval_pair(buf,Ng,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=db; }
-    else {
-        sp_eval_pair(buf,Ng,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=0;
-        if (jhi>jlo){ sp_eval_pair(buf,Ng,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
+    x->tNg[t]=(double)Na*Nb;
+    fft2(buf,Na,Nb);
+    pair_eval(x,t);
+}
+// GR term of inner planet i: its 1-D transform f1 (in Z) and the divisor sum
+MEP_CLONES static void gr_eval(struct tctx* x, int t){
+    const int i=x->ti[t], N1=x->tNa[t]; const double complex* f1=x->Z+x->zoff[t];
+    double complex s=0.;
+    for (int a=0;a<N1;a++){
+        const int K=kf(a,N1); if (K==0) continue;
+        s += f1[a]/N1*(cos(K*x->E[i][1])+I*sin(K*x->E[i][1]))/(I*K*x->n[i]);
     }
+    x->tda[t]=creal(s);
 }
 MEP_CLONES static void task_gr(struct tctx* x, int t){
-    const double* m=x->c->masses; const int i=x->ti[t]; const int N1=x->N1;
-    double complex f1[NGMAX]; double Rg[6]={0};
+    const double* m=x->c->masses; const int i=x->ti[t]; const int N1=x->tNa[t];
+    double complex* f1=x->Z+x->zoff[t]; double Rg[6]={0};
     const double pre= x->c->gr ? -6.*m[0]*m[0]/(CGR*CGR) : 0.;
     for (int a=0;a<N1;a++){
         const double* r1=x->ri[i][a];
@@ -271,12 +319,7 @@ MEP_CLONES static void task_gr(struct tctx* x, int t){
     }
     for (int e=0;e<6;e++) x->tRj[t][e]=Rg[e];
     fft1(f1,N1,1);
-    double complex s=0.;
-    for (int a=0;a<N1;a++){
-        const int K=kf(a,N1); if (K==0) continue;
-        s += f1[a]/N1*(cos(K*x->E[i][1])+I*sin(K*x->E[i][1]))/(I*K*x->n[i]);
-    }
-    x->tda[t]=creal(s);
+    gr_eval(x,t);
 }
 // ---- helper pool (fork-join over task indices); workers spin briefly before sleeping (wake-up latency of sleeping
 // threads is ~0.1 ms, comparable to a table pass) ----
@@ -361,7 +404,7 @@ static void table_setup(struct tctx* x, const struct mep_cfg* c, const double E[
     x->c=c; x->E=E; x->nc= rates ? 6 : 1;
     const double* m=c->masses; double acc=0;
     for (int i=0;i<MEP_NP;i++){ acc+=m[i]; x->Mint[i]=acc; x->mu[i]=x->Mint[i]+m[i+1]; if (i<nn) x->n[i]=sqrt(x->mu[i]/exp(3.*E[i][0])); }
-    x->N1=(c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii); x->N2=c->ng_io; x->Nlo=c->ng_ii;
+    x->N2=c->ng_io; x->Nlo=c->ng_ii;
     nu_cut_t = c->pcut_yr>0. ? 1./c->pcut_yr : 0.;
     int nt=0;
     for (int i=0;i<MEP_NI;i++){
@@ -372,7 +415,36 @@ static void table_setup(struct tctx* x, const struct mep_cfg* c, const double E[
         x->ti[nt]=i; x->tkind[nt]=2; nt++;
     }
     x->ntask=nt;
+    // grids: per pair task (plain ng_ii, ng_hi for close pairs, synodic ng_th x ng_ph), per inner planet the largest
+    // grid any of its pair tasks reads (a synodic task reads planet j's grid at lambda_i - phi: Na | Ng1[j], Nb | Ng1[j])
+    const int nhi = c->ng_hi>c->ng_ii ? c->ng_hi : c->ng_ii;
+    for (int p=0;p<MEP_NI;p++) x->Ng1[p]=c->ng_ii;
+    for (int t=0;t<nt;t++){
+        const int i=x->ti[t], j=x->tj0[t]; x->tsyn[t]=0;
+        if (x->tkind[t]==0){
+            const double al=exp(E[i][0]-E[j][0]);
+            const int hi = c->ng_hi>0 && al>=c->alpha_hi;
+            const int syn = c->ng_th>0 && al>=c->alpha_an;
+            x->tsyn[t]=syn;
+            if (syn){ x->tNa[t]=c->ng_th; x->tNb[t]=c->ng_ph; } else x->tNa[t]=x->tNb[t]= hi ? nhi : c->ng_ii;
+            if (x->tNa[t]>x->Ng1[i]) x->Ng1[i]=x->tNa[t];
+            if (x->tNa[t]>x->Ng1[j]) x->Ng1[j]=x->tNa[t];
+            if (x->tNb[t]>x->Ng1[j]) x->Ng1[j]=x->tNb[t];
+        } else if (x->tkind[t]==1){ x->tNa[t]=x->tNb[t]=c->ng_io; }
+    }
+    x->N1=0; for (int p=0;p<MEP_NI;p++) if (x->Ng1[p]>x->N1) x->N1=x->Ng1[p];
+    int off=0;
+    for (int t=0;t<nt;t++){
+        if (x->tkind[t]==2){ x->tNa[t]=x->Ng1[x->ti[t]]; x->tNb[t]=1; }
+        x->zoff[t]=off; off+=x->tNa[t]*x->tNb[t];
+    }
+    if (off>x->zcap){ free(x->Z); x->Z=malloc(off*sizeof(double complex)); x->zcap=off; }
 }
+// mean motions of the inner planets from their mean ln a = ln a - disp (small divisors of the mean-n variant)
+static void table_mean_n(struct tctx* x, const double disp[MEP_NI]){
+    for (int i=0;i<MEP_NI;i++) x->n[i]=sqrt(x->mu[i]/exp(3.*(x->E[i][0]-disp[i])));
+}
+static void reeval_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) gr_eval(x,t); else pair_eval(x,t); }
 static void table_nmotion(struct tctx* x, int from){ for (int i=from;i<MEP_NP;i++) x->n[i]=sqrt(x->mu[i]/exp(3.*x->E[i][0])); }
 // reduction in the serial order
 static void table_reduce(struct tctx* x, double disp[MEP_NI], double R[MEP_NI][6]){
@@ -381,25 +453,27 @@ static void table_reduce(struct tctx* x, double disp[MEP_NI], double R[MEP_NI][6
     for (int t=0;t<nt;t++){
         const int i=x->ti[t];
         if (x->tkind[t]==0){
-            const int j=x->tj0[t]; const double Ng=x->tNg[t];
-            if (R) for (int e=0;e<6;e++){ R[i][e]+=x->tRi[t][0][e]/(Ng*Ng); R[j][e]+=x->tRj[t][e]/(Ng*Ng); }
+            const int j=x->tj0[t]; const double Np=x->tNg[t];
+            if (R) for (int e=0;e<6;e++){ R[i][e]+=x->tRi[t][0][e]/Np; R[j][e]+=x->tRj[t][e]/Np; }
             disp[i]+=x->tda[t]; disp[j]+=x->tdb[t];
         } else if (x->tkind[t]==1){
-            const double Ng=x->tNg[t];
-            for (int j=x->tj0[t]; j<=x->tj1[t]; j++) if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRi[t][j-x->tj0[t]][e]/(Ng*Ng);
+            const double Np=x->tNg[t];
+            for (int j=x->tj0[t]; j<=x->tj1[t]; j++) if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRi[t][j-x->tj0[t]][e]/Np;
             disp[i]+=x->tda[t]; if (x->tj1[t]>x->tj0[t]) disp[i]+=x->tdb[t];
         } else {
-            if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRj[t][e]/x->N1;
+            if (R) for (int e=0;e<6;e++) R[i][e]+=x->tRj[t][e]/x->tNa[t];
             disp[i]+=x->tda[t];
         }
     }
 }
-static void table_par(const struct mep_cfg* c, const double E[MEP_NP][6], double disp[MEP_NI], double R[MEP_NI][6], int par){
-    static __thread struct tctx* x=NULL; if (!x) x=malloc(sizeof *x);
+// mn = 2: mean-n by re-evaluating the divisor sums with the mean motions of the mean ln a (tables unchanged)
+static void table_par(const struct mep_cfg* c, const double E[MEP_NP][6], double disp[MEP_NI], double R[MEP_NI][6], int par, int mn){
+    static __thread struct tctx* x=NULL; if (!x) x=calloc(1,sizeof *x);
     table_setup(x,c,E,R!=NULL,MEP_NP);
-    run_tasks(grid_task,x,c->maxj+1,par);
+    run_tasks(grid_task,x,ngrid_all(c),par);
     run_tasks(pairgr_task,x,x->ntask,par);
     table_reduce(x,disp,R);
+    if (mn==2){ table_mean_n(x,disp); run_tasks(reeval_task,x,x->ntask,par); table_reduce(x,disp,R); }
 }
 static void outer_wh(const struct mep_cfg* c, const double E[MEP_NP][6], double Eo[MEP_NP][6]){
     const double* m=c->masses;
@@ -472,6 +546,9 @@ static void p_mean(void* a, int t){ (void)t; struct pctx* p=a;
     mean_state(p->E_in,p->disp,p->E1);
     table_setup(p->x0,p->c,(const double (*)[6])p->E1,1,MEP_NP);
 }
+// mean-n by divisors only (meann 2): the start tables' divisor sums again with the mean motions of the mean ln a
+static void p_mean2(void* a, int t){ (void)t; struct pctx* p=a; table_reduce(p->x0,p->disp,NULL); table_mean_n(p->x0,p->disp); }
+static void p_reeval(void* a, int t){ struct pctx* p=a; reeval_task(p->x0,t); }
 static void p_pred(void* a, int t){ (void)t; struct pctx* p=a;
     table_reduce(p->x0,p->disp,p->R);
     inner_predict(p->c,p->mu,p->E_in,p->disp,CEL(p->R),p->M2);
@@ -481,19 +558,23 @@ static void p_pred(void* a, int t){ (void)t; struct pctx* p=a;
 }
 static void p_grid1i(void* a, int t){ struct pctx* p=a; task_grid(p->x1,t); }
 static void p_pair1i(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->inner_t[t]); }
-static void p_grid1o(void* a, int t){ struct pctx* p=a; task_grid(p->x1,MEP_NI+t); }
+static void p_grid1o(void* a, int t){ struct pctx* p=a; task_grid(p->x1,ngrid_inner(p->c)+t); }
 static void p_pair1o(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->outer_t[t]); }
 static int coarse_staged(const struct mep_cfg* c, const double* mu, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], const double (*Mpre)[6]){
     if (!c->heun || !pool_acquire(1)) return 0;
-    static __thread struct tctx *x0=NULL, *x1=NULL; if (!x0){ x0=malloc(sizeof *x0); x1=malloc(sizeof *x1); }
+    static __thread struct tctx *x0=NULL, *x1=NULL; if (!x0){ x0=calloc(1,sizeof *x0); x1=calloc(1,sizeof *x1); }
     static __thread struct pctx p; double M2[MEP_NP][6], Mg[MEP_NP][6];
     p.c=c; p.E_in=E_in; p.M2=M2; p.mu=mu; p.x0=x0; p.x1=x1;
     table_setup(x0,c,E_in,1,MEP_NP);
     // the number of inner tasks of the end table equals that of the start table (same task list)
     int ni=0; for (int t=0;t<x0->ntask;t++) if (x0->tkind[t]!=1) ni++;
-    struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{c->maxj+1,x0->ntask,1,MEP_NI,ni}};
-    if (c->meann){
-        struct pjob am={8,{p_grid0,p_pair0,p_mean,p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p,&p},{c->maxj+1,x0->ntask,1,MEP_NI,x0->ntask,1,MEP_NI,ni}};
+    const int ng_all=ngrid_all(c), ng_in=ngrid_inner(c);
+    struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,ni}};
+    if (c->meann==1){
+        struct pjob am={8,{p_grid0,p_pair0,p_mean,p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,x0->ntask,1,ng_in,ni}};
+        a=am;
+    } else if (c->meann==2){
+        struct pjob am={7,{p_grid0,p_pair0,p_mean2,p_reeval,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,x0->ntask,1,ng_in,ni}};
         a=am;
     }
     pool_launch(&a);
@@ -501,7 +582,7 @@ static int coarse_staged(const struct mep_cfg* c, const double* mu, const double
     pool_join();
     for (int j=MEP_NI;j<MEP_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6);
     table_nmotion(x1,MEP_NI);
-    struct pjob b={2,{p_grid1o,p_pair1o},{&p,&p},{c->maxj+1-MEP_NI,p.nouter}};
+    struct pjob b={2,{p_grid1o,p_pair1o},{&p,&p},{ng_all-ng_in,p.nouter}};
     pool_launch(&b); pool_join(); pool_release();
     double disp1[MEP_NI], R1[MEP_NI][6];
     table_reduce(x1,disp1,R1);
@@ -521,17 +602,17 @@ void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], d
     for (int i=0;i<MEP_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
     if (par && coarse_staged(c,mu,E_in,E_out,Mpre)) return;
     double disp[MEP_NI], R[MEP_NI][6], M2[MEP_NP][6];
-    table_par(c,E_in,disp,R,par);
-    if (c->meann){ double E1[MEP_NP][6]; mean_state(E_in,disp,E1); table_par(c,(const double (*)[6])E1,disp,R,par); }
+    table_par(c,E_in,disp,R,par,c->meann==2?2:0);
+    if (c->meann==1){ double E1[MEP_NP][6]; mean_state(E_in,disp,E1); table_par(c,(const double (*)[6])E1,disp,R,par,0); }
     inner_predict(c,mu,E_in,disp,CEL(R),M2);
     if (Mpre){ for (int j=MEP_NI;j<MEP_NP;j++) memcpy(M2[j],Mpre[j],sizeof(double)*6); } else outer_wh(c,E_in,M2);
     double disp1[MEP_NI];
     if (c->heun){
         double R1[MEP_NI][6];
-        table_par(c,CEL(M2),disp1,R1,par);
+        table_par(c,CEL(M2),disp1,R1,par,0);
         inner_correct(c,mu,E_in,CEL(R),CEL(R1),disp1,M2,E_out);
     } else {
-        table_par(c,CEL(M2),disp1,NULL,par);
+        table_par(c,CEL(M2),disp1,NULL,par,0);
         memcpy(E_out,M2,sizeof M2);
         for (int i=0;i<MEP_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
     }

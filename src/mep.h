@@ -40,10 +40,17 @@ struct mep_cfg {
     double pcut_yr;         // drop short-period terms with period > pcut_yr from the transform (0: keep all)
     int ng_hi;              // grid for close inner-inner pairs (0: off)
     double alpha_hi;
-    int meann;              // 1: start tables rebuilt at the mean ln a
+    int meann;              // mean motions of the mean ln a in the small divisors of the start tables: 1: tables rebuilt
+                            // at the mean ln a; 2 (default): only the divisor sums re-evaluated (same iteration counts,
+                            // nearly free)
     int dual;               // 1: exact dE/dv by dual numbers
     int gcorr;              // symplectic corrector order of the giants' coarse run
     int gr;                 // 1: GR potential of WHFast512 included in the coarse step
+    // Synodic grids for inner-inner pairs with a_i/a_j >= alpha_an (default 0.7: Venus-Earth): the pair's rates are
+    // tabulated on ng_th x ng_ph points of (lambda_i, phi = lambda_i - lambda_j) instead of ng_ii x ng_ii points of
+    // (lambda_i, lambda_j). A close pair's spectrum is wide in phi (synodic harmonics) and narrow in the other direction
+    // (eccentricity order), so 16 x 64 resolves it like a 64 x 64 grid at the cost of 32 x 32. ng_th = 0: off.
+    int ng_th, ng_ph; double alpha_an;
 };
 void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_days, int gr);
 void reb_mep_coarse(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6]);
