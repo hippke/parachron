@@ -2,13 +2,19 @@
 
 `run.sh` builds several variants of the Parachron library from this checkout and measures, on the machine it runs on:
 
-1. **Single core**: ns/step of each WHFast512 kernel and variant in the paper setup (Sun + 8 planets, dt = 6 d, GR,
-   17th-order corrector), three interleaved repetitions, plus a hash of the final state (bitwise checks). If GitHub is
+1. **Single core**: speed of each WHFast512 kernel and variant relative to the assembly kernel in the paper setup
+   (Sun + 8 planets, dt = 6 d, GR, 17th-order corrector), plus a hash of the final state (bitwise checks). If GitHub is
    reachable, unmodified upstream REBOUND (Parachron's base commit `262a9cc`) is built and measured too.
 2. **Hardware counters** per step (cycles, instructions, FP operations by type), if `perf` is available.
-3. **All-core load**: ns/step per core with 16 and with all physical cores busy (clock under load).
+3. **Multi-core load**: ns/step per core with 16 copies running at the same time (clock under load).
 4. **MEP**: wall clock and speed-up against the serial reference (1600 slices, 1.58 Myr), for 16 cores with
    several kernels, and 32 and 64 cores with the assembly kernel.
+
+The machine does not need to be idle. Every comparison runs in ABBA blocks (reference, variant, variant, reference;
+MEP: serial, MEP cases, the same reversed, serial), so drifts of the background load cancel in each block's ratio, and
+the runs are pinned to the physical cores that were the most idle (both hardware threads) just before. The output
+gives the spread over blocks, a null test (the assembly against itself) for the size of the remaining noise, and the
+idle fraction of the cores used.
 
 | variant | what it tests |
 |---|---|
@@ -20,8 +26,7 @@
 | `clang`, `clang_sqrtdiv` | built with clang, if installed |
 | `upstream` | unmodified REBOUND, assembly kernel (speed and bitwise check of Parachron's assembly path) |
 
-Run time: about 10 minutes. Uses one core for most of the time, all physical cores briefly (sections 3 and 4), so run it
-on an otherwise idle machine.
+Run time: about 15 minutes. Uses one core for most of the time, and 16 to 64 cores briefly (sections 3 and 4).
 
 ## Debian 13 (trixie)
 
@@ -46,5 +51,6 @@ benchmarks/whfast512_kernels/run.sh
 ```
 
 The results are written to `w512bench_<host>_<date>/results.txt` in the current directory; send that file back. Optional
-settings: `CORE=<cpu>` (CPU for the single-core runs, default the third physical core), `REPS=<n>` (default 3),
+settings: `CORE=<cpu>` (fixed CPU for the single-core runs instead of the most idle one), `BLOCKS=<n>` (ABBA blocks per
+single-core comparison, default 5; more blocks give tighter ranges on a busy machine),
 `SKIP_UPSTREAM=1`, `SKIP_MEP=1`.

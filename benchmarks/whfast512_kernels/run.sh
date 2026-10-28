@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # WHFast512 kernel and MEP benchmark (Parachron). Builds several variants of the library from this checkout, then
 # measures on this machine:
-#   1. single-core ns/step of every kernel variant (paper setup), with state hashes (bitwise checks);
+#   1. single-core speed of every kernel variant relative to the assembly kernel (paper setup), with state hashes;
 #   2. hardware counters per step (if `perf` works);
-#   3. per-core speed with 16 (and all) physical cores busy (clock under all-core load);
+#   3. per-core speed with 16 copies running at the same time (clock under multi-core load);
 #   4. MEP wall clock and speed-up against the serial reference, for several kernels and core counts.
+# Made for machines with other load: every comparison runs in ABBA blocks (reference, variant, variant, reference),
+# so that drifts of the background load cancel in each block's ratio, and the runs are pinned to the physical cores
+# that were the most idle (both hardware threads) just before. The spread over blocks shows the remaining noise;
+# a null test (the assembly against itself) gives its size.
 # Usage (from anywhere):  benchmarks/whfast512_kernels/run.sh
-# Environment: OUT (output directory), CORE (logical CPU for single-core runs), REPS (repetitions, default 3),
-#              SKIP_UPSTREAM=1 (do not clone upstream REBOUND), SKIP_MEP=1.
+# Environment: OUT (output directory), BLOCKS (ABBA blocks per single-core comparison, default 5), CORE (fixed CPU for
+#              single-core runs instead of the most idle one), SKIP_UPSTREAM=1 (do not clone upstream REBOUND), SKIP_MEP=1.
 # Results: $OUT/results.txt (send this file back), raw data in $OUT/raw/.
 set -u
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 OUT=${OUT:-$PWD/w512bench_$(hostname -s)_$(date +%Y%m%d_%H%M)}
-REPS=${REPS:-3}
-CALLS=20                                  # 20 calls x 1e6 steps per single-core run
+BLOCKS=${BLOCKS:-5}
+CALLS=5                                   # 5 calls x 1e6 steps per single-core run (~0.6 s)
 UPSTREAM_COMMIT=262a9cce102c69ca2cf7f3c6c1264e5e60002b7d   # Parachron's upstream base
 mkdir -p "$OUT/raw" "$OUT/build"
 exec > >(tee "$OUT/results.txt") 2>&1
@@ -31,21 +35,50 @@ echo "AVX-512 flags: $(grep -m1 -o -w -E 'avx512[a-z0-9_]*' /proc/cpuinfo | sort
 grep -m1 microcode /proc/cpuinfo || true
 echo "kernel $(uname -r); $(. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME")"
 echo "governor $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo n/a); boost $(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || echo n/a); SMT $(cat /sys/devices/system/cpu/smt/active 2>/dev/null || echo n/a)"
-echo "load average: $(cut -d' ' -f1-3 /proc/loadavg)"
 gcc --version | head -1
 command -v clang >/dev/null && clang --version | head -1
 echo "parachron $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null) ($(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null))"
 
-# physical cores (first hardware thread of each core), in CPU order
+# physical cores (first hardware thread of each core) and their hardware threads
 PHYS=()
+declare -A SIBS
 for d in /sys/devices/system/cpu/cpu[0-9]*; do
-    c=${d##*cpu}; f=$(cut -d, -f1 "$d/topology/thread_siblings_list" 2>/dev/null | cut -d- -f1)
-    [ "$f" = "$c" ] && PHYS+=("$c")
+    c=${d##*cpu}; l=$(cat "$d/topology/thread_siblings_list" 2>/dev/null || echo "$c")
+    f=${l%%[,-]*}
+    if [ "$f" = "$c" ]; then
+        PHYS+=("$c"); s=""
+        for part in ${l//,/ }; do
+            if [[ $part == *-* ]]; then s+=" $(seq -s ' ' "${part%-*}" "${part#*-}")"; else s+=" $part"; fi
+        done
+        SIBS[$c]=${s# }
+    fi
 done
 IFS=$'\n' PHYS=($(sort -n <<<"${PHYS[*]}")); unset IFS
 NPHYS=${#PHYS[@]}
-CORE=${CORE:-${PHYS[2]:-0}}
-echo "physical cores: $NPHYS; single-core runs on CPU $CORE"
+echo "physical cores: $NPHYS"
+
+# Idle fraction of every physical core over 2 s (the smaller of its hardware threads), most idle first:
+# lines "first_cpu idle".
+rank_cores(){
+    local a b; a=$(grep '^cpu[0-9]' /proc/stat); sleep 2; b=$(grep '^cpu[0-9]' /proc/stat)
+    paste <(echo "$a") <(echo "$b") | awk '{n=NF/2; t1=0; t2=0; for(i=2;i<=n;i++){t1+=$i; t2+=$(n+i)};
+        cpu=substr($1,4); idle=(t2>t1)?(($(n+5)+$(n+6))-($5+$6))/(t2-t1):0; print cpu, idle}' > "$OUT/raw/idle_now"
+    for p in "${PHYS[@]}"; do
+        awk -v s=" ${SIBS[$p]} " -v p="$p" 'BEGIN{m=1} index(s," "$1" ")>0{if($2<m)m=$2} END{printf "%s %.3f\n", p, m}' "$OUT/raw/idle_now"
+    done | sort -k2,2nr -k1,1n
+}
+# pick N: the N most idle physical cores. Sets PICK (first threads, comma separated), PICK_ALL (with SMT siblings)
+# and PICK_IDLE (smallest idle fraction among them).
+pick(){
+    local r; r=$(rank_cores | head -n "$1")
+    PICK=$(cut -d' ' -f1 <<<"$r" | paste -sd,)
+    PICK_ALL=$(for p in $(cut -d' ' -f1 <<<"$r"); do echo ${SIBS[$p]}; done | tr ' ' '\n' | paste -sd,)
+    PICK_IDLE=$(tail -1 <<<"$r" | cut -d' ' -f2)
+}
+echo "load average $(cut -d' ' -f1-3 /proc/loadavg); idle physical cores (>= 95 % idle, both threads): $(rank_cores | awk '$2>=0.95' | wc -l) of $NPHYS"
+
+# median of the numbers on stdin
+med(){ sort -g | awk '{a[NR]=$1} END{if(NR==0){print "nan"} else if(NR%2){print a[(NR+1)/2]} else {print (a[NR/2]+a[NR/2+1])/2}}'; }
 
 # ------------------------------------------------------------------------------------------------ builds
 say "building library variants (a few minutes)"
@@ -81,38 +114,48 @@ if [ "${SKIP_UPSTREAM:-0}" != 1 ]; then
         echo "  upstream REBOUND: not available (clone or build failed); skipped"
     fi
 fi
+[ -x "$OUT/build/default/kbench" ] || { echo "the default build failed; stopping"; exit 1; }
 
 # ------------------------------------------------------------------------------------------------ 1. single core
-# Runs: "variant kernel". Kernels: 1 assembly (unchanged from upstream), 2 C AVX-512, 3 C AVX2 (8 lanes as 2x4).
-RUNS=()
-[ $HAVE_UP = 1 ] && RUNS+=("upstream 1")
+# Tests "variant kernel". Kernels: 1 assembly (unchanged from upstream), 2 C AVX-512, 3 C AVX2 (8 lanes as 2x4).
+# Reference A = default build, assembly kernel. "default 1" against itself is the null test.
+TESTS=("default 1")
+[ $HAVE_UP = 1 ] && TESTS+=("upstream 1")
 for v in "${VARIANTS[@]}"; do
     case $v in
-        default) RUNS+=("default 1" "default 2" "default 3") ;;
-        *)       RUNS+=("$v 2" "$v 3") ;;
+        default) TESTS+=("default 2" "default 3") ;;
+        *)       TESTS+=("$v 2" "$v 3") ;;
     esac
 done
-say "1. single core: ${#RUNS[@]} runs x $REPS repetitions x $CALLS million steps, interleaved, CPU $CORE"
-for rep in $(seq "$REPS"); do
-    for run in "${RUNS[@]}"; do
-        set -- $run
-        line=$(taskset -c "$CORE" "$OUT/build/$1/kbench" "$2" "$CALLS" 2>&1 | tail -1)
-        echo "$1 $2 $rep $line" >> "$OUT/raw/single.txt"
+say "1. single core, ABBA against the assembly kernel: ${#TESTS[@]} tests x $BLOCKS blocks x 4 runs of $CALLS million steps"
+kb(){ taskset -c "$1" "$OUT/build/$2/kbench" "$3" "$CALLS" 2>&1 | tail -1; }   # cpu variant kernel
+for b in $(seq "$BLOCKS"); do
+    if [ -n "${CORE:-}" ]; then C1=$CORE; I1=fixed; else pick 1; C1=$PICK; I1=$PICK_IDLE; fi
+    for t in "${TESTS[@]}"; do
+        set -- $t
+        for role in A X X A; do
+            if [ $role = A ]; then line=$(kb "$C1" default 1); else line=$(kb "$C1" "$1" "$2"); fi
+            echo "$b $1 $2 $role $line" >> "$OUT/raw/single.txt"
+        done
     done
-    echo "  repetition $rep done"
+    echo "  block $b done (CPU $C1, idle before $I1, load average $(cut -d' ' -f1 /proc/loadavg))"
 done
-# table: median over repetitions of the per-run median ns/step
-awk '
-{ key=$1" "$2; n[key]++; v[key,n[key]]=$4; used[key]=$7; hash[key]=$8; if(!(key in seen)){seen[key]=1; order[++m]=key} }
-function med(key,   i,j,t,a,c){ c=n[key]; for(i=1;i<=c;i++)a[i]=v[key,i]; for(i=1;i<=c;i++)for(j=i+1;j<=c;j++)if(a[j]<a[i]){t=a[i];a[i]=a[j];a[j]=t}; return (c%2)?a[(c+1)/2]:(a[c/2]+a[c/2+1])/2 }
-END{
-  ref=med("default 1");
-  printf "%-16s %-7s %-10s %-9s %-6s %s\n","variant","kernel","ns/step","vs asm","used","state hash";
-  for(i=1;i<=m;i++){k=order[i]; split(k,p," "); x=med(k);
-    printf "%-16s %-7s %-10.2f %-9.3f %-6s %s\n",p[1],p[2],x,ref/x,used[k],hash[k]}
-}' "$OUT/raw/single.txt" | tee "$OUT/raw/single_table.txt"
-echo "(vs asm > 1: faster than the assembly kernel of this build; kernel 1 = assembly, 2 = C AVX-512, 3 = C AVX2)"
-h(){ awk -v k="$1 $2" '$1" "$2==k{print $8; exit}' "$OUT/raw/single.txt"; }
+# per test: ratio per block = (A1 + A2) / (X1 + X2) of the per-run median ns/step; median and range over blocks
+{
+printf "%-16s %-7s %-9s %-9s %-17s %-6s %s\n" "variant" "kernel" "ns/step" "vs asm" "range (blocks)" "used" "state hash"
+for t in "${TESTS[@]}"; do
+    set -- $t
+    awk -v v="$1" -v k="$2" '$2==v && $3==k {if($4=="A")a[$1]+=$5; else x[$1]+=$5} END{for(b in a) if(x[b]>0) print a[b]/x[b]}' "$OUT/raw/single.txt" > "$OUT/raw/r"
+    r=$(med < "$OUT/raw/r"); lo=$(sort -g "$OUT/raw/r" | head -1); hi=$(sort -g "$OUT/raw/r" | tail -1)
+    ns=$(awk -v v="$1" -v k="$2" '$2==v && $3==k && $4=="X"{print $5}' "$OUT/raw/single.txt" | med)
+    last=$(awk -v v="$1" -v k="$2" '$2==v && $3==k && $4=="X"{u=$8; h=$9} END{print u, h}' "$OUT/raw/single.txt")
+    name=$1; [ "$t" = "default 1" ] && name="default(null)"
+    printf "%-16s %-7s %-9.2f %-9.3f %-17s %-6s %s\n" "$name" "$2" "$ns" "$r" "$(printf '%.3f-%.3f' "$lo" "$hi")" $last
+done
+echo "(vs asm: speed relative to the assembly kernel, median over blocks; > 1 is faster. ns/step: median of all runs of the"
+echo " variant, affected by the background load. kernel 1 = assembly, 2 = C AVX-512, 3 = C AVX2. null: assembly vs itself.)"
+} | tee "$OUT/raw/single_table.txt"
+h(){ awk -v v="$1" -v k="$2" '$2==v && $3==k && $4=="X"{print $9; exit}' "$OUT/raw/single.txt"; }
 chk(){ [ -n "$(h $1 $2)" ] && [ -n "$(h $3 $4)" ] && { [ "$(h $1 $2)" = "$(h $3 $4)" ] && r=identical || r=DIFFERENT; echo "  $1/$2 vs $3/$4: $r"; }; }
 echo "bitwise checks:"
 [ $HAVE_UP = 1 ] && chk upstream 1 default 1
@@ -123,7 +166,7 @@ chk sqrtdiv 2 native_sqrtdiv 3
 chk sqrtdiv 2 clang_sqrtdiv 2
 
 # ------------------------------------------------------------------------------------------------ 2. counters
-say "2. hardware counters per step (perf)"
+say "2. hardware counters per step (perf; counts do not depend on the background load, cycles a little)"
 PERF_RUNS=("default 1" "default 2" "default 3" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 3")
 if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
     P=fp_ops_retired_by_type
@@ -132,54 +175,86 @@ if command -v perf >/dev/null && perf stat -e cycles true >/dev/null 2>&1; then
         GROUPS_+=("$P.vector_mac,$P.vector_mul,$P.vector_add,$P.vector_sub,$P.vector_div,$P.vector_sqrt"
                   "$P.vector_shuffle,$P.vector_blend,$P.vector_cmp,$P.vector_logical,$P.vector_other")
     fi
+    if [ -n "${CORE:-}" ]; then C1=$CORE; else pick 1; C1=$PICK; fi
     for run in "${PERF_RUNS[@]}"; do
         set -- $run; [ -x "$OUT/build/$1/kbench" ] || continue
         for g in "${GROUPS_[@]}"; do
-            taskset -c "$CORE" perf stat -x, -e "$g" "$OUT/build/$1/kbench" "$2" 10 2>&1 >/dev/null \
-                | awk -F, -v r="$1 $2" '/^[0-9]/{split($3,e,"."); printf "%-12s %-24s %9.1f\n", r, (e[2]?e[2]:e[1]), $1/1e7}'
+            taskset -c "$C1" perf stat -x, -e "$g" "$OUT/build/$1/kbench" "$2" 10 2>&1 >/dev/null \
+                | awk -F, -v r="$1 $2" '/^[0-9]/{split($3,e,"."); printf "%-18s %-24s %9.1f\n", r, (e[2]?e[2]:e[1]), $1/1e7}'
         done
     done | tee "$OUT/raw/perf.txt"
 else
     echo "perf not available or not permitted (install linux-perf; sudo sysctl -w kernel.perf_event_paranoid=1); skipped"
 fi
 
-# ------------------------------------------------------------------------------------------------ 3. all cores
-say "3. per-core speed with many cores busy (one copy per physical core, 10 million steps each)"
+# ------------------------------------------------------------------------------------------------ 3. 16 cores busy
+P16=16; [ "$NPHYS" -lt 16 ] && P16=$NPHYS
+say "3. per-core speed with $P16 copies at the same time (most idle cores), ABBA against the assembly kernel, 3 blocks"
 LOADED=("default 1" "default 2" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 2" "native_sqrtdiv 3")
-for P in 16 $NPHYS; do
-    [ "$P" -le "$NPHYS" ] || continue
-    for run in "${LOADED[@]}"; do
-        set -- $run; [ -x "$OUT/build/$1/kbench" ] || continue
-        rm -f "$OUT/raw/load_$$_"*
-        for i in $(seq 0 $((P-1))); do
-            taskset -c "${PHYS[$i]}" "$OUT/build/$1/kbench" "$2" 10 > "$OUT/raw/load_$$_$i" 2>&1 &
+multi(){ # variant kernel -> median ns/step over the copies (cores in $PICK)
+    local i=0
+    rm -f "$OUT/raw/load_$$_"*
+    for c in ${PICK//,/ }; do taskset -c "$c" "$OUT/build/$1/kbench" "$2" "$CALLS" > "$OUT/raw/load_$$_$i" 2>&1 & i=$((i+1)); done
+    wait
+    cut -d' ' -f1 "$OUT/raw/load_$$_"* | med
+    rm -f "$OUT/raw/load_$$_"*
+}
+for b in 1 2 3; do
+    pick "$P16"
+    for t in "${LOADED[@]}"; do
+        set -- $t; [ -x "$OUT/build/$1/kbench" ] || continue
+        for role in A X X A; do
+            if [ $role = A ]; then x=$(multi default 1); else x=$(multi "$1" "$2"); fi
+            echo "$b $1 $2 $role $x" >> "$OUT/raw/multi.txt"
         done
-        wait
-        cut -d' ' -f1 "$OUT/raw/load_$$_"* | sort -n | awk -v r="$1 $2" -v P="$P" '{a[NR]=$1} END{n=NR; printf "  %3d cores busy  %-12s median %.2f ns/step (fastest %.2f, slowest %.2f)\n", P, r, a[int((n+1)/2)], a[1], a[n]}'
-        rm -f "$OUT/raw/load_$$_"*
     done
-    [ "$P" = "$NPHYS" ] && break
-done | tee "$OUT/raw/allcore.txt"
+    echo "  block $b done (cores $PICK, least idle before ${PICK_IDLE})"
+done
+{
+printf "%-18s %-9s %-9s %s\n" "variant/kernel" "ns/step" "vs asm" "range (blocks)"
+for t in "${LOADED[@]}"; do
+    set -- $t
+    awk -v v="$1" -v k="$2" '$2==v && $3==k {if($4=="A")a[$1]+=$5; else x[$1]+=$5} END{for(b in a) if(x[b]>0) print a[b]/x[b]}' "$OUT/raw/multi.txt" > "$OUT/raw/r"
+    [ -s "$OUT/raw/r" ] || continue
+    r=$(med < "$OUT/raw/r"); lo=$(sort -g "$OUT/raw/r" | head -1); hi=$(sort -g "$OUT/raw/r" | tail -1)
+    ns=$(awk -v v="$1" -v k="$2" '$2==v && $3==k && $4=="X"{print $5}' "$OUT/raw/multi.txt" | med)
+    name="$1/$2"; [ "$t" = "default 1" ] && name="default/1 (null)"
+    printf "%-18s %-9.2f %-9.3f %s\n" "$name" "$ns" "$r" "$(printf '%.3f-%.3f' "$lo" "$hi")"
+done
+} | tee "$OUT/raw/multi_table.txt"
 
 # ------------------------------------------------------------------------------------------------ 4. MEP
 if [ "${SKIP_MEP:-0}" != 1 ]; then
-    say "4. MEP: 1600 slices of 60000 steps (1.58 Myr); serial reference = one WHFast512 call per slice on CPU $CORE"
-    printf "%-12s %-6s %-9s %-8s %-9s %-7s\n" "variant/k" "cores" "tol" "wall [s]" "speed-up" "K mean" | tee "$OUT/raw/mep.txt"
-    mep_case(){ # variant kernel serial_time cores tol
-        local line; line=$("$OUT/build/$1/mepbench" mep "$2" "$4" "$5" 2>&1 | tail -1)
-        set -- "$1" "$2" "$3" "$4" "$5" $line
-        printf "%-12s %-6s %-9s %-8.2f %-9.2f %-7s\n" "$1/$2" "$4" "$5" "$6" "$(awk -v a="$3" -v b="$6" 'BEGIN{print a/b}')" "$7"
+    say "4. MEP: 1600 slices of 60000 steps (1.58 Myr), serial reference = one WHFast512 call per slice on one core"
+    echo "Palindromic order per kernel (serial, MEP cases, MEP cases reversed, serial); speed-up = mean serial / mean MEP."
+    ser(){ pick 1; taskset -c "$PICK" "$OUT/build/$1/mepbench" serial "$2" | cut -d' ' -f1; }
+    mep(){ # variant kernel cores tol -> "wall kmean idle" (or "skip")
+        [ "$3" -le "$NPHYS" ] || { echo skip; return; }
+        pick "$3"
+        echo "$(taskset -c "$PICK_ALL" "$OUT/build/$1/mepbench" mep "$2" "$3" "$4" 2>&1 | tail -1 | cut -d' ' -f1,2) $PICK_IDLE"
     }
+    printf "%-20s %-6s %-7s %-9s %-9s %-7s %s\n" "variant/kernel" "cores" "tol" "wall [s]" "speed-up" "K mean" "least idle core" | tee "$OUT/raw/mep.txt"
     for run in "default 1" "default 2" "sqrtdiv 2" "sqrtdiv 3" "native_sqrtdiv 3"; do
         set -- $run; [ -x "$OUT/build/$1/mepbench" ] || continue
-        ser=$(taskset -c "$CORE" "$OUT/build/$1/mepbench" serial "$2" | cut -d' ' -f1)
-        printf "%-12s %-6s %-9s %-8.2f %-9s %-7s\n" "$1/$2" 1 serial "$ser" 1.00 - | tee -a "$OUT/raw/mep.txt"
-        mep_case "$1" "$2" "$ser" 16 3e-6 | tee -a "$OUT/raw/mep.txt"
-        if [ "$run" = "default 1" ]; then
-            mep_case "$1" "$2" "$ser" 16 3e-5 | tee -a "$OUT/raw/mep.txt"
-            for N in 32 64; do [ "$N" -le "$NPHYS" ] && mep_case "$1" "$2" "$ser" "$N" 3e-6 | tee -a "$OUT/raw/mep.txt"; done
-        fi
+        if [ "$run" = "default 1" ]; then CASES=("16 3e-6" "16 3e-5" "32 3e-6" "64 3e-6"); else CASES=("16 3e-6"); fi
+        unset W K I; declare -A W K I
+        s1=$(ser "$1" "$2")
+        for c in "${CASES[@]}"; do set -- $run $c; r=$(mep "$1" "$2" "$3" "$4"); read -r w k i <<<"$r"; W[$c]=$w; K[$c]=${k:-}; I[$c]=${i:-}; done
+        for (( j=${#CASES[@]}-1; j>=0; j-- )); do c=${CASES[$j]}; set -- $run $c; r=$(mep "$1" "$2" "$3" "$4"); W[$c]+=" ${r%% *}"; done
+        set -- $run
+        s2=$(ser "$1" "$2")
+        sm=$(awk -v a="$s1" -v b="$s2" 'BEGIN{print (a+b)/2}')
+        printf "%-20s %-6s %-7s %-9.2f %-9s %-7s %s\n" "$1/$2" 1 serial "$sm" "1.00" "-" "($s1, $s2 s)" | tee -a "$OUT/raw/mep.txt"
+        for c in "${CASES[@]}"; do
+            set -- $c
+            if [[ ${W[$c]} == skip* ]]; then printf "%-20s %-6s %-7s skipped (fewer physical cores)\n" "${run/ //}" "$1" "$2" | tee -a "$OUT/raw/mep.txt"; continue; fi
+            wm=$(awk '{print ($1+$2)/2}' <<<"${W[$c]}")
+            printf "%-20s %-6s %-7s %-9.2f %-9.2f %-7s %s\n" "${run/ //}" "$1" "$2" "$wm" "$(awk -v a="$sm" -v b="$wm" 'BEGIN{print a/b}')" "${K[$c]}" "${I[$c]} (runs ${W[$c]} s)" | tee -a "$OUT/raw/mep.txt"
+        done
     done
+    echo "(least idle core: idle fraction, before the first MEP run, of the least idle core used; < 0.9 means MEP shared"
+    echo " cores with other jobs and its speed-up is underestimated)"
 fi
 
+echo "load average at the end: $(cut -d' ' -f1-3 /proc/loadavg)"
 say "done: send $OUT/results.txt"
