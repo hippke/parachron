@@ -33,7 +33,7 @@ struct reb_integrator_whfast512_state {
     unsigned int N_systems;
     unsigned int corrector;             
     uint64_t concatenate_steps;
-    unsigned int kernel;                // 0 (default): fastest available. 1: AVX-512 assembly, 2: C AVX-512, 3: C AVX2, 4: C generic. See enum REB_WHFAST512_KERNEL.
+    unsigned int kernel;                // 0 (default): fastest C kernel for this CPU. 1: AVX-512 assembly (upstream), 2: C AVX-512, 3: C AVX2, 4: C generic. See enum REB_WHFAST512_KERNEL.
     unsigned int jacobi_recursive;      // 0 (default): inertial <-> Jacobi by the precomputed 8x8 matrices (as upstream). 1: by the recursive transformations (no systematic energy change per synchronization).
     unsigned int compensated;           // 0 (default): plain updates. 1: coordinate updates with compensated summation (C kernels only; lower round-off).
 

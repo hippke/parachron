@@ -29,6 +29,9 @@
 #include "rebound.h"
 #include "rebound_internal.h"
 #include "integrator_whfast512_data.h"
+#if (defined(__i386__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__))
+#include <cpuid.h>
+#endif
 #if defined(__GNUC__) || defined(__clang__)
 #define REB_SYSV_ABI __attribute__((sysv_abi))
 #else // defined(__GNUC__) || defined(__clang__)
@@ -68,13 +71,15 @@ const struct reb_integrator reb_integrator_whfast512 = {
     "WHFast512 uses Jacobi coordinates and support symplectic correctors as well as general relativistic corrections. "
     "\n\n"
     "WHFast512 runs on any CPU. The `kernel` setting selects the implementation: "
-    "by default (0) the hand-written AVX-512 assembly is used if the CPU supports AVX-512, "
-    "otherwise a C kernel compiled for AVX2+FMA (x86 CPUs since about 2013), otherwise a generic C kernel "
-    "(any CPU; fast on CPUs with fused multiply-add instructions such as all 64-bit ARM CPUs, slow on old x86 CPUs without FMA). "
-    "The C kernels give bitwise identical results on all machines and instruction sets. "
+    "by default (0) the fastest C kernel for this CPU: the AVX-512 kernel on CPUs with AVX-512 (the AVX2 kernel in its "
+    "AVX-512VL build on AMD Zen 4, and for a single system with at most four planets), otherwise the AVX2+FMA kernel "
+    "(x86 CPUs since about 2013), otherwise a generic C kernel (any CPU; fast on CPUs with fused multiply-add instructions "
+    "such as all 64-bit ARM CPUs, slow on old x86 CPUs without FMA). "
+    "The C kernels give bitwise identical results on all machines and instruction sets, so the choice affects only the speed. "
     "For a single system with at most four planets the AVX2 and generic C kernels automatically use a four-lane variant "
-    "(same results, faster; on AVX-512 machines `kernel=3` is then also faster than the assembly). "
-    "The assembly kernel agrees with them to round-off. "
+    "(same results, faster). "
+    "The hand-written AVX-512 assembly of upstream REBOUND (`kernel=1`) agrees with them to round-off and is bitwise "
+    "identical to upstream; it is used only when requested. "
     "`kernel_used` reports which kernel ran. "
     "\n\n"
     "The algorithm is described in two papers [Javaheri et al. (2023)] and [Dagli & Rein (in prep)]. "
@@ -108,8 +113,9 @@ const struct reb_binarydata_field_descriptor reb_integrator_whfast512_field_desc
         "By setting N_systems to either 2 or 4, one can integrate multiple planetary systems with 2, 3, or 4 particles at the same time. "
         "See the example problems on how to setup the particles for this case. ",
         REB_UINT,        "N_systems",       offsetof(struct reb_integrator_whfast512_state, N_systems), 0, 0, 0},
-    { "Kernel used for the integration: 0 (default) picks the fastest one available on this machine "
-        "(AVX-512 assembly if the CPU supports AVX-512, otherwise the C kernel for AVX2+FMA, otherwise the generic C kernel). "
+    { "Kernel used for the integration: 0 (default) picks the fastest C kernel for this machine "
+        "(C AVX-512 if the CPU supports AVX-512, C AVX2 on AMD Zen 4 and for one system with at most four planets, otherwise "
+        "C AVX2+FMA, otherwise the generic C kernel; all give the same results). "
         "1: AVX-512 assembly, 2: C kernel compiled for AVX-512, 3: C kernel for AVX2+FMA, 4: generic C kernel (any CPU). "
         "The C kernels give bitwise identical results on all machines; the assembly kernel differs from them at round-off level. ",
         REB_UINT,        "kernel",          offsetof(struct reb_integrator_whfast512_state, kernel), 0, 0, 0},
@@ -235,6 +241,22 @@ static int whfast512_avx2vl(void){
 #endif
 }
 
+// Returns 1 on AMD Zen 4 (family 0x19 with AVX-512), which executes 512-bit instructions in two 256-bit halves: there
+// the AVX2 kernel (with its AVX-512VL build) is faster than the AVX-512 one. Speed only: the C kernels give the same bits.
+static int whfast512_prefer_256bit(void){
+#if (defined(__i386__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__))
+    unsigned int a, b, c, d;
+    if (!__get_cpuid(0, &a, &b, &c, &d)) return 0;
+    if (!(b == 0x68747541 && d == 0x69746e65 && c == 0x444d4163)) return 0;  // "AuthenticAMD"
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
+    unsigned int family = (a >> 8) & 0xF;
+    if (family == 0xF) family += (a >> 20) & 0xFF;
+    return family == 0x19;
+#else
+    return 0;
+#endif
+}
+
 static const char* whfast512_kernel_name(unsigned int k){
     switch (k){
         case REB_WHFAST512_KERNEL_ASM: return "AVX-512 assembly";
@@ -261,29 +283,27 @@ static int whfast512_kernel_available(unsigned int k){
     }
 }
 
-// Picks the kernel: the requested one, or the fastest available one for REB_WHFAST512_KERNEL_AUTO.
+// Picks the kernel: the requested one, or for REB_WHFAST512_KERNEL_AUTO the fastest C kernel for this CPU. All C
+// kernels give bitwise identical results, so the automatic choice affects the speed only. The assembly kernel
+// (bitwise identical to upstream REBOUND) is used only when requested explicitly.
 // Returns 0 (and prints an error) if the requested kernel is not available.
 static unsigned int whfast512_select_kernel(struct reb_simulation* r, unsigned int requested){
     const struct reb_integrator_whfast512_state* const w = r->integrator.state;
-    if (w && w->compensated){
+    if (w && w->compensated && requested == REB_WHFAST512_KERNEL_ASM){
         // the compensated mode exists only in the C kernels
-        if (requested == REB_WHFAST512_KERNEL_ASM){
-            reb_simulation_error(r, "WHFast512: compensated = 1 needs a C kernel (0 = auto, 2, 3 or 4), not the assembly kernel.");
-            return 0;
-        }
-        if (requested == REB_WHFAST512_KERNEL_AUTO){
-            static const unsigned int order_c[] = {REB_WHFAST512_KERNEL_C_AVX512, REB_WHFAST512_KERNEL_C_AVX2, REB_WHFAST512_KERNEL_C_GENERIC};
-            for (unsigned int i=0; i<sizeof(order_c)/sizeof(order_c[0]); i++){
-                if (whfast512_kernel_available(order_c[i])) return order_c[i];
-            }
-            return REB_WHFAST512_KERNEL_C_GENERIC;
-        }
+        reb_simulation_error(r, "WHFast512: compensated = 1 needs a C kernel (0 = auto, 2, 3 or 4), not the assembly kernel.");
+        return 0;
     }
     if (requested == REB_WHFAST512_KERNEL_AUTO){
-        static const unsigned int order[] = {REB_WHFAST512_KERNEL_ASM, REB_WHFAST512_KERNEL_C_AVX2, REB_WHFAST512_KERNEL_C_GENERIC};
-        for (unsigned int i=0; i<sizeof(order)/sizeof(order[0]); i++){
-            if (whfast512_kernel_available(order[i])) return order[i];
+        const int avx2 = whfast512_kernel_available(REB_WHFAST512_KERNEL_C_AVX2);
+        // one system with at most four planets: the four-lane AVX2 kernel
+        if (avx2 && (!w || w->N_systems == 1) && r->N <= 5) return REB_WHFAST512_KERNEL_C_AVX2;
+        if (whfast512_kernel_available(REB_WHFAST512_KERNEL_C_AVX512)){
+            // Zen 4: the 256-bit kernel in its AVX-512VL build
+            if (avx2 && whfast512_avx2vl() && whfast512_prefer_256bit()) return REB_WHFAST512_KERNEL_C_AVX2;
+            return REB_WHFAST512_KERNEL_C_AVX512;
         }
+        if (avx2) return REB_WHFAST512_KERNEL_C_AVX2;
         return REB_WHFAST512_KERNEL_C_GENERIC;
     }
     if (requested > REB_WHFAST512_KERNEL_C_GENERIC){

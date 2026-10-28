@@ -83,8 +83,11 @@ to-do list.
 
 ## What else is different from REBOUND
 
-* **WHFast512 without AVX-512.** Portable C kernels (AVX2+FMA, AVX-512, generic, ARM NEON) next to the assembly. The
-  kernels give bitwise identical results on every machine, and two simulations can be stepped together.
+* **WHFast512 in C, on any CPU.** Portable C kernels (AVX-512, AVX2+FMA, generic, ARM NEON) are the default; the
+  fastest one for the CPU is picked automatically. They give bitwise identical results on every machine, and two
+  simulations can be stepped together. Speed against upstream's hand-written assembly: 1.12x on AMD Zen 5, 1.03x on
+  Zen 4; on CPUs without AVX-512, where upstream has no WHFast512, 5.8x faster than WHFast (Intel Raptor Lake P-core).
+  The assembly remains available as `kernel = 1` (bitwise identical to upstream).
 * **`jacobi_recursive`** (opt-in): removes a systematic energy offset of +7.5×10⁻¹⁷ per WHFast512 synchronization.
 * **Faster on one core.** The use-case benchmarks run 2.4× faster than upstream (geometric mean). Results are
   bitwise identical, except for round-off-level changes in IAS15.
