@@ -14,6 +14,7 @@
 #              single-core runs instead of the most idle one), SKIP_UPSTREAM=1 (do not clone upstream REBOUND), SKIP_MEP=1.
 # Results: $OUT/results.txt (send this file back), raw data in $OUT/raw/.
 set -u
+export LC_ALL=C                           # decimal points in printf/awk/sort, whatever the system locale
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 OUT=${OUT:-$PWD/w512bench_$(hostname -s)_$(date +%Y%m%d_%H%M)}
