@@ -32,7 +32,7 @@ Run time: about 15 minutes. Uses one core for most of the time, and 16 to 64 cor
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential git linux-perf clang
+sudo apt install -y build-essential wget linux-perf clang
 ```
 
 `linux-perf` and `clang` are optional (sections 2 and the clang variants are skipped without them). Allow `perf` for
@@ -42,13 +42,16 @@ your user until the next reboot (optional; skip if you prefer not to change it):
 sudo sysctl -w kernel.perf_event_paranoid=1
 ```
 
-Clone the benchmark branch and run:
+Download the benchmark branch and run (no git needed; `git clone -b zen5-bench https://github.com/hippke/parachron.git`
+works too where git can reach GitHub without credentials):
 
 ```bash
-git clone -b zen5-bench https://github.com/hippke/parachron.git
-cd parachron
+wget https://github.com/hippke/parachron/archive/refs/heads/zen5-bench.tar.gz
+tar xzf zen5-bench.tar.gz && cd parachron-zen5-bench
 benchmarks/whfast512_kernels/run.sh
 ```
+
+The script downloads upstream REBOUND the same way (curl or wget); it never asks for credentials.
 
 The results are written to `w512bench_<host>_<date>/results.txt` in the current directory; send that file back. Optional
 settings: `CORE=<cpu>` (fixed CPU for the single-core runs instead of the most idle one), `BLOCKS=<n>` (ABBA blocks per

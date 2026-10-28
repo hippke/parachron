@@ -106,7 +106,16 @@ fi
 HAVE_UP=0
 if [ "${SKIP_UPSTREAM:-0}" != 1 ]; then
     u="$OUT/build/upstream"
-    if git clone -q https://github.com/hannorein/rebound "$u" 2>/dev/null && git -C "$u" checkout -q "$UPSTREAM_COMMIT" 2>/dev/null \
+    fetch_upstream(){   # source archive of the commit (curl or wget); git clone without credential prompts as fallback
+        local url="https://github.com/hannorein/rebound/archive/$UPSTREAM_COMMIT.tar.gz"
+        rm -rf "$u"; mkdir -p "$u"
+        { curl -fsSL "$url" 2>/dev/null || wget -qO- "$url" 2>/dev/null; } | tar xz -C "$u" --strip-components=1 2>/dev/null \
+            && [ -f "$u/src/Makefile" ] && return 0
+        rm -rf "$u"
+        GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -c credential.helper= clone -q https://github.com/hannorein/rebound "$u" < /dev/null 2>/dev/null \
+            && git -C "$u" checkout -q "$UPSTREAM_COMMIT" 2>/dev/null
+    }
+    if fetch_upstream \
        && make -C "$u/src" -j"$JOBS" > "$u/build.log" 2>&1 \
        && gcc -O2 "$HERE/kbench.c" -I"$u/src" -L"$u/src" -lrebound -lm -lpthread -Wl,-rpath,"$u/src" -o "$u/kbench"; then
         HAVE_UP=1; echo "  upstream REBOUND ${UPSTREAM_COMMIT:0:8}: ok"
