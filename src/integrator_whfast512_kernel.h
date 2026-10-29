@@ -20,9 +20,11 @@
  *          - 0.5*f*f'' in the Halley step is a multiplication by 0.5 (the assembly subtracts one from
  *            the exponent, which gives the same result for normal numbers, but not for zero).
  *          - Starting value of the Kepler solver: sixth-order series reversion of Kepler's equation in
- *            universal variables (the assembly uses the first-order guess dt/r), so
- *            that a single Halley step is followed by a single Newton step for the Solar System at
- *            dt <= 6 days. The first Newton step uses an approximation of 1/f' from the Halley step,
+ *            universal variables (the assembly uses the first-order guess dt/r), followed by a single
+ *            correction of fifth order (series reversion around the starting value, from one evaluation
+ *            of the Stiefel functions) instead of Halley and Newton steps; lanes where the starting value
+ *            is too far off take Halley and Newton steps as before (-DREB_W512_KEPLER_NEWTON: all lanes).
+ *            In the Newton steps, the first uses an approximation of 1/f' from the Halley step,
  *            refined by one Newton-Raphson step with the accurate f' (no division on the critical
  *            path). The Stiefel functions are evaluated again at the
  *            final X as in the assembly, with plain Horner plus a correction for the rounding of the
@@ -370,72 +372,11 @@ REB_W512_INLINE void REB_W512_NAME(w512_add_comp_)(V* x, V* c, const V d){
     *x = t;
 }
 
-// Kepler step; comp = 1: the update is written as increments and added with compensation (compile-time constant).
-REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512_STATE* s, const int comp){
-    const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
-    const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
-    V R = w_sqrt(r2);
-    const V IR = w_div(c->ONE, R);
-    const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
-    const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
-    const V zeta = w_fnmadd(beta, R, c->M);
-    // Starting value: series reversion of the universal Kepler equation to sixth
-    // order in tau = dt/r,
-    //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
-    // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
-    // while the previous interaction step is still running; after eta and v2 (which need the new
-    // velocities) only a short Estrin evaluation remains. In the dimensionless variables u = eta tau/r,
-    // w = v2 tau^2, m = M tau^2/r the series is
-    //   P = m/6 + m^2/15 - w (1/6 + 17/120 m) + 3/40 w^2
-    //     + u [-1/2 - m/3 - 43/180 m^2 + w (3/8 + 11/20 m) - 5/16 w^2]
-    //     + u^2 [1/2 + 5/8 m - 3/4 w] + u^3 [-5/8 - 7/6 m + 35/24 w] + 7/8 u^4 - 21/16 u^5.
-    // It replaces the third-order start of item 54: with it, one Halley step (short series) is
-    // accurate to < 1e-11 for all eight Solar System planets at dt = 5-6 days, so a single Newton
-    // step (which also provides the accurate Stiefel functions) suffices (the third-order start
-    // needed a second Newton step for Mercury in 46 % of the steps at dt = 6 d).
-    // The start is used where it is a small correction to the first-order guess dt/r
-    // (|X - X1| < 0.1 |X1|, finite), otherwise the first-order guess (and the first Halley step).
-    // The decision is per lane, so packed systems stay independent. Only the starting value
-    // depends on this series; the converged result does not (beyond round-off).
-    const V X1 = w_mul(c->DT, IR);
-    V Xs;
-    {
-        const V tau = X1;
-        const V tau2 = w_mul(tau, tau);
-        const V ku = w_mul(tau, IR);                      // u = ku*eta
-        const V m = w_mul(w_mul(c->M, IR), tau2);         // M tau^2 / r
-        const V ku2 = w_mul(ku, ku), ku3 = w_mul(ku2, ku);
-        const V ku4 = w_mul(ku2, ku2), ku5 = w_mul(ku4, ku);
-        const V t4 = w_mul(tau2, tau2);
-        const V c00 = w_mul(m, w_fmadd(w_set1(1.0/15.0), m, w_set1(1.0/6.0)));
-        const V c01 = w_mul(tau2, w_fmadd(w_set1(-17.0/120.0), m, w_set1(-1.0/6.0)));
-        const V c02 = w_mul(t4, w_set1(3.0/40.0));
-        const V c10 = w_mul(ku, w_fmadd(m, w_fmadd(w_set1(-43.0/180.0), m, w_set1(-1.0/3.0)), w_set1(-0.5)));
-        const V c11 = w_mul(w_mul(ku, tau2), w_fmadd(w_set1(11.0/20.0), m, w_set1(3.0/8.0)));
-        const V c12 = w_mul(w_mul(ku, t4), w_set1(-5.0/16.0));
-        const V c20 = w_mul(ku2, w_fmadd(w_set1(5.0/8.0), m, c->HALF));
-        const V c21 = w_mul(w_mul(ku2, tau2), w_set1(-3.0/4.0));
-        const V c30 = w_mul(ku3, w_fmadd(w_set1(-7.0/6.0), m, w_set1(-5.0/8.0)));
-        const V c31 = w_mul(w_mul(ku3, tau2), w_set1(35.0/24.0));
-        const V c40 = w_mul(ku4, w_set1(7.0/8.0));
-        const V c50 = w_mul(ku5, w_set1(-21.0/16.0));
-        // Short chain after eta and v2.
-        const V v22 = w_mul(v2, v2);
-        const V et2 = w_mul(eta, eta);
-        const V et4 = w_mul(et2, et2);
-        const V row0 = w_fmadd(c02, v22, w_fmadd(c01, v2, c00));
-        const V row1 = w_fmadd(c12, v22, w_fmadd(c11, v2, c10));
-        const V row2 = w_fmadd(c21, v2, c20);
-        const V row3 = w_fmadd(c31, v2, c30);
-        const V E01 = w_fmadd(eta, row1, row0);
-        const V E23 = w_fmadd(eta, row3, row2);
-        const V E45 = w_fmadd(eta, c50, c40);
-        const V P = w_fmadd(et4, E45, w_fmadd(et2, E23, E01));
-        Xs = w_fmadd(tau, P, tau);
-    }
-    const K good3 = w_klt(w_abs(w_sub(Xs, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
-    V XX = w_sel(good3, Xs, X1);
-
+// Kepler solver by Halley and Newton steps from the starting value XX (good3: lanes with the series start); returns
+// the converged X. Used for the lanes the reversion step below cannot take, and for every lane with
+// REB_W512_KEPLER_NEWTON (the solver before Oct 29, 2026).
+REB_W512_INLINE V REB_W512_NAME(w512_kepler_halley_newton_)(const W512_CONSTS* c, const W512_STATE* s, const V R, const V eta,
+        const V zeta, const V beta, const K good3, V XX){
     V G0, G1, G2, G3;
     // Approximation of 1/f' at the result of the last Halley step (used by the first Newton step),
     // and the lanes in which it is accurate enough to be used.
@@ -513,6 +454,116 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
             break;
         }
     }
+    return XX;
+}
+
+// Kepler step; comp = 1: the update is written as increments and added with compensation (compile-time constant).
+REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512_STATE* s, const int comp){
+    const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
+    const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
+    V R = w_sqrt(r2);
+    const V IR = w_div(c->ONE, R);
+    const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
+    const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
+    const V zeta = w_fnmadd(beta, R, c->M);
+    // Starting value: series reversion of the universal Kepler equation to sixth
+    // order in tau = dt/r,
+    //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
+    // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
+    // while the previous interaction step is still running; after eta and v2 (which need the new
+    // velocities) only a short Estrin evaluation remains. In the dimensionless variables u = eta tau/r,
+    // w = v2 tau^2, m = M tau^2/r the series is
+    //   P = m/6 + m^2/15 - w (1/6 + 17/120 m) + 3/40 w^2
+    //     + u [-1/2 - m/3 - 43/180 m^2 + w (3/8 + 11/20 m) - 5/16 w^2]
+    //     + u^2 [1/2 + 5/8 m - 3/4 w] + u^3 [-5/8 - 7/6 m + 35/24 w] + 7/8 u^4 - 21/16 u^5.
+    // It replaces the third-order start of item 54: with it, one Halley step (short series) is
+    // accurate to < 1e-11 for all eight Solar System planets at dt = 5-6 days, so a single Newton
+    // step (which also provides the accurate Stiefel functions) suffices (the third-order start
+    // needed a second Newton step for Mercury in 46 % of the steps at dt = 6 d).
+    // The start is used where it is a small correction to the first-order guess dt/r
+    // (|X - X1| < 0.1 |X1|, finite), otherwise the first-order guess (and the first Halley step).
+    // The decision is per lane, so packed systems stay independent. Only the starting value
+    // depends on this series; the converged result does not (beyond round-off).
+    const V X1 = w_mul(c->DT, IR);
+    V Xs;
+    {
+        const V tau = X1;
+        const V tau2 = w_mul(tau, tau);
+        const V ku = w_mul(tau, IR);                      // u = ku*eta
+        const V m = w_mul(w_mul(c->M, IR), tau2);         // M tau^2 / r
+        const V ku2 = w_mul(ku, ku), ku3 = w_mul(ku2, ku);
+        const V ku4 = w_mul(ku2, ku2), ku5 = w_mul(ku4, ku);
+        const V t4 = w_mul(tau2, tau2);
+        const V c00 = w_mul(m, w_fmadd(w_set1(1.0/15.0), m, w_set1(1.0/6.0)));
+        const V c01 = w_mul(tau2, w_fmadd(w_set1(-17.0/120.0), m, w_set1(-1.0/6.0)));
+        const V c02 = w_mul(t4, w_set1(3.0/40.0));
+        const V c10 = w_mul(ku, w_fmadd(m, w_fmadd(w_set1(-43.0/180.0), m, w_set1(-1.0/3.0)), w_set1(-0.5)));
+        const V c11 = w_mul(w_mul(ku, tau2), w_fmadd(w_set1(11.0/20.0), m, w_set1(3.0/8.0)));
+        const V c12 = w_mul(w_mul(ku, t4), w_set1(-5.0/16.0));
+        const V c20 = w_mul(ku2, w_fmadd(w_set1(5.0/8.0), m, c->HALF));
+        const V c21 = w_mul(w_mul(ku2, tau2), w_set1(-3.0/4.0));
+        const V c30 = w_mul(ku3, w_fmadd(w_set1(-7.0/6.0), m, w_set1(-5.0/8.0)));
+        const V c31 = w_mul(w_mul(ku3, tau2), w_set1(35.0/24.0));
+        const V c40 = w_mul(ku4, w_set1(7.0/8.0));
+        const V c50 = w_mul(ku5, w_set1(-21.0/16.0));
+        // Short chain after eta and v2.
+        const V v22 = w_mul(v2, v2);
+        const V et2 = w_mul(eta, eta);
+        const V et4 = w_mul(et2, et2);
+        const V row0 = w_fmadd(c02, v22, w_fmadd(c01, v2, c00));
+        const V row1 = w_fmadd(c12, v22, w_fmadd(c11, v2, c10));
+        const V row2 = w_fmadd(c21, v2, c20);
+        const V row3 = w_fmadd(c31, v2, c30);
+        const V E01 = w_fmadd(eta, row1, row0);
+        const V E23 = w_fmadd(eta, row3, row2);
+        const V E45 = w_fmadd(eta, c50, c40);
+        const V P = w_fmadd(et4, E45, w_fmadd(et2, E23, E01));
+        Xs = w_fmadd(tau, P, tau);
+    }
+    const K good3 = w_klt(w_abs(w_sub(Xs, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
+    V XX = w_sel(good3, Xs, X1);
+
+    V G1, G2, G3;
+#ifndef REB_W512_KEPLER_NEWTON
+    // One correction of high order instead of Halley and Newton steps: the Stiefel functions at the starting value X0
+    // (19 terms) give f and all its derivatives (dG_k/dX = G_(k-1), G0 = 1 - beta G2, f'''' = -beta f'', f''''' =
+    // -beta f'''), and the root of the Taylor polynomial of f around X0 follows by series reversion to fifth order in
+    // u = -f/f': X = X0 + u - a u^2 + (2a^2 - b) u^3 + ..., a = f''/(2f'), b = f'''/(6f'). The truncation is
+    // ~u (a u)^5, negligible where |u| < 1e-3 |X0| (Solar System: |u/X0| < 3e-4 for Mercury at dt = 8 d, < 3e-10
+    // for the other planets); the other lanes take the Halley and Newton steps.
+    // Kepler-only test (4096 phases x 1e6 steps per planet, compensated update): no drift of a at 3, 4, 6, 8 d
+    // (Mercury +0.1, +0.4, -1.1, +0.5 e-21 per step, |t| < 1), where the Halley and Newton steps left -17e-21
+    // (t = -32) at 3 d and -8e-21 (t = -10) at 4 d: the Newton iteration fed the rounding of f(X) back into X.
+    {
+        REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+        const V G0 = w_fnmadd(beta, G2, c->ONE);
+        V f = w_fmadd(eta, G2, w_fmsub(R, XX, c->DT));
+        f = w_fmadd(zeta, G3, f);
+        const V f1 = w_fmadd(zeta, G2, w_fmadd(eta, G1, R));
+        const V f2 = w_fmadd(zeta, G1, w_mul(eta, G0));
+        const V f3 = w_fnmadd(w_mul(beta, eta), G1, w_mul(zeta, G0));
+        const V inv = w_div(c->ONE, f1);
+        const V u = w_fnmadd(f, inv, w_zero());                    // -f/f'
+        const V a = w_mul(w_mul(f2, inv), c->HALF);                // f''/(2 f')
+        const V b = w_mul(w_mul(f3, inv), w_set1(1.0/6.0));        // f'''/(6 f')
+        const V cc = w_mul(w_mul(beta, a), w_set1(-1.0/12.0));     // f''''/(24 f') = -beta a/12
+        const V dd = w_mul(w_mul(beta, b), w_set1(-1.0/20.0));     // f'''''/(120 f') = -beta b/20
+        const V a2 = w_mul(a, a);
+        const V k3 = w_fmsub(w_set1(2.0), a2, b);                                       // 2a^2 - b
+        const V k4 = w_fmsub(w_set1(5.0), w_fmsub(a, b, w_mul(a2, a)), cc);              // 5(ab - a^3) - c
+        const V k5 = w_fmsub(w_set1(3.0), w_mul(b, b),                                  // 14a^4 - 21a^2 b + 6ac + 3b^2 - d
+                     w_fmadd(w_set1(-14.0), w_mul(a2, a2), w_fmadd(w_set1(21.0), w_mul(a2, b), w_fmadd(w_set1(-6.0), w_mul(a, cc), dd))));
+        V t = w_fmadd(u, k5, k4);
+        t = w_fmadd(u, t, k3);
+        t = w_fmsub(u, t, a);
+        const V Xr = w_add(XX, w_fmadd(w_mul(u, u), t, u));
+        const K ok = w_kand(good3, w_klt(w_abs(u), w_mul(w_set1(1e-3), w_abs(XX))));   // false for NaN
+        const K bad = w_kandnot(ok, c->k1);
+        XX = w_kany(bad) ? w_sel(ok, Xr, REB_W512_NAME(w512_kepler_halley_newton_)(c, s, R, eta, zeta, beta, good3, XX)) : Xr;
+    }
+#else
+    XX = REB_W512_NAME(w512_kepler_halley_newton_)(c, s, R, eta, zeta, beta, good3, XX);
+#endif
     // Stiefel functions at the final X (all lanes, including those from the bisection fallback).
     REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
 
