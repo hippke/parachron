@@ -22,8 +22,9 @@
  *          - Starting value of the Kepler solver: sixth-order series reversion of Kepler's equation in
  *            universal variables (the assembly uses the first-order guess dt/r), so
  *            that a single Halley step is followed by a single Newton step for the Solar System at
- *            dt <= 6 days. The first Newton step uses an approximation of 1/f' from the Halley step
- *            (no division on the critical path). The Stiefel functions are evaluated again at the
+ *            dt <= 6 days. The first Newton step uses an approximation of 1/f' from the Halley step,
+ *            refined by one Newton-Raphson step with the accurate f' (no division on the critical
+ *            path). The Stiefel functions are evaluated again at the
  *            final X as in the assembly, with plain Horner plus a correction for the rounding of the
  *            leading constants instead of compensated Horner (see w512_stiefel_Gs13_ for the
  *            round-off bias that the plain shortcuts had).
@@ -448,9 +449,13 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     // Newton iterations with the accurate series; lanes stop individually (masked: a converged
     // lane keeps its X, so its result does not depend on the other lanes).
     // Correction form X <- X - f(X) RI: in the first iteration RI is the
-    // approximation from the Halley step (lanes with ri_ok), so that no division is on the critical
-    // path; otherwise, and in later iterations, RI = 1/f'(X) exactly (quadratic convergence). A
-    // relative error delta of RI changes X by delta*dX < 1e-8 * EPS.
+    // approximation from the Halley step (lanes with ri_ok), refined by one Newton-Raphson step
+    // on the reciprocal with the accurate f'(X), so that no division is on the critical path;
+    // otherwise, and in later iterations, RI = 1/f'(X) exactly (quadratic convergence).
+    // A relative error delta of RI leaves an error delta*dX in X. Without the refinement (delta
+    // ~1e-10 from the short series) that error has a fixed sign and drifted Mercury's semi-major
+    // axis by +2.6e-20 per step at dt = 6 d and +3e-19 at 8 d (Kepler-only test, 4096 phases);
+    // the refinement (two FMAs) reduces delta to ~1e-20.
     // Bias: the Stiefel functions are evaluated again at the final X (below), as in
     // the assembly, and w512_stiefel_Gs13_ corrects for the rounding of the constants 1/k!. The
     // earlier shortcuts (plain Horner without the correction, first-order update of
@@ -463,10 +468,13 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     while (1){
         const V old = XX;
         REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
-        if (it > 0 || !all_ri_ok){
-            // Exact derivative (rare: lanes with a large Halley correction, or a second iteration).
-            const V rie = w_div(c->ONE, w_fmadd(zeta, G2, w_fmadd(eta, G1, R)));
-            RI = (it > 0) ? rie : w_sel(ri_ok, RI, rie);
+        const V fp = w_fmadd(zeta, G2, w_fmadd(eta, G1, R));
+        if (it > 0){
+            RI = w_div(c->ONE, fp);
+        } else {
+            // Refined approximation; exact derivative only in lanes without one (rare: large Halley correction).
+            const V rir = w_fmadd(RI, w_fnmadd(fp, RI, c->ONE), RI);
+            RI = all_ri_ok ? rir : w_sel(ri_ok, rir, w_div(c->ONE, fp));
         }
         V fN = w_fmadd(eta, G2, w_fmsub(R, XX, c->DT));
         fN = w_fmadd(zeta, G3, fN);
