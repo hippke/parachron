@@ -86,6 +86,33 @@ static atomic_int fine_interrupted;
 static volatile sig_atomic_t fine_abort[2];
 
 // ------------------------------------------------------------------------------------------------ helpers
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#define MEP_PAUSE() _mm_pause()
+#elif defined(__aarch64__)
+#define MEP_PAUSE() __asm__ __volatile__("yield")
+#else
+#define MEP_PAUSE() do {} while (0)
+#endif
+#ifndef REB_MEP_GUESTS
+#define REB_MEP_GUESTS 1
+#endif
+// Wait for a semaphore. A slice thread that waits (for the hop chain, or for the window's end) has its core to
+// itself, so it takes tasks of the coarse hop that is running meanwhile (results do not depend on which thread runs a
+// task); after REB_MEP_GUEST_SPIN idle polls it blocks.
+#ifndef REB_MEP_GUEST_SPIN
+#define REB_MEP_GUEST_SPIN 200000
+#endif
+static void sem_wait_guest(sem_t* sm){
+    if (REB_MEP_GUESTS && M_ && M_->opt.helpers>0){
+        long idle=0;
+        while (idle<REB_MEP_GUEST_SPIN){
+            if (sem_trywait(sm)==0) return;
+            if (reb_mep_pool_guest()) idle=0; else { idle++; MEP_PAUSE(); }
+        }
+    }
+    while (sem_wait(sm)!=0) ;
+}
 // The bookkeeping below works on the barycentric particles of reb_mep_el_to_sim (reb_mep_el_to_xv: the same values
 // without a simulation) and repeats the operations of reb_simulation_energy / _angular_momentum in their order, so it
 // is bitwise identical to working on simulations (it is on the coarse chain: ~6 instead of ~28 us per corrected hop).
@@ -331,13 +358,13 @@ static void* slice_thread(void* arg){
     const int kend = Kmax;
     for (long w=0; w<atomic_load(&W_eff); w++){
         const int p=w&1; el (*Up)[NMAX+1]=U[p]; sem_t (*rdy)[NMAX+1]=ready[p]; atomic_int* stp=&stop_at[p];
-        if (n==0 && w>0) sem_wait(&win_start[p]);
+        if (n==0 && w>0) sem_wait_guest(&win_start[p]);
         double EFprev=0, EUprev=0, LFprev[3]={0}, LUprev[3]={0}; int have_F=0;
         double Xprev[MEP_NP+1][3]; int Xprev_k=-1;     // positions of Up[Xprev_k][n+1] (update norm of the next iteration)
         for (int k=0;k<=kend;k++){
             double EU=0, LU[3]={0}; int have_U=0;      // energy and angular momentum of Up[k][n], if computed
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
-            if (n>0) sem_wait(&rdy[k][n]);
+            if (n>0) sem_wait_guest(&rdy[k][n]);
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             el g;
             // G is not needed for boundaries that are already exact (n <= k-1)
@@ -412,7 +439,7 @@ static void* slice_thread(void* arg){
                 }
             }
         }
-        sem_wait(&win_done[p]);    // a thread can finish k = Kmax before the window is decided
+        sem_wait_guest(&win_done[p]);    // a thread can finish k = Kmax before the window is decided
     }
     return NULL;
 }

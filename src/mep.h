@@ -62,4 +62,5 @@ struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[ME
 void reb_mep_el_to_xv(const double* masses, const double E[MEP_NP][6], struct reb_particle p[MEP_NP+1]);
 void reb_mep_xv_to_el(const struct reb_particle p[MEP_NP+1], double E[MEP_NP][6]);
 void reb_mep_set_threads(int nhelpers, int pin);
+int reb_mep_pool_guest(void);
 #endif

@@ -440,6 +440,10 @@ static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER;
 struct pjob { int nst; void (*fn[MAXST])(void*,int); void* arg[MAXST]; int ntask[MAXST]; atomic_int* gate[MAXST]; };
 static struct pjob job;
 static int pool_n=0; static atomic_int pool_gen=0, pool_active=0, st_next[MAXST], st_done[MAXST];
+// Guests: threads that would otherwise wait (MEP slice threads waiting for the hop chain or the window's end) take
+// tasks of the running job too. job_live is set from pool_launch until the caller's tasks and the helpers are done;
+// pool_join then waits until no guest is inside the job (guests_in), so a guest never sees the next job half set up.
+static atomic_int job_live=0, guests_in=0;
 static void pool_run_tasks(void){
     for (int s=0;s<job.nst;s++){
         if (job.gate[s]) while (!atomic_load_explicit(job.gate[s],memory_order_acquire)) MEP_RELAX();
@@ -492,11 +496,23 @@ static void pool_launch(const struct pjob* j){
     job=*j;
     for (int s=0;s<j->nst;s++){ atomic_store(&st_next[s],0); atomic_store(&st_done[s],0); }
     atomic_store(&pool_active,pool_n);
+    atomic_store(&job_live,1);
     pthread_mutex_lock(&pool_mx); atomic_fetch_add_explicit(&pool_gen,1,memory_order_release); pthread_cond_broadcast(&pool_cv); pthread_mutex_unlock(&pool_mx);
 }
 static void pool_join(void){
     pool_run_tasks();
     while (atomic_load_explicit(&pool_active,memory_order_acquire)>0) MEP_RELAX();
+    atomic_store(&job_live,0);
+    while (atomic_load(&guests_in)>0) MEP_RELAX();
+}
+// one pass as a guest: 1 if a job was running (its remaining tasks are done when it returns), 0 otherwise
+int reb_mep_pool_guest(void){
+    if (!atomic_load_explicit(&job_live,memory_order_relaxed)) return 0;
+    atomic_fetch_add(&guests_in,1);
+    int ran=0;
+    if (atomic_load(&job_live)){ pool_run_tasks(); ran=1; }
+    atomic_fetch_sub(&guests_in,1);
+    return ran;
 }
 static int pool_acquire(int par){ return par && pool_n>0 && pthread_mutex_trylock(&pool_busy)==0; }
 static void pool_release(void){ pthread_mutex_unlock(&pool_busy); }
