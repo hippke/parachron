@@ -457,33 +457,9 @@ REB_W512_INLINE V REB_W512_NAME(w512_kepler_halley_newton_)(const W512_CONSTS* c
     return XX;
 }
 
-// Kepler step; comp = 1: the update is written as increments and added with compensation (compile-time constant).
-REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512_STATE* s, const int comp){
-    const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
-    const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
-    V R = w_sqrt(r2);
-    const V IR = w_div(c->ONE, R);
-    const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
-    const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
-    const V zeta = w_fnmadd(beta, R, c->M);
-    // Starting value: series reversion of the universal Kepler equation to sixth
-    // order in tau = dt/r,
-    //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
-    // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
-    // while the previous interaction step is still running; after eta and v2 (which need the new
-    // velocities) only a short Estrin evaluation remains. In the dimensionless variables u = eta tau/r,
-    // w = v2 tau^2, m = M tau^2/r the series is
-    //   P = m/6 + m^2/15 - w (1/6 + 17/120 m) + 3/40 w^2
-    //     + u [-1/2 - m/3 - 43/180 m^2 + w (3/8 + 11/20 m) - 5/16 w^2]
-    //     + u^2 [1/2 + 5/8 m - 3/4 w] + u^3 [-5/8 - 7/6 m + 35/24 w] + 7/8 u^4 - 21/16 u^5.
-    // It replaces the third-order start of item 54: with it, one Halley step (short series) is
-    // accurate to < 1e-11 for all eight Solar System planets at dt = 5-6 days, so a single Newton
-    // step (which also provides the accurate Stiefel functions) suffices (the third-order start
-    // needed a second Newton step for Mercury in 46 % of the steps at dt = 6 d).
-    // The start is used where it is a small correction to the first-order guess dt/r
-    // (|X - X1| < 0.1 |X1|, finite), otherwise the first-order guess (and the first Halley step).
-    // The decision is per lane, so packed systems stay independent. Only the starting value
-    // depends on this series; the converged result does not (beyond round-off).
+// Starting value of the Kepler step (see w512_kepler_core_): sixth-order series reversion, or the first-order guess
+// dt/r where the series is not a small correction; *good3: lanes that use the series.
+REB_W512_INLINE V REB_W512_NAME(w512_kepler_start_)(const W512_CONSTS* c, const V IR, const V v2, const V eta, K* good3_out){
     const V X1 = w_mul(c->DT, IR);
     V Xs;
     {
@@ -521,9 +497,118 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
         Xs = w_fmadd(tau, P, tau);
     }
     const K good3 = w_klt(w_abs(w_sub(Xs, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
-    V XX = w_sel(good3, Xs, X1);
+    *good3_out = good3;
+    return w_sel(good3, Xs, X1);
+}
 
+// Pre-kick part of the next Kepler step (REB_W512_PREKICK). The Kepler step needs the Stiefel functions at its
+// starting value X0 with beta = 2M/r - v^2 of the kicked velocities, so their 19-term evaluation (and the series for
+// X0) waited for the interaction step. The kick changes the velocities by ~1e-6 of themselves (Mercury), so they are
+// evaluated instead from the velocities before the kick, where they overlap with the interaction step, and corrected
+// after the kick to the new beta by the Taylor series in db = beta - beta_pre:
+//   G_n(X0, beta) = G_n + db D_n + db^2/2 E_n,   D_n = dG_n/dbeta = -X^(n+2) sum_j (j+1) (-z)^j / (n+2j+2)!,
+//   E_n = d^2 G_n/dbeta^2 = X^(n+4) sum_j (j+1)(j+2) (-z)^j / (n+2j+4)!,   z = beta X^2
+// (D_n to 7 terms, ~1e-10 relative for z < 0.5, E_n to 3; db D_n ~ 1e-7 G_n, the next term ~1e-21 G_n). X0 is the
+// pre-kick starting value: it is ~1e-6 off the post-kick one, which the fifth-order correction absorbs.
+struct REB_W512_NAME(w512_pk_) {
+    V R, IR, beta, XX, G1, G2, G3, D1, D2, D3, E1, E2, E3;
+    K good3;
+};
+#define W512_PK struct REB_W512_NAME(w512_pk_)
+// Velocities before the kick (saved at the end of the previous Kepler step).
+struct REB_W512_NAME(w512_vpre_) {
+    V VX, VY, VZ;
+};
+#define W512_VPRE struct REB_W512_NAME(w512_vpre_)
+REB_W512_INLINE void REB_W512_NAME(w512_kepler_pre_)(const W512_CONSTS* c, const W512_STATE* s, W512_PK* p){
+    const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
+    const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
+    p->R = w_sqrt(r2);
+    p->IR = w_div(c->ONE, p->R);
+    p->beta = w_fmsub(w_add(c->M, c->M), p->IR, v2);
+    const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
+    p->XX = REB_W512_NAME(w512_kepler_start_)(c, p->IR, v2, eta, &p->good3);
+    REB_W512_NAME(w512_stiefel_Gs13_)(19, p->XX, p->beta, &p->G1, &p->G2, &p->G3);
+    const V X = p->XX, X2 = w_mul(X, X), X3 = w_mul(X2, X), X4 = w_mul(X2, X2), X5 = w_mul(X4, X);
+    const V X6 = w_mul(X4, X2), X7 = w_mul(X6, X);
+    const V z = w_mul(p->beta, X2);
+#define W512_DSER(n) w_fnmadd(z, w_fnmadd(z, w_fnmadd(z, w_fnmadd(z, w_fnmadd(z, w_fnmadd(z, w_set1(7.0*W512_IF(n+14)), \
+        w_set1(6.0*W512_IF(n+12))), w_set1(5.0*W512_IF(n+10))), w_set1(4.0*W512_IF(n+8))), w_set1(3.0*W512_IF(n+6))), \
+        w_set1(2.0*W512_IF(n+4))), w_set1(W512_IF(n+2)))
+#define W512_ESER(n) w_fnmadd(z, w_fnmadd(z, w_set1(12.0*W512_IF(n+8)), w_set1(6.0*W512_IF(n+6))), w_set1(2.0*W512_IF(n+4)))
+#ifdef REB_W512_PREKICK_NOCORR
+    // timing only (wrong results): no beta correction
+    (void)X3; (void)X5; (void)X6; (void)X7; (void)z;
+    p->D1 = p->D2 = p->D3 = p->E1 = p->E2 = p->E3 = w_zero();
+    return;
+#endif
+    p->D1 = w_fnmadd(X3, W512_DSER(1), w_zero());
+    p->D2 = w_fnmadd(X4, W512_DSER(2), w_zero());
+    p->D3 = w_fnmadd(X5, W512_DSER(3), w_zero());
+    p->E1 = w_mul(w_mul(X5, c->HALF), W512_ESER(1));          // E_n / 2
+    p->E2 = w_mul(w_mul(X6, c->HALF), W512_ESER(2));
+    p->E3 = w_mul(w_mul(X7, c->HALF), W512_ESER(3));
+#undef W512_DSER
+#undef W512_ESER
+}
+
+// Kepler step; comp = 1: the update is written as increments and added with compensation (compile-time constant).
+// pk (REB_W512_PREKICK): the pre-kick part of this step (from w512_kepler_pre_), and *pk_next is set to that of the
+// next step; NULL: everything from the current state.
+REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512_STATE* s, const int comp, const W512_VPRE* vpre, W512_VPRE* vpre_next){
+    // Pre-kick block, after the interaction step in program order (its inputs are ready long before; placed before
+    // the interaction step, its waiting instructions held up the dispatch of the critical chain: 27 % slower).
+    W512_PK pkv;
+    const W512_PK* pk = NULL;
+    if (vpre){
+        W512_STATE sp = *s;
+        sp.VX = vpre->VX;
+        sp.VY = vpre->VY;
+        sp.VZ = vpre->VZ;
+        REB_W512_NAME(w512_kepler_pre_)(c, &sp, &pkv);
+        pk = &pkv;
+    }
+    const V v2 = w_fmadd(s->VZ, s->VZ, w_fmadd(s->VY, s->VY, w_mul(s->VX, s->VX)));
+    V R;
+    V IR;
+    if (pk){
+        R = pk->R;
+        IR = pk->IR;
+    }else{
+        const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
+        R = w_sqrt(r2);
+        IR = w_div(c->ONE, R);
+    }
+    const V beta = w_fmsub(w_add(c->M, c->M), IR, v2);
+    const V eta = w_fmadd(s->Z, s->VZ, w_fmadd(s->Y, s->VY, w_mul(s->X, s->VX)));
+    const V zeta = w_fnmadd(beta, R, c->M);
+    // Starting value: series reversion of the universal Kepler equation to sixth
+    // order in tau = dt/r,
+    //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
+    // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
+    // while the previous interaction step is still running; after eta and v2 (which need the new
+    // velocities) only a short Estrin evaluation remains. In the dimensionless variables u = eta tau/r,
+    // w = v2 tau^2, m = M tau^2/r the series is
+    //   P = m/6 + m^2/15 - w (1/6 + 17/120 m) + 3/40 w^2
+    //     + u [-1/2 - m/3 - 43/180 m^2 + w (3/8 + 11/20 m) - 5/16 w^2]
+    //     + u^2 [1/2 + 5/8 m - 3/4 w] + u^3 [-5/8 - 7/6 m + 35/24 w] + 7/8 u^4 - 21/16 u^5.
+    // It replaces the third-order start of item 54: with it, one Halley step (short series) is
+    // accurate to < 1e-11 for all eight Solar System planets at dt = 5-6 days, so a single Newton
+    // step (which also provides the accurate Stiefel functions) suffices (the third-order start
+    // needed a second Newton step for Mercury in 46 % of the steps at dt = 6 d).
+    // The start is used where it is a small correction to the first-order guess dt/r
+    // (|X - X1| < 0.1 |X1|, finite), otherwise the first-order guess (and the first Halley step).
+    // The decision is per lane, so packed systems stay independent. Only the starting value
+    // depends on this series; the converged result does not (beyond round-off).
+    K good3;
+    V XX;
     V G1, G2, G3;
+    if (pk){
+        XX = pk->XX;
+        good3 = pk->good3;
+    }else{
+        XX = REB_W512_NAME(w512_kepler_start_)(c, IR, v2, eta, &good3);
+    }
 #ifndef REB_W512_KEPLER_NEWTON
     // One correction of high order instead of Halley and Newton steps: the Stiefel functions at the starting value X0
     // (19 terms) give f and all its derivatives (dG_k/dX = G_(k-1), G0 = 1 - beta G2, f'''' = -beta f'', f''''' =
@@ -535,7 +620,14 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     // (Mercury +0.1, +0.4, -1.1, +0.5 e-21 per step, |t| < 1), where the Halley and Newton steps left -17e-21
     // (t = -32) at 3 d and -8e-21 (t = -10) at 4 d: the Newton iteration fed the rounding of f(X) back into X.
     {
-        REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+        if (pk){
+            const V db = w_sub(beta, pk->beta);
+            G1 = w_fmadd(db, w_fmadd(db, pk->E1, pk->D1), pk->G1);
+            G2 = w_fmadd(db, w_fmadd(db, pk->E2, pk->D2), pk->G2);
+            G3 = w_fmadd(db, w_fmadd(db, pk->E3, pk->D3), pk->G3);
+        }else{
+            REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+        }
         const V G0 = w_fnmadd(beta, G2, c->ONE);
         V f = w_fmadd(eta, G2, w_fmsub(R, XX, c->DT));
         f = w_fmadd(zeta, G3, f);
@@ -625,6 +717,11 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
         REB_W512_NAME(w512_add_comp_)(&s->VX, &s->CVX, dvx);
         REB_W512_NAME(w512_add_comp_)(&s->VY, &s->CVY, dvy);
         REB_W512_NAME(w512_add_comp_)(&s->VZ, &s->CVZ, dvz);
+        if (vpre_next){
+            vpre_next->VX = s->VX;
+            vpre_next->VY = s->VY;
+            vpre_next->VZ = s->VZ;
+        }
         return;
     }
     const V nx = w_maskz(c->k1, w_fmadd(g, s->VX, w_fnmadd(nf, s->X, s->X)));
@@ -636,12 +733,17 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     s->X = nx;
     s->Y = ny;
     s->Z = nz;
+    if (vpre_next){
+        vpre_next->VX = s->VX;
+        vpre_next->VY = s->VY;
+        vpre_next->VZ = s->VZ;
+    }
 }
 REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
-    REB_W512_NAME(w512_kepler_core_)(c, s, 0);
+    REB_W512_NAME(w512_kepler_core_)(c, s, 0, NULL, NULL);
 }
 REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_comp_)(const W512_CONSTS* c, W512_STATE* s){
-    REB_W512_NAME(w512_kepler_core_)(c, s, 1);
+    REB_W512_NAME(w512_kepler_core_)(c, s, 1, NULL, NULL);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -939,9 +1041,16 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
     int status = 0;
     int ret;
     int skip = skip_first_kepler_step;
+#ifdef REB_W512_PREKICK
+    W512_VPRE vp = { s.VX, s.VY, s.VZ };
+#endif
     while (1){
         if (!skip){
+#ifdef REB_W512_PREKICK
+            REB_W512_NAME(w512_kepler_core_)(&c, &s, 0, &vp, &vp);
+#else
             REB_W512_NAME(w512_kepler_step_)(&c, &s);
+#endif
         }
         skip = 0;
         REB_W512_NAME(w512_interaction_step_)(&c, &s, gr, nsys, encounter, escape, &status);
@@ -977,9 +1086,16 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_comp_)(struct simd_data* data,
     int status = 0;
     int ret;
     int skip = skip_first_kepler_step;
+#ifdef REB_W512_PREKICK
+    W512_VPRE vp = { s.VX, s.VY, s.VZ };
+#endif
     while (1){
         if (!skip){
+#ifdef REB_W512_PREKICK
+            REB_W512_NAME(w512_kepler_core_)(&c, &s, 1, &vp, &vp);
+#else
             REB_W512_NAME(w512_kepler_step_comp_)(&c, &s);
+#endif
         }
         skip = 0;
         REB_W512_NAME(w512_interaction_step_comp_)(&c, &s, gr, nsys, encounter, escape, &status);
