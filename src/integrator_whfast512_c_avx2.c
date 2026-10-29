@@ -31,6 +31,13 @@
 #include <string.h>
 #include <signal.h>
 #include "integrator_whfast512_data.h"
+// Instruction scheduling before register allocation with GCC's register-pressure model (off by default for x86):
+// fewer spills and more overlap of the independent dependency chains. It changes only the order of instructions, so
+// the results are bitwise unchanged. Ryzen 9 7950X with GCC 14: AVX-512 kernel 3.9 %, AVX2 (AVX-512VL build) 8.3 %,
+// plain AVX2 (16 registers) 14 % faster. REB_W512_NO_SCHED_PRESSURE: off.
+#if defined(__GNUC__) && !defined(__clang__) && !defined(REB_W512_NO_SCHED_PRESSURE)
+#pragma GCC optimize ("schedule-insns", "sched-pressure")
+#endif
 
 // REB_W512_AVX2_VL (set by integrator_whfast512_c_avx2vl.c): the same 256-bit kernel compiled with AVX-512VL, whose
 // EVEX encoding gives it 32 vector registers instead of 16 (fewer spills of the 8-lane = 2 x 4 state). Same
