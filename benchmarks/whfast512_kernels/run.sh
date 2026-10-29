@@ -89,7 +89,7 @@ build(){   # name, extra OPT flags, compiler
     rm -f "$b"/src/*.o "$b"/src/*.asm_o "$b"/src/*.so
     [ -n "$2" ] && echo "OPT+= $2" >> "$b/src/Makefile.defs"
     if ! make -C "$b/src" -j"$JOBS" CC="$3" > "$b/build.log" 2>&1; then echo "  $1: BUILD FAILED (see $b/build.log)"; return 1; fi
-    for t in kbench mepbench; do
+    for t in kbench mepbench pbench; do
         "$3" -O2 -DPARACHRON "$HERE/$t.c" -I"$b/src" -L"$b/src" -lrebound -lm -lpthread -Wl,-rpath,"$b/src" -o "$b/$t" || return 1
     done
     echo "  $1: ok ($2, $3)"
@@ -267,6 +267,18 @@ if [ "${SKIP_MEP:-0}" != 1 ]; then
     echo "(least idle core: idle fraction, before the first MEP run, of the least idle core used; < 0.9 means MEP shared"
     echo " cores with other jobs and its speed-up is underestimated)"
 fi
+
+# ------------------------------------------------------------------------------------------------ 5. paired kernel
+# Two independent simulations in one instruction stream (reb_integrator_whfast512_steps_pair; C AVX-512 kernel only)
+# against the same two stepped one after the other: throughput for ensembles, or two MEP slices per thread.
+say "5. paired kernel (two simulations in one instruction stream), C AVX-512 kernel, ABBA rounds"
+if [ -n "${CORE:-}" ]; then C1=$CORE; else pick 1; C1=$PICK; fi
+for v in default horner; do
+    [ -x "$OUT/build/$v/pbench" ] || continue
+    r=$(taskset -c "$C1" "$OUT/build/$v/pbench" 2 7 2>&1 | tail -1); read -r s p q k same <<<"$r"
+    if [ "${k:-}" != 2 ]; then echo "$v: kernel 2 not available on this CPU (used $k); skipped"; continue; fi
+    printf "%-8s single %s ns/step, paired %s ns/step per simulation, ratio %s (< 1: pairing pays), results %s\n" "$v" "$s" "$p" "$q" "$same" | tee -a "$OUT/raw/pair.txt"
+done
 
 echo "load average at the end: $(cut -d' ' -f1-3 /proc/loadavg)"
 say "done: send $OUT/results.txt"

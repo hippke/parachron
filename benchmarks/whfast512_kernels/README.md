@@ -9,6 +9,8 @@
 3. **Multi-core load**: ns/step per core with 16 copies running at the same time (clock under load).
 4. **MEP**: wall clock and speed-up against the serial reference (1600 slices, 1.58 Myr), for 16 cores with
    several kernels, and 32 and 64 cores with the assembly kernel.
+5. **Paired kernel**: two independent simulations stepped in one instruction stream (`reb_integrator_whfast512_steps_pair`,
+   C AVX-512 kernel) against the same two stepped one after the other, with a bitwise check (`pbench.c`).
 
 The machine does not need to be idle. Every comparison runs in ABBA blocks (reference, variant, variant, reference;
 MEP: serial, MEP cases, the same reversed, serial), so drifts of the background load cancel in each block's ratio, and
