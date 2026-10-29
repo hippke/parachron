@@ -84,6 +84,14 @@ static atomic_int fine_interrupted;
 // solve that the window no longer needs stops at once instead of at the end of its chunk (its slice thread would
 // otherwise reach the first hop of the next window up to half a fine slice late). Solves that are kept run unchanged.
 static volatile sig_atomic_t fine_abort[2];
+#ifdef REB_MEP_TRACE
+// timing trace (research): per window (first 200), slice, iteration: wait start, hop start, hop end, fine end; decision time
+#define TRW 200
+static double tr_ev[TRW][NMAX][KMAX+1][4], tr_dec[TRW];
+#define TR(w,n,k,i) do { if ((w)<TRW) tr_ev[w][n][k][i]=now(); } while (0)
+#else
+#define TR(w,n,k,i) do {} while (0)
+#endif
 
 // ------------------------------------------------------------------------------------------------ helpers
 #if defined(__x86_64__) || defined(__i386__)
@@ -364,7 +372,9 @@ static void* slice_thread(void* arg){
         for (int k=0;k<=kend;k++){
             double EU=0, LU[3]={0}; int have_U=0;      // energy and angular momentum of Up[k][n], if computed
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
+            TR(w,n,k,0);
             if (n>0) sem_wait_guest(&rdy[k][n]);
+            TR(w,n,k,1);
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             el g;
             // G is not needed for boundaries that are already exact (n <= k-1)
@@ -386,6 +396,7 @@ static void* slice_thread(void* arg){
                 project_EL(Up[k][n+1], EU + (EFprev-EUprev), Lt);
             }
             memcpy(Gold,g,sizeof(el));
+            TR(w,n,k,2);
             if (k>0){
                 double u=0.;
                 if (n>=k-1){
@@ -425,6 +436,9 @@ static void* slice_thread(void* arg){
                     if (w+1<Wnext) window_init(p^1);
                     fine_abort[p]=1;                      // stop the speculative fine solves of this window
                     atomic_store(stp,k);
+#ifdef REB_MEP_TRACE
+                    if (w<TRW) tr_dec[w]=now();
+#endif
                     for (int q=0;q<N;q++) sem_post(&win_done[p]);
                     for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&rdy[kk][q]);   // release waiting threads
                     if (w+1<Wnext) sem_post(&win_start[p^1]);
@@ -436,6 +450,7 @@ static void* slice_thread(void* arg){
                 if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp,&fine_abort[p])){
                     if (have_U){ EUprev=EU; memcpy(LUprev,LU,sizeof LU); } else EL_el(CEL(Up[k][n]),&EUprev,LUprev);
                     EL_el(CEL(Fprev),&EFprev,LFprev); have_F=1;
+                    TR(w,n,k,3);
                 }
             }
         }
@@ -544,6 +559,11 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     for (int p=0;p<2;p++){ sem_destroy(&win_start[p]); sem_destroy(&win_done[p]); for (int k=0;k<=KMAX;k++) for (int n=0;n<=N;n++) sem_destroy(&ready[p][k][n]); }
     reb_integration_end();
     m->walltime_last = now()-t_start_wall;
+#ifdef REB_MEP_TRACE
+    { FILE* f=fopen("mep_trace.bin","wb"); if (f){ int32_t hdr[3]={TRW,N,KMAX+1}; fwrite(hdr,4,3,f); fwrite(&t_start_wall,8,1,f);
+        for (int w=0;w<TRW;w++) for (int n=0;n<N;n++) fwrite(tr_ev[w][n],8,(KMAX+1)*4,f);
+        fwrite(tr_dec,8,TRW,f); fclose(f); } }
+#endif
     if (ckpt_write(m)) set_error(m->message,"Could not write the checkpoint file.");
     M_=NULL;
     pthread_mutex_unlock(&run_lock);
