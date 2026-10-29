@@ -540,12 +540,19 @@ struct reb_mep_options {
     int k_min;                          // Minimum number of parareal iterations per window. Default 3.
     int k_max;                          // Maximum number of parareal iterations per window (<= 11). Default 6.
     double tol;                         // A window is accepted when the largest change of a planet position between two
-                                        // iterations is <= tol [AU]. Default 3e-6.
+                                        // iterations is <= tol [AU]. Default 2e-6.
     int64_t slice_steps;                // Time steps per slice (even). Default 60000 (986 yr at dt = 6 d).
     int64_t checkpoint_every;           // Write the checkpoint every this many windows (0: only at the end of each
                                         // reb_mep_integrate call). Default 100.
     double walltime;                    // Stop reb_mep_integrate after the first window that ends after this many
                                         // seconds of wall clock (0: no limit). Default 0.
+    int calibration;                    // Secular calibration of the coarse step: number of previous windows (<= 64)
+                                        // whose coarse defects (fine minus coarse) are fitted by a linear map of the
+                                        // eccentricity and inclination vectors, added to the coarse step of the next
+                                        // window. Removes the secular-frequency bias of windows that stop after two
+                                        // iterations (k_min = 2). 0 (default): off.
+    int coarse_giants_steps;            // Fine time steps per step of the outer planets' coarse integration. 0
+                                        // (default): 360 days. 30 (180 days at dt = 6 d) for k_min = 2.
 };
 struct reb_mep {
     struct reb_mep_options opt;         // Options (cores is set to the actual value by the first integration).
@@ -566,6 +573,12 @@ struct reb_mep {
                                         // a worker thread inside the parallel schedule: keep it short (e.g. write a
                                         // record). Not saved in checkpoints.
     void* ref;                          // Free for the user (e.g. data for the heartbeat).
+    const double* boundaries;           // Inside the heartbeat: the end states of the cores slices of the completed
+                                        // window, cores x 8 x 6 Jacobi elements as in E (the last one equals E). NULL
+                                        // otherwise.
+    double calibration_residual;        // Calibration: fraction of the variance of the eccentricity defects that the
+                                        // last fit leaves unexplained (1: no effect; 0 when the calibration is off).
+    void* internal;                     // Library-internal state (calibration). Do not modify.
 };
 REB_API void reb_mep_options_default(struct reb_mep_options* o);
 // Starts a run from the current state of r (which is not modified). o may be NULL (defaults); checkpoint may be NULL.

@@ -83,7 +83,7 @@ int main(int argc, char* argv[]){
         w->corrector = 17;
 
         struct reb_mep_options o;
-        reb_mep_options_default(&o);    // cores: all physical cores; tol = 3e-6 AU; slices of 60000 steps
+        reb_mep_options_default(&o);    // cores: all physical cores; tol = 2e-6 AU; slices of 60000 steps
         mep = reb_mep_create(r, &o, checkpoint);
         reb_simulation_free(r);         // MEP keeps its own copy of the state
         if (!mep){ fprintf(stderr, "Cannot set up MEP.\n"); return 1; }

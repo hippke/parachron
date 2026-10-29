@@ -60,6 +60,60 @@ class TestMEP(unittest.TestCase):
         self.assertEqual(a.state, c.state)
         self.assertEqual(a.t, c.t)
 
+    def test_calibration_resume_bitwise(self):
+        # the calibration fit (from the stored per-window defect sums) survives checkpoint and resume bitwise
+        # (4 slices: windows accepted at k = 2 have corrected slices n >= 2, whose defects are fitted)
+        kw = dict(self.kw, cores=4, k_min=2, tol=3e-4, calibration=3, coarse_giants_steps=30)
+        fa = os.path.join(self.dir.name, "ca.mep")
+        fb = os.path.join(self.dir.name, "cb.mep")
+        a = parachron.MEP(solar_system(), checkpoint=fa, **kw)
+        a.integrate(10 * a.window_length)
+        self.assertTrue(0. < a.calibration_residual < 1.)
+        b = parachron.MEP(solar_system(), checkpoint=fb, **kw)
+        b.integrate(5 * b.window_length)
+        del b
+        c = parachron.MEP.from_checkpoint(fb)
+        c.integrate(10 * c.window_length)
+        self.assertEqual(a.state, c.state)
+        self.assertEqual(a.calibration_residual, c.calibration_residual)
+        # the calibration changes the coarse step, so the trajectory differs at the tolerance level, not more
+        d = parachron.MEP(solar_system(), **dict(kw, calibration=0))
+        d.integrate(10 * d.window_length)
+        self.assertNotEqual(a.state, d.state)
+        for i in range(1, 9):
+            self.assertLess(math.dist(a.sim.particles[i].xyz, d.sim.particles[i].xyz), 1e-3)
+
+    def test_boundaries_in_heartbeat(self):
+        m = parachron.MEP(solar_system(), **self.kw)
+        rec = []
+        m.heartbeat = lambda mm: rec.append((mm.boundaries, mm.state))
+        m.integrate(3 * m.window_length)
+        self.assertEqual(len(rec), 3)
+        for b, st in rec:
+            self.assertEqual(len(b), m.cores)
+            self.assertEqual(b[-1], st)
+        self.assertIsNone(m.boundaries)
+
+    def test_checkpoint_version1(self):
+        # a checkpoint of format version 1 (Parachron 1.0: no calibration options, no calibration block) is read
+        import struct, ctypes
+        f2 = os.path.join(self.dir.name, "v2.mep")
+        f1 = os.path.join(self.dir.name, "v1.mep")
+        a = parachron.MEP(solar_system(), checkpoint=f2, **self.kw)
+        a.integrate(4 * a.window_length)
+        raw = open(f2, "rb").read()
+        nopt_v2 = ctypes.sizeof(parachron.MEPOptions)
+        nopt_v1 = parachron.MEPOptions.calibration.offset
+        head, opt, rest = raw[:36], raw[36:36 + nopt_v2], raw[36 + nopt_v2:]
+        self.assertEqual(struct.unpack("<i", rest[-4:])[0], 0)       # no calibration block
+        open(f1, "wb").write(head[:32] + struct.pack("<i", 1) + opt[:nopt_v1] + rest[:-4])
+        c = parachron.MEP.from_checkpoint(f1)
+        self.assertEqual(c.windows, 4)
+        self.assertEqual(c.state, a.state)
+        a.integrate(6 * a.window_length)
+        c.integrate(6 * c.window_length)
+        self.assertEqual(a.state, c.state)
+
     def test_heartbeat(self):
         # one call with a heartbeat after every window gives the same states as one call per window
         a = parachron.MEP(solar_system(), **self.kw)
