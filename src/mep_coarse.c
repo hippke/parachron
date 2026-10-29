@@ -171,21 +171,46 @@ static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq
 // disp = sum_{k != 0} Im(F_k e^{i k.theta}) / (k.nu), F = fft2(f)/(n1 n2), with F_a(k) = (Z(k) + conj Z(-k))/2,
 // F_b(k) = (Z(k) - conj Z(-k))/(2i). For a synodic grid the caller passes phi = lambda_i - lambda_j, nj = n_i - n_j.
 static __thread double nu_cut_t=0.;
-MEP_CLONES static void sp_eval_pair(const double complex* Z, int n1, int n2, double ni, double nj, double li, double lj, double* da, double* db){
+// The sum is done in two passes: the terms' numerators q_a = Im(F_a(k) e^{i k.theta}), q_b = Im(F_b(k) e^{i k.theta})
+// (sp_terms; want: 1 q_a, 2 q_b, 3 both), then the divisor sums (sp_sums). The numerators do not depend on the mean
+// motions, so the re-evaluation with the mean motions of the mean ln a (meann 2) only redoes the sums. The operations
+// are those of the complex expressions Fa = (z + conj z')/2, Fb = -i (z - conj z')/2, Im(Fa e), Im(Fb e), so the sums
+// are bitwise unchanged.
+MEP_CLONES static void sp_terms(const double complex* Z, int n1, int n2, double li, double lj, int want, double* qa, double* qb){
     double complex ei[NGMAX], ej[NGMAX];
     for (int a=0;a<n1;a++){ const int K=kf(a,n1); ei[a]=cos(K*li)+I*sin(K*li); }
     for (int b=0;b<n2;b++){ const int K=kf(b,n2); ej[b]=cos(K*lj)+I*sin(K*lj); }
+    double ejr[NGMAX], eji[NGMAX], cr[NGMAX], ci[NGMAX];
+    for (int b=0;b<n2;b++){ ejr[b]=creal(ej[b]); eji[b]=cimag(ej[b]); }
+    for (int a=0;a<n1;a++){
+        const int am=(n1-a)%n1; const double* z=(const double*)(Z+a*n2);
+        for (int b=0;b<n2;b++){ const double complex zc=conj(Z[am*n2+(n2-b)%n2]); cr[b]=creal(zc); ci[b]=cimag(zc); }
+        const double ar=creal(ei[a]), ai=cimag(ei[a]);
+        double* restrict pa=qa+a*n2; double* restrict pb=qb+a*n2;
+        for (int b=0;b<n2;b++){
+            const double er=ar*ejr[b]-ai*eji[b], eim=ar*eji[b]+ai*ejr[b];
+            const double zr=z[2*b], zi=z[2*b+1];
+            if (want&1){ const double far=0.5*(zr+cr[b]), fai=0.5*(zi+ci[b]); pa[b]=far*eim+fai*er; }
+            if (want&2){ const double fbr=-(-0.5*(zi-ci[b])), fbi=-0.5*(zr-cr[b]); pb[b]=fbr*eim+fbi*er; }
+        }
+    }
+}
+// disp = sum_{k != 0} q_k / (k.nu) (terms with k.nu = 0 or |k.nu| < nu_cut skipped), summed in the order of k
+MEP_CLONES static void sp_sums(const double* qa, const double* qb, int n1, int n2, double ni, double nj, int want, double* da, double* db){
+    double Kb[NGMAX]; for (int b=0;b<n2;b++) Kb[b]=kf(b,n2);
+    const double cut=nu_cut_t;
     double sa=0, sb=0; const double nrm=1./((double)n1*n2);
     for (int a=0;a<n1;a++){
-        const int Ka=kf(a,n1); const int am=(n1-a)%n1;
+        const int Ka=kf(a,n1);
+        double ra[NGMAX], rb[NGMAX], kk[NGMAX];
+        const double* restrict pa=qa+a*n2; const double* restrict pb=qb+a*n2;
+        for (int b=0;b<n2;b++) kk[b]=Ka*ni+Kb[b]*nj;
+        if (want&1) for (int b=0;b<n2;b++) ra[b]=pa[b]/kk[b];
+        if (want&2) for (int b=0;b<n2;b++) rb[b]=pb[b]/kk[b];
         for (int b=0;b<n2;b++){
-            const double kk=Ka*ni+kf(b,n2)*nj;
-            if (kk==0. || fabs(kk)<nu_cut_t) continue;
-            const int bm=(n2-b)%n2;
-            const double complex z=Z[a*n2+b], zc=conj(Z[am*n2+bm]);
-            const double complex Fa=0.5*(z+zc), Fb=-0.5*I*(z-zc);
-            const double complex e=ei[a]*ej[b];
-            sa+=cimag(Fa*e)/kk; sb+=cimag(Fb*e)/kk;
+            if (kk[b]==0. || fabs(kk[b])<cut) continue;
+            if (want&1) sa+=ra[b];
+            if (want&2) sb+=rb[b];
         }
     }
     *da=sa*nrm; *db=sb*nrm;
@@ -206,6 +231,7 @@ struct tctx {
     int tNa[NTASKMAX], tNb[NTASKMAX], tsyn[NTASKMAX], zoff[NTASKMAX];   // grid of the task (Na x Nb; GR: Ng1[i] x 1), synodic flag, offset of its transform in Z
     double tda[NTASKMAX], tdb[NTASKMAX], tRi[NTASKMAX][2][6], tRj[NTASKMAX][6], tNg[NTASKMAX];   // tNg: grid points of the task
     double complex* Z; int zcap;        // transforms of all tasks, kept for the re-evaluation with other mean motions (meann 2)
+    double* Q; int qcap;                // numerators of the divisor sums (sp_terms), at offsets 2 zoff (q_a, then q_b)
 };
 // Grid tasks: the inner planets' grids are built in chunks of GCH points (the dual-number dE/dv per point is the
 // expensive part, and the stage time on the helpers is that of its longest task), the giants' grids in one task each.
@@ -232,18 +258,23 @@ MEP_CLONES static void task_grid(struct tctx* x, int t){
         for (int g=0; g<x->N2; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
     }
 }
-// short-period ln a of a pair task from its transform Z (x->n: mean motions of the small divisors)
-MEP_CLONES static void pair_eval(struct tctx* x, int t){
+// short-period ln a of a pair task from its transform Z (x->n: mean motions of the small divisors); terms: 1 for the
+// first evaluation of the table (numerators computed), 0 for a re-evaluation with other mean motions
+MEP_CLONES static void pair_eval(struct tctx* x, int t, int terms){
     const double (*E)[6]=x->E; const int i=x->ti[t], jlo=x->tj0[t], jhi=x->tj1[t], Na=x->tNa[t], Nb=x->tNb[t];
-    const double complex* Z=x->Z+x->zoff[t];
+    const double complex* Z=x->Z+x->zoff[t]; double* qa=x->Q+2*x->zoff[t]; double* qb=qa+Na*Nb;
     double da,db;
     if (x->tkind[t]==0){
-        if (x->tsyn[t]) sp_eval_pair(Z,Na,Nb,x->n[i],x->n[i]-x->n[jlo],E[i][1],E[i][1]-E[jlo][1],&da,&db);
-        else sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db);
+        if (terms) sp_terms(Z,Na,Nb,E[i][1],x->tsyn[t] ? E[i][1]-E[jlo][1] : E[jlo][1],3,qa,qb);
+        sp_sums(qa,qb,Na,Nb,x->n[i],x->tsyn[t] ? x->n[i]-x->n[jlo] : x->n[jlo],3,&da,&db);
         x->tda[t]=da; x->tdb[t]=db;
     } else {
-        sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jlo],E[i][1],E[jlo][1],&da,&db); x->tda[t]=da; x->tdb[t]=0;
-        if (jhi>jlo){ sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
+        if (terms) sp_terms(Z,Na,Nb,E[i][1],E[jlo][1],1,qa,qb);
+        sp_sums(qa,qb,Na,Nb,x->n[i],x->n[jlo],1,&da,&db); x->tda[t]=da; x->tdb[t]=0;
+        if (jhi>jlo){
+            if (terms) sp_terms(Z,Na,Nb,E[i][1],E[jhi][1],2,qa,qb);
+            sp_sums(qa,qb,Na,Nb,x->n[i],x->n[jhi],2,&da,&db); x->tdb[t]=db;
+        }
     }
 }
 // Planet j's grid points of a pair task in the order of b, as structures of arrays (so that a row of the pair loop
@@ -335,7 +366,7 @@ MEP_CLONES static void task_pair(struct tctx* x, int t){
     }
     x->tNg[t]=(double)Na*Nb;
     fft2(buf,Na,Nb);
-    pair_eval(x,t);
+    pair_eval(x,t,1);
 }
 // GR term of inner planet i: its 1-D transform f1 (in Z) and the divisor sum
 MEP_CLONES static void gr_eval(struct tctx* x, int t){
@@ -481,12 +512,13 @@ static void table_setup(struct tctx* x, const struct mep_cfg* c, const double E[
         x->zoff[t]=off; off+=x->tNa[t]*x->tNb[t];
     }
     if (off>x->zcap){ free(x->Z); x->Z=malloc(off*sizeof(double complex)); x->zcap=off; }
+    if (off>x->qcap){ free(x->Q); x->Q=malloc(2*off*sizeof(double)); x->qcap=off; }
 }
 // mean motions of the inner planets from their mean ln a = ln a - disp (small divisors of the mean-n variant)
 static void table_mean_n(struct tctx* x, const double disp[MEP_NI]){
     for (int i=0;i<MEP_NI;i++) x->n[i]=sqrt(x->mu[i]/exp(3.*(x->E[i][0]-disp[i])));
 }
-static void reeval_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) gr_eval(x,t); else pair_eval(x,t); }
+static void reeval_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) gr_eval(x,t); else pair_eval(x,t,0); }
 static void table_nmotion(struct tctx* x, int from){ for (int i=from;i<MEP_NP;i++) x->n[i]=sqrt(x->mu[i]/exp(3.*x->E[i][0])); }
 // reduction in the serial order
 static void table_reduce(struct tctx* x, double disp[MEP_NI], double R[MEP_NI][6]){
