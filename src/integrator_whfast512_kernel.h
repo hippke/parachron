@@ -628,10 +628,11 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
         const V f3 = w_fnmadd(w_mul(beta, eta), G1, w_mul(zeta, G0));
         const V inv = w_div(c->ONE, f1);
         const V u = w_fnmadd(f, inv, w_zero());                    // -f/f'
-        const V a = w_mul(w_mul(f2, inv), c->HALF);                // f''/(2 f')
+        const V inv2 = w_mul(inv, c->HALF);                        // exact
+        const V a = w_mul(f2, inv2);                               // f''/(2 f'), bitwise as before
         const V b = w_mul(w_mul(f3, inv), w_set1(1.0/6.0));        // f'''/(6 f')
-        const V cc = w_mul(w_mul(beta, a), w_set1(-1.0/12.0));     // f''''/(24 f') = -beta a/12
-        const V dd = w_mul(w_mul(beta, b), w_set1(-1.0/20.0));     // f'''''/(120 f') = -beta b/20
+        const V cc = w_mul(a, w_mul(beta, w_set1(-1.0/12.0)));     // f''''/(24 f') = -beta a/12 (beta/12 before the kick)
+        const V dd = w_mul(b, w_mul(beta, w_set1(-1.0/20.0)));     // f'''''/(120 f') = -beta b/20
         const V a2 = w_mul(a, a);
         const V k3 = w_fmsub(w_set1(2.0), a2, b);                                       // 2a^2 - b
         const V k4 = w_fmsub(w_set1(5.0), w_fmsub(a, b, w_mul(a2, a)), cc);              // 5(ab - a^3) - c
