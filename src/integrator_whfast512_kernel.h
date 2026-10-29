@@ -463,37 +463,29 @@ REB_W512_INLINE V REB_W512_NAME(w512_kepler_start_)(const W512_CONSTS* c, const 
     const V X1 = w_mul(c->DT, IR);
     V Xs;
     {
+        // Only the polynomials in m (A_i, B_i) are computed from r alone; after eta and v2, u, w and their powers and a
+        // short Estrin evaluation remain. Before Oct 30, 2026 the coefficients of eta^i v2^j were formed from r
+        // (twice as many multiplications; Ryzen 9 7950X: AVX2 kernel 4 % slower, AVX-512 kernel the same).
         const V tau = X1;
         const V tau2 = w_mul(tau, tau);
-        const V ku = w_mul(tau, IR);                      // u = ku*eta
-        const V m = w_mul(w_mul(c->M, IR), tau2);         // M tau^2 / r
-        const V ku2 = w_mul(ku, ku), ku3 = w_mul(ku2, ku);
-        const V ku4 = w_mul(ku2, ku2), ku5 = w_mul(ku4, ku);
-        const V t4 = w_mul(tau2, tau2);
-        const V c00 = w_mul(m, w_fmadd(w_set1(1.0/15.0), m, w_set1(1.0/6.0)));
-        const V c01 = w_mul(tau2, w_fmadd(w_set1(-17.0/120.0), m, w_set1(-1.0/6.0)));
-        const V c02 = w_mul(t4, w_set1(3.0/40.0));
-        const V c10 = w_mul(ku, w_fmadd(m, w_fmadd(w_set1(-43.0/180.0), m, w_set1(-1.0/3.0)), w_set1(-0.5)));
-        const V c11 = w_mul(w_mul(ku, tau2), w_fmadd(w_set1(11.0/20.0), m, w_set1(3.0/8.0)));
-        const V c12 = w_mul(w_mul(ku, t4), w_set1(-5.0/16.0));
-        const V c20 = w_mul(ku2, w_fmadd(w_set1(5.0/8.0), m, c->HALF));
-        const V c21 = w_mul(w_mul(ku2, tau2), w_set1(-3.0/4.0));
-        const V c30 = w_mul(ku3, w_fmadd(w_set1(-7.0/6.0), m, w_set1(-5.0/8.0)));
-        const V c31 = w_mul(w_mul(ku3, tau2), w_set1(35.0/24.0));
-        const V c40 = w_mul(ku4, w_set1(7.0/8.0));
-        const V c50 = w_mul(ku5, w_set1(-21.0/16.0));
-        // Short chain after eta and v2.
-        const V v22 = w_mul(v2, v2);
-        const V et2 = w_mul(eta, eta);
-        const V et4 = w_mul(et2, et2);
-        const V row0 = w_fmadd(c02, v22, w_fmadd(c01, v2, c00));
-        const V row1 = w_fmadd(c12, v22, w_fmadd(c11, v2, c10));
-        const V row2 = w_fmadd(c21, v2, c20);
-        const V row3 = w_fmadd(c31, v2, c30);
-        const V E01 = w_fmadd(eta, row1, row0);
-        const V E23 = w_fmadd(eta, row3, row2);
-        const V E45 = w_fmadd(eta, c50, c40);
-        const V P = w_fmadd(et4, E45, w_fmadd(et2, E23, E01));
+        const V ku = w_mul(tau, IR);
+        const V m = w_mul(w_mul(c->M, IR), tau2);
+        const V A0 = w_mul(m, w_fmadd(w_set1(1.0/15.0), m, w_set1(1.0/6.0)));
+        const V B0 = w_fmadd(w_set1(-17.0/120.0), m, w_set1(-1.0/6.0));
+        const V A1 = w_fmadd(m, w_fmadd(w_set1(-43.0/180.0), m, w_set1(-1.0/3.0)), w_set1(-0.5));
+        const V B1 = w_fmadd(w_set1(11.0/20.0), m, w_set1(3.0/8.0));
+        const V A2 = w_fmadd(w_set1(5.0/8.0), m, c->HALF);
+        const V A3 = w_fmadd(w_set1(-7.0/6.0), m, w_set1(-5.0/8.0));
+        const V u = w_mul(ku, eta), w = w_mul(tau2, v2);
+        const V w2 = w_mul(w, w), u2 = w_mul(u, u), u4 = w_mul(u2, u2);
+        const V row0 = w_fmadd(w2, w_set1(3.0/40.0), w_fmadd(w, B0, A0));
+        const V row1 = w_fmadd(w2, w_set1(-5.0/16.0), w_fmadd(w, B1, A1));
+        const V row2 = w_fmadd(w, w_set1(-3.0/4.0), A2);
+        const V row3 = w_fmadd(w, w_set1(35.0/24.0), A3);
+        const V E01 = w_fmadd(u, row1, row0);
+        const V E23 = w_fmadd(u, row3, row2);
+        const V E45 = w_fmadd(u, w_set1(-21.0/16.0), w_set1(7.0/8.0));
+        const V P = w_fmadd(u4, E45, w_fmadd(u2, E23, E01));
         Xs = w_fmadd(tau, P, tau);
     }
     const K good3 = w_klt(w_abs(w_sub(Xs, X1)), w_mul(w_set1(0.1), w_abs(X1)));   // false for NaN
@@ -584,10 +576,10 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     const V zeta = w_fnmadd(beta, R, c->M);
     // Starting value: series reversion of the universal Kepler equation to sixth
     // order in tau = dt/r,
-    //   X = tau (1 + P),  P = sum_{i,j} c_ij eta^i v2^j  (0 <= i <= 5, 0 <= j <= 2),
-    // where the coefficients c_ij depend on r (and dt, M) only. r, 1/r and the c_ij are available
-    // while the previous interaction step is still running; after eta and v2 (which need the new
-    // velocities) only a short Estrin evaluation remains. In the dimensionless variables u = eta tau/r,
+    //   X = tau (1 + P),  P = sum_{i,j} c_ij u^i w^j  (0 <= i <= 5, 0 <= j <= 2),
+    // where the coefficients c_ij are polynomials in m, which depends on r (and dt, M) only. r, 1/r and
+    // these polynomials are available while the previous interaction step is still running; after eta
+    // and v2 (which need the new velocities) only a short evaluation remains. In the dimensionless variables u = eta tau/r,
     // w = v2 tau^2, m = M tau^2/r the series is
     //   P = m/6 + m^2/15 - w (1/6 + 17/120 m) + 3/40 w^2
     //     + u [-1/2 - m/3 - 43/180 m^2 + w (3/8 + 11/20 m) - 5/16 w^2]
