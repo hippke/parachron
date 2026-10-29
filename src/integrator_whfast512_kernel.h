@@ -196,23 +196,46 @@ REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs03_)(const int numTerms, const
     *G0 = g0;
 }
 
+// c_0 - c_1 z + c_2 z^2 - ... + c_8 z^8 with c_j = 1/(first + 2j)!: the tail c_2 - c_3 z + ... + c_8 z^6 by
+// Estrin's scheme (three dependent levels instead of six Horner steps), the two leading terms in Horner form, so
+// that the large terms are rounded twice, as in plain Horner.
+REB_W512_INLINE V REB_W512_NAME(w512_series9_)(const V z, const V z2, const V z4, const int first){
+    const V q0 = w_fnmadd(z, w_set1(W512_IF(first+6)), w_set1(W512_IF(first+4)));
+    const V q1 = w_fnmadd(z, w_set1(W512_IF(first+10)), w_set1(W512_IF(first+8)));
+    const V q2 = w_fnmadd(z, w_set1(W512_IF(first+14)), w_set1(W512_IF(first+12)));
+    const V r0 = w_fmadd(q1, z2, q0);
+    const V r1 = w_fmadd(w_set1(W512_IF(first+16)), z2, q2);
+    const V t = w_fmadd(r1, z4, r0);
+    return w_fnmadd(z, w_fnmadd(z, t, w_set1(W512_IF(first+2))), w_set1(W512_IF(first)));
+}
+
 // High accuracy (Gs1..Gs3), plain Horner with a correction for the rounding of the leading
 // constants. The constants 1/k! are rounded to double, and since the leading terms
 // dominate the sums, plain Horner has a systematic relative error: 1/3! is stored 0.5 ulp low, so G3
 // comes out 5.6e-17 too small in every step, which biases the Kepler step (seen as a systematic
 // drift of a in a grid of single Kepler orbits). The rounding errors of the leading constants (W512_IF_ERR, rounded -
 // true) are added before the final rounding (fused multiply-add), in parallel with the Horner chain.
-// numTerms odd.
+// numTerms odd. For 19 terms (the Newton steps and the final evaluation, both on the critical path) the sums are
+// evaluated by w512_series9_ (REB_W512_STIEFEL_HORNER: plain Horner, as before).
 REB_W512_INLINE void REB_W512_NAME(w512_stiefel_Gs13_)(const int numTerms, const V X, const V beta, V* G1, V* G2, V* G3){
     const V X2 = w_mul(X, X);
     V g3 = w_set1(W512_IF(numTerms));
     V g2 = w_set1(W512_IF(numTerms-1));
     const V z = w_mul(beta, X2);
-    int off = numTerms - 2;
-    const int it = (off - 1)/2;
-    for (int k=0; k<it; k++){
-        g3 = w_fnmadd(z, g3, w_set1(W512_IF(off))); off--;
-        g2 = w_fnmadd(z, g2, w_set1(W512_IF(off))); off--;
+#ifndef REB_W512_STIEFEL_HORNER
+    if (numTerms == 19){
+        const V z2 = w_mul(z, z), z4 = w_mul(z2, z2);
+        g3 = REB_W512_NAME(w512_series9_)(z, z2, z4, 3);
+        g2 = REB_W512_NAME(w512_series9_)(z, z2, z4, 2);
+    } else
+#endif
+    {
+        int off = numTerms - 2;
+        const int it = (off - 1)/2;
+        for (int k=0; k<it; k++){
+            g3 = w_fnmadd(z, g3, w_set1(W512_IF(off))); off--;
+            g2 = w_fnmadd(z, g2, w_set1(W512_IF(off))); off--;
+        }
     }
     // Missing parts of the sums: -(E3 - z E5 + z^2 E7) for g3 and z E4 - z^2 E6 for g2 (E = W512_IF_ERR).
     const V e3 = w_fmadd(w_fmadd(w_set1(-W512_IF_ERR(7)), z, w_set1(W512_IF_ERR(5))), z, w_set1(-W512_IF_ERR(3)));
