@@ -556,16 +556,50 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
         V t = w_fmadd(u, k5, k4);
         t = w_fmadd(u, t, k3);
         t = w_fmsub(u, t, a);
-        const V Xr = w_add(XX, w_fmadd(w_mul(u, u), t, u));
+        const V dl = w_fmadd(w_mul(u, u), t, u);
+        const V Xr = w_add(XX, dl);
         const K ok = w_kand(good3, w_klt(w_abs(u), w_mul(w_set1(1e-3), w_abs(XX))));   // false for NaN
         const K bad = w_kandnot(ok, c->k1);
+#ifndef REB_W512_FINAL_EVAL
+        // Stiefel functions at the final X = X0 + dl from those at X0 by the addition theorems (exact for any X and
+        // dl, like those of sin and cos): G1(X+d) = G1 G0(d) + G0 G1(d), G2(X+d) = G2 + G0 G2(d) + G1 G1(d),
+        // G3(X+d) = G3 + G3(d) + G2 G1(d) + G1 G2(d). The functions of dl need three terms (beta dl^2 < 2e-8 for
+        // |dl| < 1e-3 |X|), instead of a second 19-term evaluation at the end of the critical path (on the Ryzen 9
+        // 7950X that evaluation took 17 % of a step). REB_W512_FINAL_EVAL: evaluate again, as before.
+        // Lanes that take the Halley and Newton steps get a new evaluation at their X.
+        V U1, U2, U3;
+        {
+            const V d2 = w_mul(dl, dl);
+            const V zd = w_mul(beta, d2);
+            const V m0 = w_mul(zd, w_fmadd(zd, w_set1(1.0/24.0), w_set1(-0.5)));                       // G0(dl) - 1
+            const V g1d = w_mul(dl, w_fmadd(zd, w_fmadd(zd, w_set1(1.0/120.0), w_set1(-1.0/6.0)), c->ONE));
+            const V g2d = w_mul(d2, w_fmadd(zd, w_set1(-1.0/24.0), c->HALF));
+            const V g3d = w_mul(w_mul(d2, dl), w_fmadd(zd, w_set1(-1.0/120.0), w_set1(1.0/6.0)));
+            U1 = w_add(G1, w_fmadd(G1, m0, w_mul(G0, g1d)));
+            U2 = w_add(G2, w_fmadd(G0, g2d, w_mul(G1, g1d)));
+            U3 = w_add(G3, w_add(g3d, w_fmadd(G2, g1d, w_mul(G1, g2d))));
+        }
+        if (w_kany(bad)){
+            XX = w_sel(ok, Xr, REB_W512_NAME(w512_kepler_halley_newton_)(c, s, R, eta, zeta, beta, good3, XX));
+            REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+            G1 = w_sel(ok, U1, G1);
+            G2 = w_sel(ok, U2, G2);
+            G3 = w_sel(ok, U3, G3);
+        }else{
+            G1 = U1;
+            G2 = U2;
+            G3 = U3;
+        }
+#else
         XX = w_kany(bad) ? w_sel(ok, Xr, REB_W512_NAME(w512_kepler_halley_newton_)(c, s, R, eta, zeta, beta, good3, XX)) : Xr;
+        REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+#endif
     }
 #else
     XX = REB_W512_NAME(w512_kepler_halley_newton_)(c, s, R, eta, zeta, beta, good3, XX);
-#endif
     // Stiefel functions at the final X (all lanes, including those from the bisection fallback).
     REB_W512_NAME(w512_stiefel_Gs13_)(19, XX, beta, &G1, &G2, &G3);
+#endif
 
     // f and g functions.
     R = w_fmadd(G1, eta, R);
