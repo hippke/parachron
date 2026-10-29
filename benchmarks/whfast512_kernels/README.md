@@ -21,12 +21,12 @@ idle fraction of the cores used.
 | variant | what it tests |
 |---|---|
 | `default` kernel 1 | the original WHFast512 assembly (reference) |
-| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves, built with AVX-512VL where available), 1/sqrt as sqrt + division |
+| `default` kernels 2, 3 | Parachron's C kernels (AVX-512; AVX2 = 8 lanes as two 4-lane halves, built with AVX-512VL where available), 1/sqrt by Newton steps in planet-pair blocks 1 and 3 and as sqrt + division elsewhere |
 | `novl` | kernel 3 without its AVX-512VL build (plain AVX2 encoding, 16 registers), for comparison |
 | `horner` | C kernels with the Stiefel series by plain Horner instead of Estrin's scheme (`-DREB_W512_STIEFEL_HORNER`; the default before Oct 29, 2026) |
 | `knewton` | C kernels with the Kepler solver by Halley and Newton steps instead of the fifth-order reversion step (`-DREB_W512_KEPLER_NEWTON`; the default before Oct 29, 2026) |
 | `mat8` | C kernels with the 8x8 matrix products for the Jacobi transformations of the interaction step instead of the scans over the lanes (`-DREB_W512_MAT8`; the default before Oct 29, 2026) |
-| `mix5` | C kernels with the Newton 1/sqrt in planet-pair blocks 1 and 3 and sqrt + division elsewhere (`-DREB_W512_RSQRT_MIX=5`; balances divider and FMA pipes) |
+| `mix0` | C kernels with 1/sqrt as sqrt + division at every site (`-DREB_W512_RSQRT_MIX=0`; the default before Oct 29, 2026) |
 | `feval` | C kernels with a second 19-term evaluation of the Stiefel functions at the final X instead of the addition-theorem update (`-DREB_W512_FINAL_EVAL`; the default before Oct 29, 2026) |
 | `hwrsqrt` | Newton 1/sqrt with the hardware estimate as seed (`-DREB_W512_HW_RSQRT`) |
 | `newton` | C kernels with the earlier Newton 1/sqrt from a bit-trick seed (`-DREB_W512_NEWTON_RSQRT`; faster on Intel Sapphire Rapids) |

@@ -675,8 +675,10 @@ REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
 #endif
 // Per call site (bit k of REB_W512_RSQRT_MIX: 0-3 the four planet-pair blocks, 4 the Jacobi term, 5 the central body):
 // the Newton form instead of the default, so that square roots and divisions do not all queue on the divider.
+// Default 5 (pair blocks 1 and 3): AVX-512 kernel 3.9 % faster on AMD Zen 4, 0.8 % on Zen 5; 0 = sqrt + division at
+// every site.
 #ifndef REB_W512_RSQRT_MIX
-#define REB_W512_RSQRT_MIX 0
+#define REB_W512_RSQRT_MIX 5
 #endif
 #define W512_RSQRT_SITE(a, k) ((((REB_W512_RSQRT_MIX) >> (k)) & 1) ? REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a))) : W512_RSQRT(a))
 
