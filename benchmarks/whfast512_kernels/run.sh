@@ -97,6 +97,7 @@ build(){   # name, extra OPT flags, compiler
 VARIANTS=()
 build default ""                    gcc && VARIANTS+=(default)
 build hwrsqrt "-DREB_W512_HW_RSQRT" gcc && VARIANTS+=(hwrsqrt)
+build horner  "-DREB_W512_STIEFEL_HORNER" gcc && VARIANTS+=(horner)
 build novl    "-DREB_W512_NO_AVX2VL" gcc && VARIANTS+=(novl)
 build newton  "-DREB_W512_NEWTON_RSQRT" gcc && VARIANTS+=(newton)
 build native  "-march=native"       gcc && VARIANTS+=(native)
