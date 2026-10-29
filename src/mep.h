@@ -59,5 +59,7 @@ void reb_mep_coarse_giants(const struct mep_cfg* c, const double E_in[MEP_NP][6]
 void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par, const double (*Mpre)[6]);
 void reb_mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]);
 struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[MEP_NP][6]);
+void reb_mep_el_to_xv(const double* masses, const double E[MEP_NP][6], struct reb_particle p[MEP_NP+1]);
+void reb_mep_xv_to_el(const struct reb_particle p[MEP_NP+1], double E[MEP_NP][6]);
 void reb_mep_set_threads(int nhelpers, int pin);
 #endif

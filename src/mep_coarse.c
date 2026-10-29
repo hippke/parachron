@@ -637,6 +637,46 @@ struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[ME
     reb_simulation_move_to_com(s);
     return s;
 }
+// centre of mass of p[0..n-1]: the operations of reb_simulation_com_range (positions, velocities, mass)
+static struct reb_particle com_xv(const struct reb_particle* p, int n){
+    double x=0., y=0., z=0., vx=0., vy=0., vz=0., m=0.;
+    for (int i=0;i<n;i++){
+        x=x*m+p[i].x*p[i].m; y=y*m+p[i].y*p[i].m; z=z*m+p[i].z*p[i].m;
+        vx=vx*m+p[i].vx*p[i].m; vy=vy*m+p[i].vy*p[i].m; vz=vz*m+p[i].vz*p[i].m;
+        m+=p[i].m;
+        if (m>0.){ x/=m; y/=m; z/=m; vx/=m; vy/=m; vz/=m; }
+    }
+    struct reb_particle c={0}; c.x=x; c.y=y; c.z=z; c.vx=vx; c.vy=vy; c.vz=vz; c.m=m;
+    return c;
+}
+// the particles of reb_mep_el_to_sim without a simulation (the operations of reb_simulation_add_fmt and
+// reb_simulation_move_to_com in the same order: bitwise identical, ~5x faster)
+void reb_mep_el_to_xv(const double* masses, const double E[MEP_NP][6], struct reb_particle p[MEP_NP+1]){
+    memset(p,0,sizeof(struct reb_particle)*(MEP_NP+1));
+    p[0].m=masses[0];
+    for (int j=0;j<MEP_NP;j++){
+        const double* e=E[j];
+        const double ecc=hypot(e[2],e[3]), pom=atan2(e[3],e[2]), si=hypot(e[4],e[5]), Om=atan2(e[5],e[4]);
+        const double inc=2.*asin(si), l=e[1];
+        const struct reb_particle prim=com_xv(p,j+1);
+        const double omega = cos(inc)>0. ? pom-Om : Om-pom;
+        const double M = cos(inc)>0. ? l-Om-omega : Om-omega-l;
+        int err=0;
+        p[j+1]=reb_particle_from_orbit_err(1.,prim,masses[j+1],exp(e[0]),ecc,inc,Om,omega,reb_M_to_f(ecc,M),&err);
+        p[j+1].r=0.; p[j+1].name=NULL; p[j+1].sim=NULL;
+    }
+    const struct reb_particle c=com_xv(p,MEP_NP+1);
+    for (int i=0;i<=MEP_NP;i++){ p[i].x-=c.x; p[i].y-=c.y; p[i].z-=c.z; p[i].vx-=c.vx; p[i].vy-=c.vy; p[i].vz-=c.vz; }
+}
+// reb_mep_sim_to_el of particles p
+void reb_mep_xv_to_el(const struct reb_particle p[MEP_NP+1], double E[MEP_NP][6]){
+    for (int i=1;i<=MEP_NP;i++){
+        const struct reb_orbit o=reb_orbit_from_particle(1.,p[i],com_xv(p,i));
+        const double si=sin(o.inc/2.);
+        E[i-1][0]=log(o.a); E[i-1][1]=o.l; E[i-1][2]=o.e*cos(o.pomega); E[i-1][3]=o.e*sin(o.pomega);
+        E[i-1][4]=si*cos(o.Omega); E[i-1][5]=si*sin(o.Omega);
+    }
+}
 #else
 typedef int mep_coarse_unavailable;    // avoids an empty translation unit on other platforms
 #endif // __linux__

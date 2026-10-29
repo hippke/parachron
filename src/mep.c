@@ -82,18 +82,37 @@ static enum REB_STATUS stop_status;
 static atomic_int fine_interrupted;
 
 // ------------------------------------------------------------------------------------------------ helpers
-static double energy_sim(struct reb_simulation* s){
-    double E=reb_simulation_energy(s);
+// The bookkeeping below works on the barycentric particles of reb_mep_el_to_sim (reb_mep_el_to_xv: the same values
+// without a simulation) and repeats the operations of reb_simulation_energy / _angular_momentum in their order, so it
+// is bitwise identical to working on simulations (it is on the coarse chain: ~6 instead of ~28 us per corrected hop).
+typedef struct reb_particle xv[MEP_NP+1];
+static double energy_xv(const xv p){
+    double ek=0., ep=0.;
+    for (int i=0;i<=MEP_NP;i++) ek += 0.5 * p[i].m * (p[i].vx*p[i].vx + p[i].vy*p[i].vy + p[i].vz*p[i].vz);
+    for (int i=0;i<=MEP_NP;i++) for (int j=i+1;j<=MEP_NP;j++){
+        const double dx=p[i].x-p[j].x, dy=p[i].y-p[j].y, dz=p[i].z-p[j].z;
+        ep -= p[j].m*p[i].m/sqrt(dx*dx + dy*dy + dz*dz);
+    }
+    double E=ek+ep+0.;     // + energy_offset (0)
     if (M_->gr_potential){
-        const double c=10065.32, m0=s->particles[0].m;
-        for (size_t i=1;i<s->N;i++){
-            const double dx=s->particles[i].x-s->particles[0].x, dy=s->particles[i].y-s->particles[0].y, dz=s->particles[i].z-s->particles[0].z;
-            E += -3.*m0*m0*s->particles[i].m/(c*c*(dx*dx+dy*dy+dz*dz));
+        const double c=10065.32, m0=p[0].m;
+        for (int i=1;i<=MEP_NP;i++){
+            const double dx=p[i].x-p[0].x, dy=p[i].y-p[0].y, dz=p[i].z-p[0].z;
+            E += -3.*m0*m0*p[i].m/(c*c*(dx*dx+dy*dy+dz*dz));
         }
     }
     return E;
 }
-static double energy_el(const el E){ struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,E); double e=energy_sim(s); reb_simulation_free(s); return e; }
+static void L_xv(const xv p, double L[3]){
+    L[0]=L[1]=L[2]=0.;
+    for (int i=0;i<=MEP_NP;i++){
+        L[0] += p[i].m*(p[i].y*p[i].vz - p[i].z*p[i].vy);
+        L[1] += p[i].m*(p[i].z*p[i].vx - p[i].x*p[i].vz);
+        L[2] += p[i].m*(p[i].x*p[i].vy - p[i].y*p[i].vx);
+    }
+}
+// energy and angular momentum of the state E
+static void EL_el(const el E, double* e, double L[3]){ xv p; reb_mep_el_to_xv(M_->masses,E,p); *e=energy_xv(p); L_xv(p,L); }
 // Projection of a corrected boundary state onto the target energy Et and angular-momentum vector Lt (targets: the
 // start state's values plus the increments of one fine solve, so each slice carries the energy and angular-momentum
 // changes of the fine integrator, and the parareal fixed point is unchanged). The barycentric velocities change by
@@ -101,8 +120,6 @@ static double energy_el(const el E){ struct reb_simulation* s=reb_mep_el_to_sim(
 //   dE = 2K alpha + L.beta,   dL = alpha L + I beta,   I = sum m (r^2 1 - r r^T);
 // two Newton passes, applied as increments (keeps the full relative precision of the tiny corrections). The total
 // momentum stays zero. Without the angular-momentum part, |L| drifted by -2.6e-10 per Gyr (16 Solar System runs).
-static void L_sim(struct reb_simulation* s, double L[3]){ struct reb_vec3d l=reb_simulation_angular_momentum(s); L[0]=l.x; L[1]=l.y; L[2]=l.z; }
-static void L_el(const el E, double L[3]){ struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,E); L_sim(s,L); reb_simulation_free(s); }
 static int solve4(double A[4][4], double b[4]){
     for (int c=0;c<4;c++){
         int p=c; for (int r=c+1;r<4;r++) if (fabs(A[r][c])>fabs(A[p][c])) p=r;
@@ -114,12 +131,12 @@ static int solve4(double A[4][4], double b[4]){
     return 0;
 }
 static void project_EL(el E, double Et, const double Lt[3]){
-    struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,CEL(E));
+    xv ps; reb_mep_el_to_xv(M_->masses,CEL(E),ps);
     for (int it=0; it<2; it++){
-        const double e=energy_sim(s); double L[3]; L_sim(s,L);
+        const double e=energy_xv(ps); double L[3]; L_xv(ps,L);
         double K2=0, In[3][3]={{0}};
-        for (size_t i=0;i<s->N;i++){
-            const struct reb_particle p=s->particles[i]; const double r[3]={p.x,p.y,p.z};
+        for (int i=0;i<=MEP_NP;i++){
+            const struct reb_particle p=ps[i]; const double r[3]={p.x,p.y,p.z};
             K2+=p.m*(p.vx*p.vx+p.vy*p.vy+p.vz*p.vz);
             const double r2=r[0]*r[0]+r[1]*r[1]+r[2]*r[2];
             for (int a=0;a<3;a++) for (int c=0;c<3;c++) In[a][c]+=p.m*((a==c?r2:0.)-r[a]*r[c]);
@@ -127,13 +144,13 @@ static void project_EL(el E, double Et, const double Lt[3]){
         double A[4][4]={{K2,L[0],L[1],L[2]},{L[0],In[0][0],In[0][1],In[0][2]},{L[1],In[1][0],In[1][1],In[1][2]},{L[2],In[2][0],In[2][1],In[2][2]}};
         double x[4]={Et-e, Lt[0]-L[0], Lt[1]-L[1], Lt[2]-L[2]};
         if (solve4(A,x)) break;
-        for (size_t i=0;i<s->N;i++){
-            struct reb_particle* p=&s->particles[i];
+        for (int i=0;i<=MEP_NP;i++){
+            struct reb_particle* p=&ps[i];
             const double bx=x[2]*p->z-x[3]*p->y, by=x[3]*p->x-x[1]*p->z, bz=x[1]*p->y-x[2]*p->x;   // beta x r
             p->vx+=p->vx*x[0]+bx; p->vy+=p->vy*x[0]+by; p->vz+=p->vz*x[0]+bz;
         }
     }
-    reb_mep_sim_to_el(s,E); reb_simulation_free(s);
+    reb_mep_xv_to_el(ps,E);
 }
 static struct reb_simulation* fine_sim(const el Ein){
     struct reb_simulation* s=reb_mep_el_to_sim(M_->masses,Ein);
@@ -158,10 +175,11 @@ static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
     reb_mep_sim_to_el(s,Eout); reb_simulation_free(s);
     return 1;
 }
-static double poserr_el(const el A, const el B){
-    struct reb_simulation* a=reb_mep_el_to_sim(M_->masses,A); struct reb_simulation* b=reb_mep_el_to_sim(M_->masses,B);
-    double m=0; for (int i=1;i<=MEP_NP;i++){ const double d[3]={a->particles[i].x-b->particles[i].x,a->particles[i].y-b->particles[i].y,a->particles[i].z-b->particles[i].z}; for(int x=0;x<3;x++) if (fabs(d[x])>m) m=fabs(d[x]); }
-    reb_simulation_free(a); reb_simulation_free(b); return m;
+// barycentric positions of the state E, and the largest coordinate difference of two such sets (update norm)
+static void pos_el(const el E, double X[MEP_NP+1][3]){ xv p; reb_mep_el_to_xv(M_->masses,E,p); for (int i=0;i<=MEP_NP;i++){ X[i][0]=p[i].x; X[i][1]=p[i].y; X[i][2]=p[i].z; } }
+static double poserr_pos(const double A[MEP_NP+1][3], const double B[MEP_NP+1][3]){
+    double m=0; for (int i=1;i<=MEP_NP;i++) for (int x=0;x<3;x++){ const double d=fabs(A[i][x]-B[i][x]); if (d>m) m=d; }
+    return m;
 }
 // prepare the state of a window (parity p) that starts from Ecur
 static void cal_reset(int p);
@@ -309,7 +327,9 @@ static void* slice_thread(void* arg){
         const int p=w&1; el (*Up)[NMAX+1]=U[p]; sem_t (*rdy)[NMAX+1]=ready[p]; atomic_int* stp=&stop_at[p];
         if (n==0 && w>0) sem_wait(&win_start[p]);
         double EFprev=0, EUprev=0, LFprev[3]={0}, LUprev[3]={0}; int have_F=0;
+        double Xprev[MEP_NP+1][3]; int Xprev_k=-1;     // positions of Up[Xprev_k][n+1] (update norm of the next iteration)
         for (int k=0;k<=kend;k++){
+            double EU=0, LU[3]={0}; int have_U=0;      // energy and angular momentum of Up[k][n], if computed
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             if (n>0) sem_wait(&rdy[k][n]);
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
@@ -328,12 +348,18 @@ static void* slice_thread(void* arg){
                     Up[k][n+1][i][e]=g[i][e]+d;
                 }
                 for (int i=0;i<MEP_NP;i++) Up[k][n+1][i][1]=wrapd(Up[k][n+1][i][1]);
-                double Lt[3]; L_el(CEL(Up[k][n]),Lt); for (int a=0;a<3;a++) Lt[a]+=LFprev[a]-LUprev[a];
-                project_EL(Up[k][n+1], energy_el(CEL(Up[k][n])) + (EFprev-EUprev), Lt);
+                EL_el(CEL(Up[k][n]),&EU,LU); have_U=1;
+                double Lt[3]; for (int a=0;a<3;a++) Lt[a]=LU[a]+(LFprev[a]-LUprev[a]);
+                project_EL(Up[k][n+1], EU + (EFprev-EUprev), Lt);
             }
             memcpy(Gold,g,sizeof(el));
             if (k>0){
-                const double u = n>=k-1 ? poserr_el(CEL(Up[k][n+1]),CEL(Up[k-1][n+1])) : 0.;
+                double u=0.;
+                if (n>=k-1){
+                    double X[MEP_NP+1][3]; pos_el(CEL(Up[k][n+1]),X);
+                    if (Xprev_k!=k-1) pos_el(CEL(Up[k-1][n+1]),Xprev);
+                    u=poserr_pos(X,Xprev); memcpy(Xprev,X,sizeof X); Xprev_k=k;
+                }
                 pthread_mutex_lock(&upd_mx); if (u>upd_max[p][k]) upd_max[p][k]=u; pthread_mutex_unlock(&upd_mx);
             }
             if (n<N-1) sem_post(&rdy[k][n+1]);
@@ -373,7 +399,10 @@ static void* slice_thread(void* arg){
             // fine slice for the next iteration (speculative: abandoned if the window stops)
             have_F=0;
             if (k<kend && n>=k){
-                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp)){ EUprev=energy_el(CEL(Up[k][n])); EFprev=energy_el(CEL(Fprev)); L_el(CEL(Up[k][n]),LUprev); L_el(CEL(Fprev),LFprev); have_F=1; }
+                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp)){
+                    if (have_U){ EUprev=EU; memcpy(LUprev,LU,sizeof LU); } else EL_el(CEL(Up[k][n]),&EUprev,LUprev);
+                    EL_el(CEL(Fprev),&EFprev,LFprev); have_F=1;
+                }
             }
         }
         sem_wait(&win_done[p]);    // a thread can finish k = Kmax before the window is decided
