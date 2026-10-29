@@ -338,18 +338,28 @@ static inline void pair_row(const struct jgrid* restrict J, int o, int Nb, const
         const double dx=X[b]-r1x, dy=Y[b]-r1y, dz=Z[b]-r1z;
         const double d2=dx*dx+dy*dy+dz*dz; ID3[b]=1./(d2*sqrt(d2));
     }
+    // the accelerations of the row first, then one simple loop per element: vectorised by any compiler (GCC 14 left two
+    // variants of the fused loop scalar: serial hop 0.79 -> 0.45 ms with GCC 14, 0.50 -> 0.45 ms with GCC 13), bitwise
+    // unchanged
+    double AX[NGMAX], AY[NGMAX], AZ[NGMAX], BX[NGMAX], BY[NGMAX], BZ[NGMAX];
     for (int b=0;b<Nb;b++){
         const double dx=X[b]-r1x, dy=Y[b]-r1y, dz=Z[b]-r1z, id3=ID3[b];
-        const double ax=mj*(dx*id3-SX[b]), ay=mj*(dy*id3-SY[b]), az=mj*(dz*id3-SZ[b]);
-        F[b]=D1[0][0]*ax+D1[0][1]*ay+D1[0][2]*az;
-        if (rates) for (int e=0;e<6;e++) CI[e][b]=D1[e][0]*ax+D1[e][1]*ay+D1[e][2]*az;
+        AX[b]=mj*(dx*id3-SX[b]); AY[b]=mj*(dy*id3-SY[b]); AZ[b]=mj*(dz*id3-SZ[b]);
         if (inner){
             const double rdot=X[b]*r1x+Y[b]*r1y+Z[b]*r1z, w=rdot/RR[b]*IR3[b];
-            const double bx=pf*(dx*id3-SX[b]+r1x*IR3[b]-TX[b]*w), by=pf*(dy*id3-SY[b]+r1y*IR3[b]-TY[b]*w), bz=pf*(dz*id3-SZ[b]+r1z*IR3[b]-TZ[b]*w);
-            G[b]=J->D[0][0][o+b]*bx+J->D[0][1][o+b]*by+J->D[0][2][o+b]*bz;
-            if (rates) for (int e=0;e<6;e++) CJ[e][b]=J->D[e][0][o+b]*bx+J->D[e][1][o+b]*by+J->D[e][2][o+b]*bz;
+            BX[b]=pf*(dx*id3-SX[b]+r1x*IR3[b]-TX[b]*w); BY[b]=pf*(dy*id3-SY[b]+r1y*IR3[b]-TY[b]*w); BZ[b]=pf*(dz*id3-SZ[b]+r1z*IR3[b]-TZ[b]*w);
         }
     }
+    for (int b=0;b<Nb;b++) F[b]=D1[0][0]*AX[b]+D1[0][1]*AY[b]+D1[0][2]*AZ[b];
+    if (rates) for (int e=0;e<6;e++){ const double d0=D1[e][0], d1=D1[e][1], d2=D1[e][2]; double* restrict ce=CI[e];
+        for (int b=0;b<Nb;b++) ce[b]=d0*AX[b]+d1*AY[b]+d2*AZ[b]; }
+    if (inner){
+        { const double* restrict q0=J->D[0][0]+o; const double* restrict q1=J->D[0][1]+o; const double* restrict q2=J->D[0][2]+o;
+          for (int b=0;b<Nb;b++) G[b]=q0[b]*BX[b]+q1[b]*BY[b]+q2[b]*BZ[b]; }
+        if (rates) for (int e=0;e<6;e++){ const double* restrict q0=J->D[e][0]+o; const double* restrict q1=J->D[e][1]+o; const double* restrict q2=J->D[e][2]+o;
+            double* restrict ce=CJ[e]; for (int b=0;b<Nb;b++) ce[b]=q0[b]*BX[b]+q1[b]*BY[b]+q2[b]*BZ[b]; }
+    }
+
     if (inner) for (int b=0;b<Nb;b++){ bufd[2*b]=F[b]; bufd[2*b+1]=G[b]; }
     else if (slot==0) for (int b=0;b<Nb;b++){ bufd[2*b]=F[b]; bufd[2*b+1]=0.; }
     else for (int b=0;b<Nb;b++) bufd[2*b+1]+=F[b];
