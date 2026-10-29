@@ -262,17 +262,21 @@ struct tctx {
     double* Q; int qcap;                // numerators of the divisor sums (sp_terms), at offsets 2 zoff (q_a, then q_b)
 };
 // Grid tasks: the inner planets' grids are built in chunks of GCH points (the dual-number dE/dv per point is the
-// expensive part, and the stage time on the helpers is that of its longest task), the giants' grids in one task each.
+// expensive part, and the stage time on the helpers is that of its longest task), the giants' grids in chunks of GCHO
+// points (they are on the critical path, right after the giants' integration).
 // Task t < ngrid_inner: planet t / nch, chunk t % nch (empty when beyond the planet's grid), where nch = largest
-// inner grid of the configuration / GCH; the giants follow. The task count depends only on the configuration.
+// inner grid of the configuration / GCH; the giants follow (nchg chunks each). The task count depends only on the
+// configuration.
 #define GCH 8
+#define GCHO 4
 static int gmax_cfg(const struct mep_cfg* c){
     int g=c->ng_ii; if (c->ng_hi>g) g=c->ng_hi;
     if (c->ng_th>0){ if (c->ng_th>g) g=c->ng_th; if (c->ng_ph>g) g=c->ng_ph; }
     return g;
 }
 static int ngrid_inner(const struct mep_cfg* c){ return MEP_NI*(gmax_cfg(c)/GCH); }
-static int ngrid_all(const struct mep_cfg* c){ return ngrid_inner(c)+(c->maxj+1-MEP_NI); }
+static int nchg_cfg(const struct mep_cfg* c){ return c->ng_io>GCHO ? c->ng_io/GCHO : 1; }
+static int ngrid_all(const struct mep_cfg* c){ return ngrid_inner(c)+(c->maxj+1-MEP_NI)*nchg_cfg(c); }
 MEP_CLONES static void task_grid(struct tctx* x, int t){
     const struct mep_cfg* c=x->c; dual_t=c->dual;
     const int nch=gmax_cfg(c)/GCH, ni=MEP_NI*nch;
@@ -281,9 +285,9 @@ MEP_CLONES static void task_grid(struct tctx* x, int t){
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg);
         for (int g=g0; g<g0+GCH; g++){ Eg[1]=2.*M_PI*g/ng; el_to_rv(x->mu[p],Eg,x->ri[p][g],x->vi[p][g]); dEdv(x->mu[p],x->ri[p][g],x->vi[p][g],x->Di[p][g],x->nc); }
     } else {
-        const int p=MEP_NI+(t-ni); if (p>c->maxj) return;
+        const int nchg=nchg_cfg(c), p=MEP_NI+(t-ni)/nchg, gn=x->N2/nchg, g0=((t-ni)%nchg)*gn; if (p>c->maxj) return;
         double Eg[6]; memcpy(Eg,x->E[p],sizeof Eg); double vdum[3];
-        for (int g=0; g<x->N2; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
+        for (int g=g0; g<g0+gn; g++){ Eg[1]=2.*M_PI*g/x->N2; el_to_rv(x->mu[p],Eg,x->rj[p][g],vdum); }
     }
 }
 // short-period ln a of a pair task from its transform Z (x->n: mean motions of the small divisors); terms: 1 for the
@@ -429,12 +433,14 @@ MEP_CLONES static void task_gr(struct tctx* x, int t){
 // previous one are finished. Helpers (and the caller, in pool_join) take tasks from per-stage counters.
 static pthread_mutex_t pool_mx=PTHREAD_MUTEX_INITIALIZER, pool_busy=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pool_cv=PTHREAD_COND_INITIALIZER;
-#define MAXST 8
-struct pjob { int nst; void (*fn[MAXST])(void*,int); void* arg[MAXST]; int ntask[MAXST]; };
+// A stage with a gate starts only when *gate != 0 (set by the caller while the helpers work on the earlier stages).
+#define MAXST 12
+struct pjob { int nst; void (*fn[MAXST])(void*,int); void* arg[MAXST]; int ntask[MAXST]; atomic_int* gate[MAXST]; };
 static struct pjob job;
 static int pool_n=0; static atomic_int pool_gen=0, pool_active=0, st_next[MAXST], st_done[MAXST];
 static void pool_run_tasks(void){
     for (int s=0;s<job.nst;s++){
+        if (job.gate[s]) while (!atomic_load_explicit(job.gate[s],memory_order_acquire)) MEP_RELAX();
         for (;;){
             const int t=atomic_fetch_add(&st_next[s],1); if (t>=job.ntask[s]) break;
             job.fn[s](job.arg[s],t); atomic_fetch_add_explicit(&st_done[s],1,memory_order_release);
@@ -495,7 +501,7 @@ static void pool_release(void){ pthread_mutex_unlock(&pool_busy); }
 // run fn(arg, 0..ntask-1); on the pool if par and the pool is free, else serially in the caller
 static void run_tasks(void (*fn)(void*,int), void* arg, int ntask, int par){
     if (!pool_acquire(par)){ for (int t=0;t<ntask;t++) fn(arg,t); return; }
-    struct pjob j={1,{fn},{arg},{ntask}}; pool_launch(&j); pool_join(); pool_release();
+    struct pjob j={1,{fn},{arg},{ntask},{0}}; pool_launch(&j); pool_join(); pool_release();
 }
 static void grid_task(void* a, int t){ task_grid((struct tctx*)a, t); }
 static void pairgr_task(void* a, int t){ struct tctx* x=a; if (x->tkind[t]==2) task_gr(x,t); else task_pair(x,t); }
@@ -630,11 +636,13 @@ static void inner_correct(const struct mep_cfg* c, const double* mu, const doubl
 }
 // parallel schedule (bitwise identical to the serial one): the caller integrates the giants (the longest single
 // task) while the helpers build the start tables, form the predictor and build the parts of the end tables that need
-// only the inner planets (their grids, the inner-inner pairs, GR); then the giants' grids and the inner-giant pairs.
+// only the inner planets (their grids, the inner-inner pairs, GR); then (gated by the end of the giants' run, in the
+// same job, so that no helper has to be woken again) the giants' grids and the inner-giant pairs.
 struct pctx {
     const struct mep_cfg* c; const double (*E_in)[6]; double (*M2)[6]; const double* mu;
     struct tctx *x0, *x1; double disp[MEP_NI], R[MEP_NI][6], E1[MEP_NP][6];
     int ninner, inner_t[NTASKMAX], nouter, outer_t[NTASKMAX];
+    atomic_int giants;                  // the giants' end rows are in M2
 };
 static void p_grid0(void* a, int t){ struct pctx* p=a; task_grid(p->x0,t); }
 static void p_pair0(void* a, int t){ struct pctx* p=a; pairgr_task(p->x0,t); }
@@ -660,6 +668,7 @@ static void p_pred(void* a, int t){ (void)t; struct pctx* p=a;
 }
 static void p_grid1i(void* a, int t){ struct pctx* p=a; task_grid(p->x1,t); }
 static void p_pair1i(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->inner_t[t]); }
+static void p_nmo1(void* a, int t){ (void)t; struct pctx* p=a; table_nmotion(p->x1,MEP_NI); }
 static void p_grid1o(void* a, int t){ struct pctx* p=a; task_grid(p->x1,ngrid_inner(p->c)+t); }
 static void p_pair1o(void* a, int t){ struct pctx* p=a; pairgr_task(p->x1,p->outer_t[t]); }
 static int coarse_staged(const struct mep_cfg* c, const double* mu, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], const double (*Mpre)[6]){
@@ -668,24 +677,29 @@ static int coarse_staged(const struct mep_cfg* c, const double* mu, const double
     static __thread struct pctx p; double M2[MEP_NP][6], Mg[MEP_NP][6];
     p.c=c; p.E_in=E_in; p.M2=M2; p.mu=mu; p.x0=x0; p.x1=x1;
     table_setup(x0,c,E_in,1,MEP_NP);
-    // the number of inner tasks of the end table equals that of the start table (same task list)
-    int ni=0; for (int t=0;t<x0->ntask;t++) if (x0->tkind[t]!=1) ni++;
+    // the numbers of inner and of inner-giant tasks of the end table equal those of the start table (same task list)
+    int ni=0, no=0; for (int t=0;t<x0->ntask;t++){ if (x0->tkind[t]!=1) ni++; else no++; }
     const int ng_all=ngrid_all(c), ng_in=ngrid_inner(c);
-    struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,ni}};
+    struct pjob a={5,{p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,ni},{0}};
     if (c->meann==1){
-        struct pjob am={8,{p_grid0,p_pair0,p_mean,p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,x0->ntask,1,ng_in,ni}};
+        struct pjob am={8,{p_grid0,p_pair0,p_mean,p_grid0,p_pair0,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,ng_in,x0->ntask,1,ng_in,ni},{0}};
         a=am;
     } else if (c->meann==2){
-        struct pjob am={7,{p_grid0,p_pair0,p_mean2,p_reeval,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,x0->ntask,1,ng_in,ni}};
+        struct pjob am={7,{p_grid0,p_pair0,p_mean2,p_reeval,p_pred,p_grid1i,p_pair1i},{&p,&p,&p,&p,&p,&p,&p},{ng_all,x0->ntask,1,x0->ntask,1,ng_in,ni},{0}};
         a=am;
     }
+    // giants' part of the end tables, after the gate
+    const int s0=a.nst; a.nst+=3;
+    a.fn[s0]=p_nmo1; a.fn[s0+1]=p_grid1o; a.fn[s0+2]=p_pair1o;
+    a.ntask[s0]=1; a.ntask[s0+1]=ng_all-ng_in; a.ntask[s0+2]=no;
+    for (int q=s0;q<a.nst;q++){ a.arg[q]=&p; a.gate[q]=NULL; }
+    a.gate[s0]=&p.giants;
+    atomic_store(&p.giants,0);
     pool_launch(&a);
     if (Mpre) memcpy(Mg,Mpre,sizeof Mg); else outer_wh(c,E_in,Mg);
-    pool_join();
-    for (int j=MEP_NI;j<MEP_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6);
-    table_nmotion(x1,MEP_NI);
-    struct pjob b={2,{p_grid1o,p_pair1o},{&p,&p},{ng_all-ng_in,p.nouter}};
-    pool_launch(&b); pool_join(); pool_release();
+    for (int j=MEP_NI;j<MEP_NP;j++) memcpy(M2[j],Mg[j],sizeof(double)*6);    // rows the earlier stages do not read
+    atomic_store_explicit(&p.giants,1,memory_order_release);
+    pool_join(); pool_release();
     double disp1[MEP_NI], R1[MEP_NI][6];
     table_reduce(x1,disp1,R1);
     inner_correct(c,mu,E_in,CEL(p.R),CEL(R1),disp1,M2,E_out);
