@@ -71,11 +71,13 @@ void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_d
     // synodic grids for the close inner pairs (Venus-Earth in the Solar System) and the mean motions of the mean ln a
     // in the small divisors (research log it. 54): 3.1x -> 3.4x on 16 cores at the default tolerance
     c->ng_th = 16; c->ng_ph = 64; c->alpha_an = 0.7; c->meann = 2;
-    // giants' kernel: the C kernels are bitwise identical across instruction sets; use the fastest available one
+    // giants' kernel: the C kernels are bitwise identical across instruction sets. The AVX2 kernel runs a system of at
+    // most four planets in its four-lane variant, which is faster for the four giants than the eight-lane AVX-512 kernel
+    // with half of its lanes empty (Ryzen 9 7950X: giants' run 111 -> 88 us, coarse hop 0.126 -> 0.103 ms, MEP on 16
+    // cores 3.4 % faster at the default tolerance, 5.5 % at k_min = 2; results bitwise unchanged).
     c->kernel = 4;
 #if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
-    if (__builtin_cpu_supports("avx512f")) c->kernel = 2;
-    else if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) c->kernel = 3;
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) c->kernel = 3;
 #endif
 }
 static double wrap(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
