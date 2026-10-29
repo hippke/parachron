@@ -583,16 +583,39 @@ static void table_par(const struct mep_cfg* c, const double E[MEP_NP][6], double
     table_reduce(x,disp,R);
     if (mn==2){ table_mean_n(x,disp); run_tasks(reeval_task,x,x->ntask,par); table_reduce(x,disp,R); }
 }
+// centre of mass of p[0..n-1]: the operations of reb_simulation_com_range (positions, velocities, mass)
+static struct reb_particle com_xv(const struct reb_particle* p, int n){
+    double x=0., y=0., z=0., vx=0., vy=0., vz=0., m=0.;
+    for (int i=0;i<n;i++){
+        x=x*m+p[i].x*p[i].m; y=y*m+p[i].y*p[i].m; z=z*m+p[i].z*p[i].m;
+        vx=vx*m+p[i].vx*p[i].m; vy=vy*m+p[i].vy*p[i].m; vz=vz*m+p[i].vz*p[i].m;
+        m+=p[i].m;
+        if (m>0.){ x/=m; y/=m; z/=m; vx/=m; vy/=m; vz/=m; }
+    }
+    struct reb_particle c={0}; c.x=x; c.y=y; c.z=z; c.vx=vx; c.vy=vy; c.vz=vz; c.m=m;
+    return c;
+}
+// particle n of a system p[0..n-1] + planet of mass m with Jacobi elements e (ln a, lambda, k, h, q, p): the operations
+// of reb_simulation_add_fmt(s, "m a e inc Omega pomega l", ...) (G = 1, primary = centre of mass of p[0..n-1])
+static struct reb_particle orbit_particle(const struct reb_particle* p, int n, double m, const double* e){
+    const double ecc=hypot(e[2],e[3]), pom=atan2(e[3],e[2]), si=hypot(e[4],e[5]), Om=atan2(e[5],e[4]);
+    const double inc=2.*asin(si), l=e[1];
+    const struct reb_particle prim=com_xv(p,n);
+    const double omega = cos(inc)>0. ? pom-Om : Om-pom;
+    const double M = cos(inc)>0. ? l-Om-omega : Om-omega-l;
+    int err=0;
+    struct reb_particle q=reb_particle_from_orbit_err(1.,prim,m,exp(e[0]),ecc,inc,Om,omega,reb_M_to_f(ecc,M),&err);
+    q.r=0.; q.name=NULL; q.sim=NULL;
+    return q;
+}
 static void outer_wh(const struct mep_cfg* c, const double E[MEP_NP][6], double Eo[MEP_NP][6]){
     const double* m=c->masses;
     double Mi=0; for (int i=0;i<=MEP_NI;i++) Mi+=m[i];
+    // the system of add_fmt calls, built without parsing the format
+    struct reb_particle ps[MEP_NP-MEP_NI+1]; memset(ps,0,sizeof ps); ps[0].m=Mi;
+    for (int j=MEP_NI;j<MEP_NP;j++) ps[j-MEP_NI+1]=orbit_particle(ps,j-MEP_NI+1,m[j+1],E[j]);
     struct reb_simulation* s=reb_simulation_create();
-    reb_simulation_add_fmt(s,"m",Mi);
-    for (int j=MEP_NI;j<MEP_NP;j++){
-        const double* e=E[j];
-        const double ecc=hypot(e[2],e[3]), pom=atan2(e[3],e[2]), si=hypot(e[4],e[5]), Om=atan2(e[5],e[4]);
-        reb_simulation_add_fmt(s,"m a e inc Omega pomega l", m[j+1], exp(e[0]), ecc, 2.*asin(si), Om, pom, e[1]);
-    }
+    for (int q=0;q<=MEP_NP-MEP_NI;q++) reb_simulation_add(s,ps[q]);
     reb_simulation_move_to_com(s);
     // number of giant steps: the step is adjusted (<= dt_out_days) so that the steps cover the slice exactly
     const long nst=(long)ceil(c->slice_days/c->dt_out_days-1e-9);
@@ -753,34 +776,12 @@ struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[ME
     reb_simulation_move_to_com(s);
     return s;
 }
-// centre of mass of p[0..n-1]: the operations of reb_simulation_com_range (positions, velocities, mass)
-static struct reb_particle com_xv(const struct reb_particle* p, int n){
-    double x=0., y=0., z=0., vx=0., vy=0., vz=0., m=0.;
-    for (int i=0;i<n;i++){
-        x=x*m+p[i].x*p[i].m; y=y*m+p[i].y*p[i].m; z=z*m+p[i].z*p[i].m;
-        vx=vx*m+p[i].vx*p[i].m; vy=vy*m+p[i].vy*p[i].m; vz=vz*m+p[i].vz*p[i].m;
-        m+=p[i].m;
-        if (m>0.){ x/=m; y/=m; z/=m; vx/=m; vy/=m; vz/=m; }
-    }
-    struct reb_particle c={0}; c.x=x; c.y=y; c.z=z; c.vx=vx; c.vy=vy; c.vz=vz; c.m=m;
-    return c;
-}
 // the particles of reb_mep_el_to_sim without a simulation (the operations of reb_simulation_add_fmt and
 // reb_simulation_move_to_com in the same order: bitwise identical, ~5x faster)
 void reb_mep_el_to_xv(const double* masses, const double E[MEP_NP][6], struct reb_particle p[MEP_NP+1]){
     memset(p,0,sizeof(struct reb_particle)*(MEP_NP+1));
     p[0].m=masses[0];
-    for (int j=0;j<MEP_NP;j++){
-        const double* e=E[j];
-        const double ecc=hypot(e[2],e[3]), pom=atan2(e[3],e[2]), si=hypot(e[4],e[5]), Om=atan2(e[5],e[4]);
-        const double inc=2.*asin(si), l=e[1];
-        const struct reb_particle prim=com_xv(p,j+1);
-        const double omega = cos(inc)>0. ? pom-Om : Om-pom;
-        const double M = cos(inc)>0. ? l-Om-omega : Om-omega-l;
-        int err=0;
-        p[j+1]=reb_particle_from_orbit_err(1.,prim,masses[j+1],exp(e[0]),ecc,inc,Om,omega,reb_M_to_f(ecc,M),&err);
-        p[j+1].r=0.; p[j+1].name=NULL; p[j+1].sim=NULL;
-    }
+    for (int j=0;j<MEP_NP;j++) p[j+1]=orbit_particle(p,j+1,masses[j+1],E[j]);
     const struct reb_particle c=com_xv(p,MEP_NP+1);
     for (int i=0;i<=MEP_NP;i++){ p[i].x-=c.x; p[i].y-=c.y; p[i].z-=c.z; p[i].vx-=c.vx; p[i].vy-=c.vy; p[i].vz-=c.vz; }
 }
