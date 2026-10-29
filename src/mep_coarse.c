@@ -53,6 +53,7 @@
 #define DAY (2.*M_PI/365.25)
 #define NGMAX 128
 #define CEL(x) ((const double (*)[6])(x))     // non-const -> const 2-D array (ISO C before C2X needs the cast)
+#define CDD(x) ((const double (*)[3])(x))
 static const double CGR = 10065.32;
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -245,6 +246,53 @@ MEP_CLONES static void pair_eval(struct tctx* x, int t){
         if (jhi>jlo){ sp_eval_pair(Z,Na,Nb,x->n[i],x->n[jhi],E[i][1],E[jhi][1],&da,&db); x->tdb[t]=db; }
     }
 }
+// Planet j's grid points of a pair task in the order of b, as structures of arrays (so that a row of the pair loop
+// vectorises): position, |r|^2, 1/|r|^3, r/|r|^3, 3 r and dE/dv. A synodic grid is stored twice over (row a starts at
+// an offset). Everything is computed with the operations of the point-by-point loop, so the tables are bitwise
+// unchanged.
+struct jgrid { double x[2*NGMAX], y[2*NGMAX], z[2*NGMAX], rr[2*NGMAX], ir3[2*NGMAX], sx[2*NGMAX], sy[2*NGMAX], sz[2*NGMAX],
+    tx[2*NGMAX], ty[2*NGMAX], tz[2*NGMAX], D[6][3][2*NGMAX]; };
+static inline void jgrid_set(struct jgrid* J, int t, const double* r, const double (*D)[3], int nd){
+    const double rr=r[0]*r[0]+r[1]*r[1]+r[2]*r[2], ir3=1./(rr*sqrt(rr));
+    J->x[t]=r[0]; J->y[t]=r[1]; J->z[t]=r[2]; J->rr[t]=rr; J->ir3[t]=ir3;
+    J->sx[t]=r[0]*ir3; J->sy[t]=r[1]*ir3; J->sz[t]=r[2]*ir3; J->tx[t]=3.*r[0]; J->ty[t]=3.*r[1]; J->tz[t]=3.*r[2];
+    for (int e=0;e<nd;e++) for (int q=0;q<3;q++) J->D[e][q][t]=D[e][q];
+}
+// row a of a pair task (planet i at r1 with dE/dv D1, planet j's points J from offset o): f (and g for an inner j)
+// per point into bufd (re, im of the transform's input), the rate contributions summed in the order of b
+static inline void pair_row(const struct jgrid* restrict J, int o, int Nb, const double* r1, const double (*D1)[3], double mj,
+        double pf, int inner, int rates, int slot, double* restrict bufd, double Ri[6], double Rj[6]){
+    double ID3[NGMAX], F[NGMAX], G[NGMAX], CI[6][NGMAX], CJ[6][NGMAX];
+    const double* restrict X=J->x+o; const double* restrict Y=J->y+o; const double* restrict Z=J->z+o;
+    const double* restrict RR=J->rr+o; const double* restrict IR3=J->ir3+o;
+    const double* restrict SX=J->sx+o; const double* restrict SY=J->sy+o; const double* restrict SZ=J->sz+o;
+    const double* restrict TX=J->tx+o; const double* restrict TY=J->ty+o; const double* restrict TZ=J->tz+o;
+    const double r1x=r1[0], r1y=r1[1], r1z=r1[2];
+    // 1/|d|^3 in a loop of its own: sqrt sets errno, which keeps a loop that calls it from vectorising
+    for (int b=0;b<Nb;b++){
+        const double dx=X[b]-r1x, dy=Y[b]-r1y, dz=Z[b]-r1z;
+        const double d2=dx*dx+dy*dy+dz*dz; ID3[b]=1./(d2*sqrt(d2));
+    }
+    for (int b=0;b<Nb;b++){
+        const double dx=X[b]-r1x, dy=Y[b]-r1y, dz=Z[b]-r1z, id3=ID3[b];
+        const double ax=mj*(dx*id3-SX[b]), ay=mj*(dy*id3-SY[b]), az=mj*(dz*id3-SZ[b]);
+        F[b]=D1[0][0]*ax+D1[0][1]*ay+D1[0][2]*az;
+        if (rates) for (int e=0;e<6;e++) CI[e][b]=D1[e][0]*ax+D1[e][1]*ay+D1[e][2]*az;
+        if (inner){
+            const double rdot=X[b]*r1x+Y[b]*r1y+Z[b]*r1z, w=rdot/RR[b]*IR3[b];
+            const double bx=pf*(dx*id3-SX[b]+r1x*IR3[b]-TX[b]*w), by=pf*(dy*id3-SY[b]+r1y*IR3[b]-TY[b]*w), bz=pf*(dz*id3-SZ[b]+r1z*IR3[b]-TZ[b]*w);
+            G[b]=J->D[0][0][o+b]*bx+J->D[0][1][o+b]*by+J->D[0][2][o+b]*bz;
+            if (rates) for (int e=0;e<6;e++) CJ[e][b]=J->D[e][0][o+b]*bx+J->D[e][1][o+b]*by+J->D[e][2][o+b]*bz;
+        }
+    }
+    if (inner) for (int b=0;b<Nb;b++){ bufd[2*b]=F[b]; bufd[2*b+1]=G[b]; }
+    else if (slot==0) for (int b=0;b<Nb;b++){ bufd[2*b]=F[b]; bufd[2*b+1]=0.; }
+    else for (int b=0;b<Nb;b++) bufd[2*b+1]+=F[b];
+    if (rates) for (int b=0;b<Nb;b++){
+        for (int e=0;e<6;e++) Ri[e]+=CI[e][b];
+        if (inner) for (int e=0;e<6;e++) Rj[e]+=CJ[e][b];
+    }
+}
 MEP_CLONES static void task_pair(struct tctx* x, int t){
     const struct mep_cfg* c=x->c; const double* m=c->masses; const int nc=x->nc;
     double complex* buf=x->Z+x->zoff[t];
@@ -259,35 +307,29 @@ MEP_CLONES static void task_pair(struct tctx* x, int t){
     // points, planet j's Ng1[j] (inner) / N2 (giants); sa, sb are the strides of a and b on them.
     const int Na=x->tNa[t], Nb=x->tNb[t], synodic=x->tsyn[t];
     const int sa=x->Ng1[i]/Na;
+    struct jgrid J;
     for (int j=jlo;j<=jhi;j++){
         const int Ngj = inner_j ? x->Ng1[j] : x->N2, sb=Ngj/Nb, saj=Ngj/Na;
-        const int slot=j-jlo;
+        const int slot=j-jlo, nd = inner_j ? (nc>1 ? 6 : 1) : 0;
         double Ri[6]={0}, Rj[6]={0};
         const double pf=inner_j ? -(x->Mint[j]+m[j+1])/x->Mint[j]*m[i+1] : 0.;
-        for (int a=0;a<Na;a++){
-            const double* r1=x->ri[i][a*sa]; const double* D1=x->Di[i][a*sa][0];
-            int gj = synodic ? a*saj : 0;            // planet j's grid point: lambda_j = lambda_i - phi (synodic) or 2 pi b/Nb
-            for (int b=0;b<Nb;b++, gj = synodic ? (gj>=sb ? gj-sb : gj-sb+Ngj) : gj+sb){
-                const double* r2 = inner_j ? x->ri[j][gj] : x->rj[j][gj];
-                const double d[3]={r2[0]-r1[0],r2[1]-r1[1],r2[2]-r1[2]};
-                const double d2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2], id3=1./(d2*sqrt(d2));
-                const double rj2=r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2], irj3=1./(rj2*sqrt(rj2));
-                double ai[3];
-                for (int q=0;q<3;q++) ai[q]=m[j+1]*(d[q]*id3-r2[q]*irj3);
-                const double f=D1[0]*ai[0]+D1[1]*ai[1]+D1[2]*ai[2];
-                if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[i][a*sa][e]; Ri[e]+=De[0]*ai[0]+De[1]*ai[1]+De[2]*ai[2]; }
-                if (inner_j){
-                    const double rdot=r2[0]*r1[0]+r2[1]*r1[1]+r2[2]*r1[2];
-                    double aj[3];
-                    for (int q=0;q<3;q++) aj[q]=pf*(d[q]*id3-r2[q]*irj3+r1[q]*irj3-3.*r2[q]*(rdot/rj2*irj3));
-                    const double* D2=x->Di[j][gj][0];
-                    const double g=D2[0]*aj[0]+D2[1]*aj[1]+D2[2]*aj[2];
-                    buf[a*Nb+b]=f+I*g;
-                    if (nc>1) for (int e=0;e<6;e++){ const double* De=x->Di[j][gj][e]; Rj[e]+=De[0]*aj[0]+De[1]*aj[1]+De[2]*aj[2]; }
-                } else {
-                    if (slot==0) buf[a*Nb+b]=f; else buf[a*Nb+b]+=I*f;
-                }
+        // planet j's point of (a, b): plain b sb; synodic (a saj - b sb) mod Ngj = sb ((a saj/sb - b) mod Nb), i.e.
+        // point t = b + o_a of the sequence g(t) = sb ((-t) mod Nb), t < 2 Nb (if sb divides saj; else row by row)
+        const int shift = synodic && saj%sb==0;
+        if (!synodic || shift){
+            for (int tt=0; tt<(shift?2*Nb:Nb); tt++){
+                const int g = shift ? sb*((Nb-tt%Nb)%Nb) : tt*sb;
+                jgrid_set(&J,tt, inner_j ? x->ri[j][g] : x->rj[j][g], inner_j ? x->Di[j][g] : NULL, nd);
             }
+        }
+        for (int a=0;a<Na;a++){
+            const double* r1=x->ri[i][a*sa]; const double (*D1)[3]=CDD(x->Di[i][a*sa]);
+            int o=0;
+            if (shift) o=(Nb-(a*saj/sb)%Nb)%Nb;
+            else if (synodic) for (int b=0, gj=a*saj; b<Nb; b++, gj = gj>=sb ? gj-sb : gj-sb+Ngj) jgrid_set(&J,b,x->ri[j][gj],x->Di[j][gj],nd);
+            double* bufd=(double*)(buf+a*Nb);
+            if (inner_j){ if (nc>1) pair_row(&J,o,Nb,r1,D1,m[j+1],pf,1,1,slot,bufd,Ri,Rj); else pair_row(&J,o,Nb,r1,D1,m[j+1],pf,1,0,slot,bufd,Ri,Rj); }
+            else { if (nc>1) pair_row(&J,o,Nb,r1,D1,m[j+1],pf,0,1,slot,bufd,Ri,Rj); else pair_row(&J,o,Nb,r1,D1,m[j+1],pf,0,0,slot,bufd,Ri,Rj); }
         }
         for (int e=0;e<6;e++){ x->tRi[t][slot][e]=Ri[e]; if (inner_j) x->tRj[t][e]=Rj[e]; }
     }
