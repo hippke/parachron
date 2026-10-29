@@ -28,6 +28,7 @@ idle fraction of the cores used.
 | `mat8` | C kernels with the 8x8 matrix products for the Jacobi transformations of the interaction step instead of the scans over the lanes (`-DREB_W512_MAT8`; the default before Oct 29, 2026) |
 | `mix0` | C kernels with 1/sqrt as sqrt + division at every site (`-DREB_W512_RSQRT_MIX=0`; the default before Oct 29, 2026) |
 | `feval` | C kernels with a second 19-term evaluation of the Stiefel functions at the final X instead of the addition-theorem update (`-DREB_W512_FINAL_EVAL`; the default before Oct 29, 2026) |
+| `prekick` | C kernels with the Stiefel functions at the starting value evaluated from the pre-kick velocities and corrected to the new beta (`-DREB_W512_PREKICK`; research plan item A1; 12 % slower on AMD Zen 4, to be measured on Zen 5) |
 | `hwrsqrt` | Newton 1/sqrt with the hardware estimate as seed (`-DREB_W512_HW_RSQRT`) |
 | `newton` | C kernels with the earlier Newton 1/sqrt from a bit-trick seed (`-DREB_W512_NEWTON_RSQRT`; faster on Intel Sapphire Rapids) |
 | `native` | the default compiled with `-march=native` (compiler tuning for this CPU) |
