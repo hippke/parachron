@@ -80,6 +80,10 @@ static int64_t W_done;                         // windows accepted in this call
 static double t_start_wall, walltime_limit;
 static enum REB_STATUS stop_status;
 static atomic_int fine_interrupted;
+// per window parity: set when the window stops; the fine kernel checks it after every step, so a speculative fine
+// solve that the window no longer needs stops at once instead of at the end of its chunk (its slice thread would
+// otherwise reach the first hop of the next window up to half a fine slice late). Solves that are kept run unchanged.
+static volatile sig_atomic_t fine_abort[2];
 
 // ------------------------------------------------------------------------------------------------ helpers
 // The bookkeeping below works on the barycentric particles of reb_mep_el_to_sim (reb_mep_el_to_xv: the same values
@@ -160,16 +164,18 @@ static struct reb_simulation* fine_sim(const el Ein){
     w->gr_potential=M_->gr_potential; w->corrector=M_->corrector; w->jacobi_recursive=1; w->kernel=M_->kernel;
     return s;
 }
-// fine slice; returns 0 if abandoned because the window stopped at an iteration < kneed
-static int fine(const el Ein, el Eout, int kneed, atomic_int* stp){
+// fine slice; returns 0 if abandoned because the window stopped at an iteration < kneed (abort: its fine_abort flag)
+static int fine(const el Ein, el Eout, int kneed, atomic_int* stp, volatile sig_atomic_t* abort){
     struct reb_simulation* s=fine_sim(Ein);
     struct reb_integrator_whfast512_state* w=s->integrator.state;
+    w->interrupt=abort;
     const int nch = (nchunk>1 && nst%nchunk==0) ? nchunk : 1;
     w->concatenate_steps=nst/nch;
     for (int q=0;q<nch;q++){
         const int st=atomic_load(stp);
         if (nch>1 && st>=0 && st<kneed){ reb_simulation_free(s); return 0; }
         reb_simulation_steps(s,1);
+        if (*abort){ reb_simulation_free(s); return 0; }     // the window has stopped: result not needed
         if (s->status!=REB_STATUS_RUNNING && s->status!=REB_STATUS_SUCCESS) atomic_store(&fine_interrupted,1);
     }
     reb_mep_sim_to_el(s,Eout); reb_simulation_free(s);
@@ -186,7 +192,7 @@ static void cal_reset(int p);
 static void window_init(int p){
     for (int k=0;k<=KMAX;k++){ memcpy(U[p][k][0],Ecur,sizeof(el)); upd_max[p][k]=0; for (int n=0;n<=N;n++){ sem_destroy(&ready[p][k][n]); sem_init(&ready[p][k][n],0,0); } }
     sem_destroy(&win_done[p]); sem_init(&win_done[p],0,0);
-    atomic_store(&stop_at[p],-1);
+    atomic_store(&stop_at[p],-1); fine_abort[p]=0;
     cal_reset(p);
 }
 
@@ -390,6 +396,7 @@ static void* slice_thread(void* arg){
                     atomic_store(&W_eff,Wnext);
                     // every thread has entered this window, so none uses the other parity's state any more
                     if (w+1<Wnext) window_init(p^1);
+                    fine_abort[p]=1;                      // stop the speculative fine solves of this window
                     atomic_store(stp,k);
                     for (int q=0;q<N;q++) sem_post(&win_done[p]);
                     for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&rdy[kk][q]);   // release waiting threads
@@ -399,7 +406,7 @@ static void* slice_thread(void* arg){
             // fine slice for the next iteration (speculative: abandoned if the window stops)
             have_F=0;
             if (k<kend && n>=k){
-                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp)){
+                if (fine((const double (*)[6])Up[k][n],Fprev,k+1,stp,&fine_abort[p])){
                     if (have_U){ EUprev=EU; memcpy(LUprev,LU,sizeof LU); } else EL_el(CEL(Up[k][n]),&EUprev,LUprev);
                     EL_el(CEL(Fprev),&EFprev,LFprev); have_F=1;
                 }

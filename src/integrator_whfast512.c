@@ -422,45 +422,46 @@ static void jacobi_to_inertial_posvel_and_com(struct reb_simulation* r, struct s
 
 static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb_integrator_whfast512_state* whfast512, uint64_t* N_steps, int skip){
     struct simd_data* data = whfast512->data;
+    volatile sig_atomic_t* const sig = whfast512->interrupt ? whfast512->interrupt : &reb_sigint;
     const int encounter = r->exit_min_distance ? 1 : 0;
     const int escape = r->exit_max_distance ? 1 : 0;
     if (whfast512->compensated){
         switch (whfast512->kernel_used){
             case REB_WHFAST512_KERNEL_C_AVX512:
-                return reb_whfast512c_full_steps_comp_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                return reb_whfast512c_full_steps_comp_avx512(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             case REB_WHFAST512_KERNEL_C_AVX2:
                 if (whfast512->four_lanes){
-                    return reb_whfast512c_full_steps_comp_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                    return reb_whfast512c_full_steps_comp_avx2x4(data, N_steps, skip, sig, whfast512->gr_potential, 2, encounter, escape);
                 }
                 if (whfast512_avx2vl()){
-                    return reb_whfast512c_full_steps_comp_avx2vl(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                    return reb_whfast512c_full_steps_comp_avx2vl(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
                 }
-                return reb_whfast512c_full_steps_comp_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                return reb_whfast512c_full_steps_comp_avx2(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             case REB_WHFAST512_KERNEL_C_GENERIC:
                 if (whfast512->four_lanes){
-                    return reb_whfast512c_full_steps_comp_genericx4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                    return reb_whfast512c_full_steps_comp_genericx4(data, N_steps, skip, sig, whfast512->gr_potential, 2, encounter, escape);
                 }
-                return reb_whfast512c_full_steps_comp_generic(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                return reb_whfast512c_full_steps_comp_generic(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             default:
                 return 1; // REB_STATUS_GENERIC_ERROR (not reached: whfast512_select_kernel refuses the assembly kernel)
         }
     }
     switch (whfast512->kernel_used){
         case REB_WHFAST512_KERNEL_C_AVX512:
-            return reb_whfast512c_full_steps_avx512(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            return reb_whfast512c_full_steps_avx512(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         case REB_WHFAST512_KERNEL_C_AVX2:
             if (whfast512->four_lanes){
-                return reb_whfast512c_full_steps_avx2x4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                return reb_whfast512c_full_steps_avx2x4(data, N_steps, skip, sig, whfast512->gr_potential, 2, encounter, escape);
             }
             if (whfast512_avx2vl()){
-                return reb_whfast512c_full_steps_avx2vl(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+                return reb_whfast512c_full_steps_avx2vl(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
             }
-            return reb_whfast512c_full_steps_avx2(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            return reb_whfast512c_full_steps_avx2(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         case REB_WHFAST512_KERNEL_C_GENERIC:
             if (whfast512->four_lanes){
-                return reb_whfast512c_full_steps_genericx4(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, 2, encounter, escape);
+                return reb_whfast512c_full_steps_genericx4(data, N_steps, skip, sig, whfast512->gr_potential, 2, encounter, escape);
             }
-            return reb_whfast512c_full_steps_generic(data, N_steps, skip, &reb_sigint, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
+            return reb_whfast512c_full_steps_generic(data, N_steps, skip, sig, whfast512->gr_potential, whfast512->N_systems, encounter, escape);
         default:
             break;
     }
@@ -469,15 +470,15 @@ static enum REB_STATUS whfast512_full_steps(struct reb_simulation* r, struct reb
 #define MACRO_5(encounter,escape) \
     if (whfast512->gr_potential){\
         switch (whfast512->N_systems){\
-            case 2: return reb_whfast512_full_steps_gr1_n2_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
-            case 4: return reb_whfast512_full_steps_gr1_n4_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
-            default: return reb_whfast512_full_steps_gr1_n1_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
+            case 2: return reb_whfast512_full_steps_gr1_n2_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
+            case 4: return reb_whfast512_full_steps_gr1_n4_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
+            default: return reb_whfast512_full_steps_gr1_n1_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
         }\
     }else{\
         switch (whfast512->N_systems){\
-            case 2: return reb_whfast512_full_steps_gr0_n2_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
-            case 4: return reb_whfast512_full_steps_gr0_n4_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
-            default: return reb_whfast512_full_steps_gr0_n1_encounter##encounter##_escape##escape(data, N_steps, skip, &reb_sigint); break;\
+            case 2: return reb_whfast512_full_steps_gr0_n2_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
+            case 4: return reb_whfast512_full_steps_gr0_n4_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
+            default: return reb_whfast512_full_steps_gr0_n1_encounter##encounter##_escape##escape(data, N_steps, skip, sig); break;\
         }\
     }
     if (encounter){

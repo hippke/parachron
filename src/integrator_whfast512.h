@@ -24,6 +24,7 @@
 #ifndef _INTEGRATOR_WHFAST512_H
 #define _INTEGRATOR_WHFAST512_H
 
+#include <signal.h>
 #include "rebound.h"
 
 extern const struct reb_integrator reb_integrator_whfast512;
@@ -48,6 +49,9 @@ struct reb_integrator_whfast512_state {
     size_t cache_N, cache_N_allocated;
     unsigned int cache_N_systems;
     double cache_dt, cache_exit_max, cache_exit_min;
+    // Internal: flag that the kernel checks after every step and stops at when nonzero (status SIGINT, the steps done
+    // so far kept); NULL (default): the global Ctrl-C flag. MEP uses it to stop abandoned speculative fine solves.
+    volatile sig_atomic_t* interrupt;
 };
 
 #endif
