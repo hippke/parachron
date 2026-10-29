@@ -25,6 +25,8 @@ idle fraction of the cores used.
 | `novl` | kernel 3 without its AVX-512VL build (plain AVX2 encoding, 16 registers), for comparison |
 | `horner` | C kernels with the Stiefel series by plain Horner instead of Estrin's scheme (`-DREB_W512_STIEFEL_HORNER`; the default before Oct 29, 2026) |
 | `knewton` | C kernels with the Kepler solver by Halley and Newton steps instead of the fifth-order reversion step (`-DREB_W512_KEPLER_NEWTON`; the default before Oct 29, 2026) |
+| `mat8` | C kernels with the 8x8 matrix products for the Jacobi transformations of the interaction step instead of the scans over the lanes (`-DREB_W512_MAT8`; the default before Oct 29, 2026) |
+| `mix5` | C kernels with the Newton 1/sqrt in planet-pair blocks 1 and 3 and sqrt + division elsewhere (`-DREB_W512_RSQRT_MIX=5`; balances divider and FMA pipes) |
 | `hwrsqrt` | Newton 1/sqrt with the hardware estimate as seed (`-DREB_W512_HW_RSQRT`) |
 | `newton` | C kernels with the earlier Newton 1/sqrt from a bit-trick seed (`-DREB_W512_NEWTON_RSQRT`; faster on Intel Sapphire Rapids) |
 | `native` | the default compiled with `-march=native` (compiler tuning for this CPU) |

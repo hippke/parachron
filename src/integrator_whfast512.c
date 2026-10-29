@@ -243,6 +243,7 @@ static int whfast512_avx2vl(void){
 
 // Returns 1 on AMD Zen 4 (family 0x19 with AVX-512), which executes 512-bit instructions in two 256-bit halves: there
 // the AVX2 kernel (with its AVX-512VL build) is faster than the AVX-512 one. Speed only: the C kernels give the same bits.
+#ifdef REB_W512_MAT8
 static int whfast512_prefer_256bit(void){
 #if (defined(__i386__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__))
     unsigned int a, b, c, d;
@@ -256,6 +257,7 @@ static int whfast512_prefer_256bit(void){
     return 0;
 #endif
 }
+#endif
 
 static const char* whfast512_kernel_name(unsigned int k){
     switch (k){
@@ -299,8 +301,11 @@ static unsigned int whfast512_select_kernel(struct reb_simulation* r, unsigned i
         // one system with at most four planets: the four-lane AVX2 kernel
         if (avx2 && (!w || w->N_systems == 1) && r->N <= 5) return REB_WHFAST512_KERNEL_C_AVX2;
         if (whfast512_kernel_available(REB_WHFAST512_KERNEL_C_AVX512)){
-            // Zen 4: the 256-bit kernel in its AVX-512VL build
+#ifdef REB_W512_MAT8
+            // Zen 4 with the matrix products in the interaction step: the 256-bit kernel in its AVX-512VL build
+            // (with the default scans the AVX-512 kernel is faster there too: 96 vs 107 ns per step).
             if (avx2 && whfast512_avx2vl() && whfast512_prefer_256bit()) return REB_WHFAST512_KERNEL_C_AVX2;
+#endif
             return REB_WHFAST512_KERNEL_C_AVX512;
         }
         if (avx2) return REB_WHFAST512_KERNEL_C_AVX2;
@@ -723,6 +728,18 @@ static void recalculate_constants_compute(struct reb_simulation* r, unsigned int
 
     w512_movu_pd(&data->M, &M);
     w512_movu_pd(&data->M0, &M0); //  = particles[0].m 
+    double scan_w[8] = {0.0};
+    double scan_c[8] = {0.0};
+    for (unsigned int s=0; s<N_systems; s++){
+        double eta = particles[s*N_per_system].m;
+        for (unsigned int i=1; i<N_per_system; i++){
+            scan_c[s*p_per_system+i-1] = 1.0/eta;
+            eta += particles[s*N_per_system+i].m;
+            scan_w[s*p_per_system+i-1] = particles[s*N_per_system+i].m/eta;
+        }
+    }
+    w512_movu_pd(&data->scan_w, &scan_w);
+    w512_movu_pd(&data->scan_c, &scan_c);
 
     // GR prefactors. Note: assumes units of AU, year/2pi.
     double c = 10065.32;

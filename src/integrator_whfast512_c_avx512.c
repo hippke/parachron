@@ -96,6 +96,11 @@ W_INL V w_perm_3201(V a){ return _mm512_permutex_pd(a, 0x4B); }
 W_INL V w_perm_2310(V a){ return _mm512_permutex_pd(a, 0x1E); }
 W_INL V w_perm_3012(V a){ return _mm512_permutex_pd(a, 0x93); }
 W_INL V w_swap_pairs(V a){ return _mm512_permute_pd(a, 0x55); }
+// Lanes shifted up (lane i gets lane i-s) or down (lane i gets lane i+s), zeros shifted in; s = 1, 2 or 4.
+W_INL V w_shup(V a, int s){ const __m512i z = _mm512_setzero_si512(), b = _mm512_castpd_si512(a);
+    return _mm512_castsi512_pd(s == 1 ? _mm512_alignr_epi64(b, z, 7) : s == 2 ? _mm512_alignr_epi64(b, z, 6) : _mm512_alignr_epi64(b, z, 4)); }
+W_INL V w_shdn(V a, int s){ const __m512i z = _mm512_setzero_si512(), b = _mm512_castpd_si512(a);
+    return _mm512_castsi512_pd(s == 1 ? _mm512_alignr_epi64(z, b, 1) : s == 2 ? _mm512_alignr_epi64(z, b, 2) : _mm512_alignr_epi64(z, b, 4)); }
 W_INL V w_perm_b3(V a){ return _mm512_permutexvar_pd(_mm512_set_epi64(0,3,2,1,7,6,5,4), a); }
 W_INL V w_perm_b4(V a){ return _mm512_permutexvar_pd(_mm512_set_epi64(1,0,3,2,4,7,6,5), a); }
 W_INL V w_perm_b34(V a){ return _mm512_permutexvar_pd(_mm512_set_epi64(3,2,1,0,6,5,4,7), a); }

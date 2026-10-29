@@ -101,6 +101,9 @@ W_INL V w_perm_3201(V a){ return w_permute(a, w_idx_3201); }
 W_INL V w_perm_2310(V a){ return w_permute(a, w_idx_2310); }
 W_INL V w_perm_3012(V a){ return w_permute(a, w_idx_3012); }
 W_INL V w_swap_pairs(V a){ return w_permute(a, w_idx_swap); }
+// Lanes shifted up (lane i gets lane i-s) or down (lane i gets lane i+s), zeros shifted in; s = 1, 2 or 4.
+W_INL V w_shup(V a, int s){ V r; W_LOOP r.v[i] = i >= s ? a.v[i-s] : 0.0; return r; }
+W_INL V w_shdn(V a, int s){ V r; W_LOOP r.v[i] = i+s < 4 ? a.v[i+s] : 0.0; return r; }
 // Only used by the N_systems = 1 code path with more than four planets (never run here).
 W_INL V w_perm_b3(V a){ return a; }
 W_INL V w_perm_b4(V a){ return a; }

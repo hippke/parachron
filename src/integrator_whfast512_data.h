@@ -70,6 +70,9 @@ struct simd_data{
 #ifdef DEBUG_AVX512
     REB_ATTRIBUTE_ALIGNED_64 uint64_t counter[8];
 #endif // DEBUG_AVX512
+    // C kernels: the Jacobi transformations of the interaction step as scans over the lanes (see w512_scan_).
+    REB_ATTRIBUTE_ALIGNED_64 reb_simd8d scan_w;     // m_i/eta_i, eta_i = mass of the star and planets 1..i
+    REB_ATTRIBUTE_ALIGNED_64 reb_simd8d scan_c;     // 1/eta_(i-1)
 };
 
 // Kernels. Values of reb_integrator_whfast512_state.kernel.

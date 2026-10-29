@@ -124,6 +124,30 @@ W_INL V w_perm_3201(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x4B), _mm256
 W_INL V w_perm_2310(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x1E), _mm256_permute4x64_pd(a.h, 0x1E)); }
 W_INL V w_perm_3012(V a){ return w_make(_mm256_permute4x64_pd(a.l, 0x93), _mm256_permute4x64_pd(a.h, 0x93)); }
 W_INL V w_swap_pairs(V a){ return w_make(_mm256_permute_pd(a.l, 0x5), _mm256_permute_pd(a.h, 0x5)); }
+// Lanes shifted up (lane i gets lane i-s) or down (lane i gets lane i+s), zeros shifted in; s = 1, 2 or 4.
+#ifdef REB_W512_AVX2_VL
+// AVX-512VL: valignq on the 256-bit halves, one instruction per half.
+#define W_ALIGN(hi, lo, k) _mm256_castsi256_pd(_mm256_alignr_epi64(_mm256_castpd_si256(hi), _mm256_castpd_si256(lo), k))
+W_INL V w_shup(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    if (s == 4) return w_make(z, a.l);
+    if (s == 2) return w_make(W_ALIGN(a.l, z, 2), W_ALIGN(a.h, a.l, 2));
+    return w_make(W_ALIGN(a.l, z, 3), W_ALIGN(a.h, a.l, 3)); }
+W_INL V w_shdn(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    if (s == 4) return w_make(a.h, z);
+    if (s == 2) return w_make(W_ALIGN(a.h, a.l, 2), W_ALIGN(z, a.h, 2));
+    return w_make(W_ALIGN(a.h, a.l, 1), W_ALIGN(z, a.h, 1)); }
+#else
+W_INL V w_shup(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    if (s == 4) return w_make(z, a.l);
+    if (s == 2) return w_make(_mm256_permute2f128_pd(a.l, a.l, 0x08), _mm256_permute2f128_pd(a.l, a.h, 0x21));
+    return w_make(_mm256_blend_pd(_mm256_permute4x64_pd(a.l, 0x90), z, 0x1),                          // (0,l0,l1,l2)
+                  _mm256_blend_pd(_mm256_permute4x64_pd(a.h, 0x90), _mm256_permute4x64_pd(a.l, 0xFF), 0x1)); }  // (l3,h0,h1,h2)
+W_INL V w_shdn(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    if (s == 4) return w_make(a.h, z);
+    if (s == 2) return w_make(_mm256_permute2f128_pd(a.l, a.h, 0x21), _mm256_permute2f128_pd(a.h, a.h, 0x81));
+    return w_make(_mm256_blend_pd(_mm256_permute4x64_pd(a.l, 0xF9), _mm256_permute4x64_pd(a.h, 0x00), 0x8),  // (l1,l2,l3,h0)
+                  _mm256_blend_pd(_mm256_permute4x64_pd(a.h, 0xF9), z, 0x8)); }                          // (h1,h2,h3,0)
+#endif
 // Across the two halves.
 W_INL V w_perm_b3(V a){ return w_make(a.h, _mm256_permute4x64_pd(a.l, 0x39)); }                          // 4567 1230
 W_INL V w_perm_b4(V a){ return w_make(_mm256_permute4x64_pd(a.h, 0x39), _mm256_permute4x64_pd(a.l, 0x4E)); } // 5674 2301

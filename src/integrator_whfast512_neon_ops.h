@@ -87,6 +87,15 @@ W_INL V w_perm_3201(V a){ V r; for (int g=0; g<W_Q; g+=2){ r.q[g] = w_q_rev(a.q[
 W_INL V w_perm_2310(V a){ V r; for (int g=0; g<W_Q; g+=2){ r.q[g] = a.q[g+1]; r.q[g+1] = w_q_rev(a.q[g]); } return r; }
 W_INL V w_perm_3012(V a){ V r; for (int g=0; g<W_Q; g+=2){ r.q[g] = w_q_ext(a.q[g+1], a.q[g]); r.q[g+1] = w_q_ext(a.q[g], a.q[g+1]); } return r; }
 W_INL V w_swap_pairs(V a){ V r; W_QLOOP r.q[m] = w_q_rev(a.q[m]); return r; }
+// Lanes shifted up (lane i gets lane i-s) or down (lane i gets lane i+s), zeros shifted in; s = 1, 2 or 4.
+W_INL V w_shup(V a, int s){ V r; const float64x2_t z = vdupq_n_f64(0.0);
+    if (s == 1){ W_QLOOP r.q[m] = w_q_ext(m > 0 ? a.q[m-1] : z, a.q[m]); }
+    else { const int k = s/2; W_QLOOP r.q[m] = m >= k ? a.q[m-k] : z; }
+    return r; }
+W_INL V w_shdn(V a, int s){ V r; const float64x2_t z = vdupq_n_f64(0.0);
+    if (s == 1){ W_QLOOP r.q[m] = w_q_ext(a.q[m], m+1 < W_Q ? a.q[m+1] : z); }
+    else { const int k = s/2; W_QLOOP r.q[m] = m+k < W_Q ? a.q[m+k] : z; }
+    return r; }
 #if W_Q == 4
 // Across the two halves (lane maps as in the AVX-512 kernel):
 // b3 -> (a4,a5,a6,a7,a1,a2,a3,a0), b4 -> (a5,a6,a7,a4,a2,a3,a0,a1), b34 -> (a7,a4,a5,a6,a0,a1,a2,a3).

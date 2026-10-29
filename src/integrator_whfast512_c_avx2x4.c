@@ -89,6 +89,11 @@ W_INL V w_perm_3201(V a){ return _mm256_permute4x64_pd(a, 0x4B); }
 W_INL V w_perm_2310(V a){ return _mm256_permute4x64_pd(a, 0x1E); }
 W_INL V w_perm_3012(V a){ return _mm256_permute4x64_pd(a, 0x93); }
 W_INL V w_swap_pairs(V a){ return _mm256_permute_pd(a, 0x5); }
+// Lanes shifted up (lane i gets lane i-s) or down (lane i gets lane i+s), zeros shifted in; s = 1, 2 or 4.
+W_INL V w_shup(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    return s >= 4 ? z : s == 2 ? _mm256_permute2f128_pd(a, a, 0x08) : _mm256_blend_pd(_mm256_permute4x64_pd(a, 0x90), z, 0x1); }
+W_INL V w_shdn(V a, int s){ const __m256d z = _mm256_setzero_pd();
+    return s >= 4 ? z : s == 2 ? _mm256_permute2f128_pd(a, a, 0x81) : _mm256_blend_pd(_mm256_permute4x64_pd(a, 0xF9), z, 0x8); }
 // Only used by the N_systems = 1 code path with more than four planets, which this
 // instantiation never runs (W_ONLY_NSYS2).
 W_INL V w_perm_b3(V a){ return a; }

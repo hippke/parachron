@@ -622,7 +622,6 @@ REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_comp_)(const W512_CONSTS*
 #if defined(REB_W512_HW_RSQRT) && !defined(REB_W512_NEWTON_RSQRT)
 #define REB_W512_NEWTON_RSQRT
 #endif
-#ifdef REB_W512_NEWTON_RSQRT
 #ifndef W512_RSQRT_NR
 #define W512_RSQRT_NR 3
 #endif
@@ -635,10 +634,17 @@ REB_W512_INLINE V REB_W512_NAME(w512_rsqrt_)(const V a, const V half_a){
     const V e = w_fnmadd(w_mul(a, y), y, w_set1(1.0));   // 1 - a*y^2
     return w_fmadd(w_mul(w_set1(0.5), y), e, y);
 }
+#ifdef REB_W512_NEWTON_RSQRT
 #define W512_RSQRT(a) REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a)))
 #else
 #define W512_RSQRT(a) w_div(w_set1(1.0), w_sqrt(a))
 #endif
+// Per call site (bit k of REB_W512_RSQRT_MIX: 0-3 the four planet-pair blocks, 4 the Jacobi term, 5 the central body):
+// the Newton form instead of the default, so that square roots and divisions do not all queue on the divider.
+#ifndef REB_W512_RSQRT_MIX
+#define REB_W512_RSQRT_MIX 0
+#endif
+#define W512_RSQRT_SITE(a, k) ((((REB_W512_RSQRT_MIX) >> (k)) & 1) ? REB_W512_NAME(w512_rsqrt_)((a), w_mul(w_set1(0.5), (a))) : W512_RSQRT(a))
 
 // 8x8 matrix (stored transposed: element (i,k) at mat[i+8k]) times three vectors (mat8_mul3).
 REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a, const V b, const V cc, V* oa, V* ob, V* oc){
@@ -671,10 +677,25 @@ REB_W512_INLINE void REB_W512_NAME(w512_mat8_mul3_)(const double* mat, const V a
     *oc = w_add(o2, t2);
 }
 
+// Sums over the lanes of each system (p = lanes per system: 8, 4 or 2), by doubling steps:
+// up = 1: inclusive prefix sums (lane i: lanes 0..i of its system); up = 0: inclusive suffix sums (lanes i..p-1).
+REB_W512_INLINE V REB_W512_NAME(w512_scan_)(V t, const int p, const int up){
+    for (int sh=1; sh<p; sh*=2){
+        V u = up ? w_shup(t, sh) : w_shdn(t, sh);
+        if (p < W_LANES){   // several systems: nothing from the neighbouring system
+            unsigned int b = 0;
+            for (int l=0; l<W_LANES; l++){ const int q = l % p; if (up ? q >= sh : q < p - sh) b |= 1u << l; }
+            u = w_maskz(w_kbits(b), u);
+        }
+        t = w_add(t, u);
+    }
+    return t;
+}
+
 // multiplier/r^3 for separations (d0, d1, d2); with_mult=0 means multiplier 1.
-REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, const V d0, const V d1, const V d2, const int with_mult, const V mult, const int encounter, int* status){
+REB_W512_INLINE V REB_W512_NAME(w512_gravity_prefactor_)(const W512_CONSTS* c, const V d0, const V d1, const V d2, const int with_mult, const V mult, const int encounter, int* status, const int site){
     const V r2 = w_fmadd(d2, d2, w_fmadd(d1, d1, w_mul(d0, d0)));
-    const V y = W512_RSQRT(r2);
+    const V y = W512_RSQRT_SITE(r2, site);
     if (encounter){
         if (w_kany(w_kand(w_kgt(y, w_load(c->data->exit_min_distance_r.lanes)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
     }
@@ -693,7 +714,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
     V JTX = w_zero(), JTY = w_zero(), JTZ = w_zero();    // comp: the Jacobi-term kick, added with the interaction kick
     {
         const V r2 = w_fmadd(s->Z, s->Z, w_fmadd(s->Y, s->Y, w_mul(s->X, s->X)));
-        const V y = W512_RSQRT(r2);
+        const V y = W512_RSQRT_SITE(r2, 4);
         const V a = w_mul(w_mul(c->DT, c->M), w_mul(w_mul(y, y), y));    // dt*M/r^3
         if (comp){
             JTX = w_maskz(c->k1, w_mul(a, s->X));
@@ -706,7 +727,22 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
         }
     }
     V HX, HY, HZ;
+    // Jacobi to heliocentric: h_i = x_i + sum_(j<i) (m_j/eta_j) x_j (Jacobi x), a prefix sum over the lanes; the same
+    // as the matrix data->mat8_jacobi_to_heliocentric up to rounding, with 3 shifts instead of 8 broadcasts per vector
+    // (REB_W512_MAT8: the matrix).
+    const int psys = 8/nsys < W_LANES ? 8/nsys : W_LANES;
+#ifdef REB_W512_MAT8
     REB_W512_NAME(w512_mat8_mul3_)(data->mat8_jacobi_to_heliocentric, s->X, s->Y, s->Z, &HX, &HY, &HZ);
+    (void)psys;
+#else
+    {
+        const V w = w_load(data->scan_w.lanes);
+        const V tx = w_mul(s->X, w), ty = w_mul(s->Y, w), tz = w_mul(s->Z, w);
+        HX = w_maskz(c->k1, w_add(w_sub(s->X, tx), REB_W512_NAME(w512_scan_)(tx, psys, 1)));
+        HY = w_maskz(c->k1, w_add(w_sub(s->Y, ty), REB_W512_NAME(w512_scan_)(ty, psys, 1)));
+        HZ = w_maskz(c->k1, w_add(w_sub(s->Z, tz), REB_W512_NAME(w512_scan_)(tz, psys, 1)));
+    }
+#endif
 
     const V hr2 = w_fmadd(HZ, HZ, w_fmadd(HY, HY, w_mul(HX, HX)));
     if (escape){
@@ -718,7 +754,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
         if (w_kany(w_kand(w_klt(hr2, w_mul(dmin, dmin)), c->k1))) *status = 3; // REB_STATUS_ENCOUNTER
     }
     // Central-body term in heliocentric coordinates.
-    const V yh = W512_RSQRT(hr2);
+    const V yh = W512_RSQRT_SITE(hr2, 5);
     const V yh2 = w_mul(yh, yh);
     const V j = w_maskz(c->k1, w_mul(c->MM0_DT, w_mul(yh2, yh)));   // -m0*dt/r^3
     V HVX = w_mul(HX, j);
@@ -740,7 +776,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
         const V d0 = w_sub(HX, w_perm_3201(HX));
         const V d1 = w_sub(HY, w_perm_3201(HY));
         const V d2 = w_sub(HZ, w_perm_3201(HZ));
-        const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status);
+        const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status, 0);
         const V w = w_mul(w_perm_3201(dm), pf);
         HVX = w_fnmadd(d0, w, HVX);
         HVY = w_fnmadd(d1, w, HVY);
@@ -754,7 +790,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
         const V d0 = w_sub(HX, w_swap_pairs(HX));
         const V d1 = w_sub(HY, w_swap_pairs(HY));
         const V d2 = w_sub(HZ, w_swap_pairs(HZ));
-        const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 1, w_swap_pairs(dm), encounter, status);
+        const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 1, w_swap_pairs(dm), encounter, status, 1);
         HVX = w_fnmadd(d0, pf, HVX);
         HVY = w_fnmadd(d1, pf, HVY);
         HVZ = w_fnmadd(d2, pf, HVZ);
@@ -766,7 +802,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
             const V d0 = w_sub(HX, w_perm_b3(HX));
             const V d1 = w_sub(HY, w_perm_b3(HY));
             const V d2 = w_sub(HZ, w_perm_b3(HZ));
-            const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status);
+            const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status, 2);
             const V w = w_mul(w_perm_b3(dm), pf);
             HVX = w_fnmadd(d0, w, HVX);
             HVY = w_fnmadd(d1, w, HVY);
@@ -780,7 +816,7 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
             const V d0 = w_sub(HX, w_perm_b4(HX));
             const V d1 = w_sub(HY, w_perm_b4(HY));
             const V d2 = w_sub(HZ, w_perm_b4(HZ));
-            const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status);
+            const V pf = REB_W512_NAME(w512_gravity_prefactor_)(c, d0, d1, d2, 0, one, encounter, status, 3);
             const V w = w_mul(w_perm_b4(dm), pf);
             HVX = w_fnmadd(d0, w, HVX);
             HVY = w_fnmadd(d1, w, HVY);
@@ -800,7 +836,16 @@ REB_W512_INLINE void REB_W512_NAME(w512_interaction_core_)(const W512_CONSTS* c,
     }
     // Velocity kicks from heliocentric to Jacobi.
     V J0, J1, J2;
+#ifdef REB_W512_MAT8
     REB_W512_NAME(w512_mat8_mul3_)(data->mat8_inertial_to_jacobi, A0, A1, A2, &J0, &J1, &J2);
+#else
+    {   // J_i = A_i + (1/eta_(i-1)) sum_(j>=i) m_j A_j: a suffix sum over the lanes (data->mat8_inertial_to_jacobi)
+        const V m = w_load(data->m.lanes), cinv = w_load(data->scan_c.lanes);
+        J0 = w_fmadd(cinv, REB_W512_NAME(w512_scan_)(w_mul(A0, m), psys, 0), A0);
+        J1 = w_fmadd(cinv, REB_W512_NAME(w512_scan_)(w_mul(A1, m), psys, 0), A1);
+        J2 = w_fmadd(cinv, REB_W512_NAME(w512_scan_)(w_mul(A2, m), psys, 0), A2);
+    }
+#endif
     if (comp){
         REB_W512_NAME(w512_add_comp_)(&s->VX, &s->CVX, w_add(J0, JTX));
         REB_W512_NAME(w512_add_comp_)(&s->VY, &s->CVY, w_add(J1, JTY));
