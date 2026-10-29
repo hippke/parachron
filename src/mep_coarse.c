@@ -160,10 +160,38 @@ MEP_CLONES static void fft1(double complex* a, int n, int s){
     }
     for (int i=0;i<n;i++) a[i*s]=t[i];
 }
-// 2-D FFT of an n1 x n2 array (row-major, rows of length n2)
+// m-point FFTs (as fft1) of the n columns of the m x n complex array a (row-major): the butterflies of fft1 for every
+// column, vectorised across the columns (bitwise identical to fft1 on each column)
+MEP_CLONES static void fft_cols(double complex* a, int m, int n){
+    pthread_once(&tw_once, tw_init);
+    for (int i=0,j=0;i<m;i++){
+        if (i<j) for (int c=0;c<n;c++){ const double complex x=a[i*n+c]; a[i*n+c]=a[j*n+c]; a[j*n+c]=x; }
+        int bit=m>>1; for (; j&bit; bit>>=1) j^=bit; j^=bit;
+    }
+    for (int len=2; len<=m; len<<=1){
+        const int h=len/2, step=m/len;
+        for (int i=0;i<m;i+=len){
+            for (int j=0;j<h;j++){
+                double* restrict p=(double*)(a+(i+j)*n); double* restrict q=(double*)(a+(i+j+h)*n);
+                const double wr=creal(tw[m][j*step]), wi=cimag(tw[m][j*step]);
+                for (int c=0;c<n;c++){
+                    const double xr=q[2*c], xi=q[2*c+1], vr=xr*wr-xi*wi, vi=xr*wi+xi*wr;
+                    const double ur=p[2*c], ui=p[2*c+1];
+                    p[2*c]=ur+vr; p[2*c+1]=ui+vi; q[2*c]=ur-vr; q[2*c+1]=ui-vi;
+                }
+            }
+        }
+    }
+}
+// 2-D FFT of an n1 x n2 array (row-major, rows of length n2): the n1 row transforms, then the n2 column transforms
+// (the rows as the columns of the transposed array)
 MEP_CLONES static void fft2(double complex* a, int n1, int n2){
-    for (int r=0;r<n1;r++) fft1(a+r*n2,n2,1);
-    for (int c=0;c<n2;c++) fft1(a+c,n1,n2);
+    static __thread double complex* T=NULL; static __thread int tn=0;
+    if (n1*n2>tn){ free(T); tn=n1*n2; T=malloc(sizeof(double complex)*tn); }
+    for (int r=0;r<n1;r++) for (int c=0;c<n2;c++) T[c*n1+r]=a[r*n2+c];
+    fft_cols(T,n2,n1);
+    for (int r=0;r<n1;r++) for (int c=0;c<n2;c++) a[r*n2+c]=T[c*n1+r];
+    fft_cols(a,n1,n2);
 }
 static inline int kf(int a, int n){ return a<n/2 ? a : a-n; }   // numpy fftfreq(n, 1/n)
 // short-period displacements of ln a for the two real grids packed in Z = fft2(fa + i fb) (unnormalised, n1 x n2
