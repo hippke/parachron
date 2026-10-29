@@ -422,9 +422,11 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     for (int h=0; h<2; h++){
         if (h==0 && !w_kany(w_kand(need_first, c->k1))) continue;   // every occupied lane has the series start (empty lanes are masked out)
         REB_W512_NAME(w512_stiefel_Gs03_)(h==0 ? 9 : 11, XX, beta, &G0, &G1, &G2, &G3);
-        V f = w_fmsub(zeta, G3, c->DT);
+        // f summed in the order its terms become available (as in the Newton step): r X - dt right away,
+        // G2 one multiplication before G3, so a single FMA follows G3 on the critical path instead of three.
+        V f = w_fmsub(R, XX, c->DT);
         f = w_fmadd(eta, G2, f);
-        f = w_fmadd(R, XX, f);
+        f = w_fmadd(zeta, G3, f);
         V fp = w_fmadd(G2, zeta, R);
         fp = w_fmadd(G1, eta, fp);
         const V fpp = w_fmadd(G1, zeta, w_mul(eta, G0));
