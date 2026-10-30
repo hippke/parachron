@@ -151,6 +151,49 @@ class TestMEP(unittest.TestCase):
         off.integrate(8 * off.window_length)
         self.assertNotEqual(a.state, off.state)
 
+    def test_checkpoint_version3(self):
+        # a checkpoint of format version 3 (no option partial) is read and continues with whole windows
+        import struct, ctypes
+        f4 = os.path.join(self.dir.name, "v4.mep")
+        f3 = os.path.join(self.dir.name, "v3.mep")
+        a = parachron.MEP(solar_system(), checkpoint=f4, **self.kw)
+        a.integrate(4 * a.window_length)
+        raw = open(f4, "rb").read()
+        nopt_v4 = ctypes.sizeof(parachron.MEPOptions)
+        nopt_v3 = parachron.MEPOptions.partial.offset
+        head, opt, rest = raw[:36], raw[36:36 + nopt_v4], raw[36 + nopt_v4:]
+        open(f3, "wb").write(head[:32] + struct.pack("<i", 3) + opt[:nopt_v3] + rest)
+        c = parachron.MEP.from_checkpoint(f3)
+        self.assertEqual(c._p.contents.opt.partial, 0)
+        a.integrate(6 * a.window_length)
+        c.integrate(6 * c.window_length)
+        self.assertEqual(a.state, c.state)
+
+    def test_partial_windows(self):
+        # partial windows: resume is bitwise, windows end at slice boundaries, the heartbeat sees the accepted slices
+        kw = dict(self.kw, cores=8, partial=3, slice_steps=20000, tol=1e-7)   # several windows end early here
+        fa = os.path.join(self.dir.name, "pa.mep")
+        fb = os.path.join(self.dir.name, "pb.mep")
+        a = parachron.MEP(solar_system(), checkpoint=fa, **kw)
+        counts = []
+        a.heartbeat = lambda m: counts.append(len(m.boundaries))
+        a.integrate(12 * a.window_length)
+        Ts = a.window_length / 8
+        self.assertLessEqual(a.t, 12 * a.window_length * (1 + 1e-12))
+        self.assertGreater(a.t, 11 * a.window_length)
+        self.assertAlmostEqual(a.t / Ts, round(a.t / Ts), delta=1e-6)
+        self.assertEqual(sum(counts) * Ts, a.t)
+        self.assertTrue(all(5 <= n <= 8 for n in counts))
+        self.assertTrue(any(n < 8 for n in counts))
+        b = parachron.MEP(solar_system(), checkpoint=fb, **kw)
+        b.integrate(5 * b.window_length)
+        del b
+        c = parachron.MEP.from_checkpoint(fb)
+        self.assertEqual(c._p.contents.opt.partial, 3)
+        c.integrate(12 * c.window_length)
+        self.assertEqual(a.state, c.state)
+        self.assertEqual(a.t, c.t)
+
     def test_heartbeat(self):
         # one call with a heartbeat after every window gives the same states as one call per window
         a = parachron.MEP(solar_system(), **self.kw)

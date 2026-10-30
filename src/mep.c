@@ -73,6 +73,9 @@ static el U[2][KMAX+1][NMAX+1];             // boundary states per window parity
 static sem_t ready[2][KMAX+1][NMAX+1], win_start[2], win_done[2];
 static atomic_int stop_at[2];               // iteration at which the window stopped (-1: running)
 static double upd_max[2][KMAX+1];
+static double upd_b[2][KMAX+1][NMAX+1];     // update norm of every boundary (partial windows)
+static int64_t tot_slices;                  // accepted slices since the start of the run (window ends = slice boundaries)
+static double tmax_run;
 static pthread_mutex_t upd_mx=PTHREAD_MUTEX_INITIALIZER;
 static el Ecur;                             // start state of the next window
 static atomic_long W_eff;                   // windows of this call (lowered when the run stops early)
@@ -226,6 +229,7 @@ static double poserr_pos(const double A[MEP_NP+1][3], const double B[MEP_NP+1][3
 // prepare the state of a window (parity p) that starts from Ecur
 static void cal_reset(int p);
 static void window_init(int p){
+    memset(upd_b[p],0,sizeof upd_b[p]);
     for (int k=0;k<=KMAX;k++){ memcpy(U[p][k][0],Ecur,sizeof(el)); upd_max[p][k]=0; for (int n=0;n<=N;n++){ sem_destroy(&ready[p][k][n]); sem_init(&ready[p][k][n],0,0); } }
     sem_destroy(&win_done[p]); sem_init(&win_done[p],0,0);
     atomic_store(&stop_at[p],-1); fine_abort[p]=0;
@@ -318,8 +322,8 @@ static void cal_reset(int p){ if (calW) for (int n=0;n<N;n++) memset(cal_rec[p][
 
 // ------------------------------------------------------------------------------------------------ checkpoints
 #define MEP_MAGIC "REBOUND-MEP-CHECKPOINT"
-#define MEP_VERSION 3            // 2: options calibration, coarse_giants_steps and the calibration sums; 3: option second_order
-                                 // (1 and 2 are still read; their runs continue without the second-order term)
+#define MEP_VERSION 4            // 2: options calibration, coarse_giants_steps and the calibration sums; 3: option second_order;
+                                 // 4: option partial (1-3 are still read; their runs continue without the newer options)
 static int ckpt_write(const struct reb_mep* m){
     if (m->checkpoint[0]==0) return 0;
     char tmp[sizeof(m->checkpoint)+8]; snprintf(tmp,sizeof tmp,"%s.tmp",m->checkpoint);
@@ -344,8 +348,10 @@ static int ckpt_read(struct reb_mep* m, const char* fn){
     int ok = fread(magic,1,32,f)==32 && strncmp(magic,MEP_MAGIC,32)==0 && fread(&version,4,1,f)==1 && (version>=1 && version<=MEP_VERSION);
     // version 1 has the options up to walltime; the later ones keep their defaults (0: off)
     const size_t optsize = version==1 ? offsetof(struct reb_mep_options, calibration)
-                         : version==2 ? offsetof(struct reb_mep_options, second_order) : sizeof m->opt;
+                         : version==2 ? offsetof(struct reb_mep_options, second_order)
+                         : version==3 ? offsetof(struct reb_mep_options, partial) : sizeof m->opt;
     if (version<3) m->opt.second_order=0;
+    if (version<4) m->opt.partial=0;
     ok = ok && fread(&m->opt,optsize,1,f)==1
     && fread(&m->t,8,1,f)==1 && fread(&m->t_start,8,1,f)==1 && fread(&m->dt,8,1,f)==1
     && fread(&m->windows,8,1,f)==1 && fread(m->khist,8,KMAX,f)==KMAX
@@ -418,14 +424,20 @@ static void* slice_thread(void* arg){
                     if (Xprev_k!=k-1) pos_el(CEL(Up[k-1][n+1]),Xprev);
                     u=poserr_pos(X,Xprev); memcpy(Xprev,X,sizeof X); Xprev_k=k;
                 }
-                pthread_mutex_lock(&upd_mx); if (u>upd_max[p][k]) upd_max[p][k]=u; pthread_mutex_unlock(&upd_mx);
+                pthread_mutex_lock(&upd_mx); if (u>upd_max[p][k]) upd_max[p][k]=u; upd_b[p][k][n+1]=u; pthread_mutex_unlock(&upd_mx);
             }
             if (n<N-1) sem_post(&rdy[k][n+1]);
             else {
                 // last slice: all updates of iteration k are known -> decide
                 const int interrupted = reb_sigint>0 || atomic_load(&fine_interrupted);
-                const int converged = (k>=K && upd_max[p][k]<=tol) || k==Kmax;
-                const int nonfinite = !el_finite(CEL(Up[k][N]));   // never accept a non-finite state
+                int converged = (k>=K && upd_max[p][k]<=tol) || k==Kmax;
+                int nacc = N;                       // accepted slices of the window
+                if (!converged && k>=K && M_->opt.partial>0){
+                    // partial window: the leading boundaries that have converged (boundaries 1..k are exact)
+                    int ns=0; while (ns<N && (ns+1<=k || upd_b[p][k][ns+1]<=tol)) ns++;
+                    if (ns>=1 && ns>=N-M_->opt.partial){ converged=1; nacc=ns; }
+                }
+                const int nonfinite = !el_finite(CEL(Up[k][nacc]));   // never accept a non-finite state
                 if (converged || interrupted || nonfinite){
                     long Wnext = atomic_load(&W_eff);
                     if (nonfinite && !interrupted){
@@ -436,7 +448,7 @@ static void* slice_thread(void* arg){
                         stop_status = REB_STATUS_SIGINT; Wnext = w+1;
                     } else {
                         struct reb_mep* m=M_;
-                        memcpy(Ecur,Up[k][N],sizeof(el));
+                        memcpy(Ecur,Up[k][nacc],sizeof(el));
 #ifdef REB_MEP_STOPLOG
                         // research: positions of the 8 planets at every boundary and iteration of the accepted window
                         { static FILE* fsl=NULL; if (!fsl) fsl=fopen("mep_stoplog.bin","wb");
@@ -446,12 +458,16 @@ static void* slice_thread(void* arg){
 #endif
                         m->khist[k]++; m->windows++; W_done++;
                         atomic_store(&guests_on,1);
-                        m->t = m->t_start + (double)m->windows*N*nst*m->dt;
+                        tot_slices += nacc;
+                        m->t = m->t_start + (double)tot_slices*nst*m->dt;
+                        // windows continue as long as a whole window ends <= tmax (partial windows need more of them)
+                        if (m->opt.partial>0){ const long more=(long)floor((tmax_run-m->t)/((double)N*nst*m->dt)*(1.+1e-12)+1e-9);
+                          if (more>0 && w+1+more>Wnext && stop_status==REB_STATUS_SUCCESS) Wnext=w+1+more; }
                         memcpy(m->E,Ecur,sizeof(el));
                         if (calW){ cal_push(m,p,k); cal_fit(m,p^1); }
                         if (walltime_limit>0. && now()-t_start_wall>=walltime_limit && w+1<Wnext){ stop_status = REB_STATUS_USER; Wnext = w+1; }
                         if (m->opt.checkpoint_every>0 && m->windows%m->opt.checkpoint_every==0) ckpt_write(m);
-                        if (m->heartbeat){ m->boundaries=&Up[k][1][0][0]; m->heartbeat(m); m->boundaries=NULL; }
+                        if (m->heartbeat){ m->boundaries=&Up[k][1][0][0]; m->boundaries_count=nacc; m->heartbeat(m); m->boundaries=NULL; }
                     }
                     atomic_store(&W_eff,Wnext);
                     // every thread has entered this window, so none uses the other parity's state any more
@@ -556,6 +572,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     if (m->opt.slice_steps<2 || m->opt.slice_steps%2){ set_error(m->message,"slice_steps must be an even number >= 2."); pthread_mutex_unlock(&run_lock); return REB_STATUS_GENERIC_ERROR; }
     if (m->opt.k_min<1 || m->opt.k_max<m->opt.k_min || m->opt.k_max>KMAX-1){ set_error(m->message,"Need 1 <= k_min <= k_max <= 11."); pthread_mutex_unlock(&run_lock); return REB_STATUS_GENERIC_ERROR; }
     if (m->opt.calibration<0 || m->opt.calibration>CAL_WMAX){ set_error(m->message,"calibration must be between 0 (off) and 64 windows."); pthread_mutex_unlock(&run_lock); return REB_STATUS_GENERIC_ERROR; }
+    if (m->opt.partial<0 || m->opt.partial>=m->opt.cores){ set_error(m->message,"partial must be between 0 (off) and cores - 1."); pthread_mutex_unlock(&run_lock); return REB_STATUS_GENERIC_ERROR; }
     if (m->opt.coarse_giants_steps<0){ set_error(m->message,"coarse_giants_steps must be >= 0 (0: default)."); pthread_mutex_unlock(&run_lock); return REB_STATUS_GENERIC_ERROR; }
     const double Tw = (double)N*m->opt.slice_steps*m->dt;
     const long W = (long)floor((tmax-m->t)/Tw*(1.+1e-12)+1e-9);
@@ -578,6 +595,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     if (helpers>0) reb_mep_set_threads(helpers, pin);
     memcpy(Ecur,m->E,sizeof(el));
     atomic_store(&guests_on,0);
+    tot_slices = llround((m->t-m->t_start)/((double)nst*m->dt)); tmax_run = tmax;
     atomic_store(&W_eff,W); W_done=0; stop_status=REB_STATUS_SUCCESS; atomic_store(&fine_interrupted,0);
     walltime_limit=m->opt.walltime; t_start_wall=now();
     reb_integration_begin();

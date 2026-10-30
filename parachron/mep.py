@@ -28,7 +28,8 @@ class MEPOptions(Structure):
     """Mirror of struct reb_mep_options (see rebound.h)."""
     _fields_ = [("cores", c_int), ("helpers", c_int), ("pin", c_int), ("k_min", c_int), ("k_max", c_int),
                 ("tol", c_double), ("slice_steps", c_int64), ("checkpoint_every", c_int64), ("walltime", c_double),
-                ("calibration", c_int), ("coarse_giants_steps", c_int), ("second_order", c_int)]
+                ("calibration", c_int), ("coarse_giants_steps", c_int), ("second_order", c_int),
+                ("partial", c_int)]
 
 
 class _MEPState(Structure):
@@ -41,7 +42,7 @@ _MEPState._fields_ = [("opt", MEPOptions), ("t", c_double), ("t_start", c_double
                       ("E", (c_double * 6) * 8), ("gr_potential", c_uint), ("corrector", c_uint), ("kernel", c_uint),
                       ("walltime_last", c_double), ("checkpoint", c_char * REB_MEP_PATH), ("message", c_char * REB_MEP_MSG),
                       ("heartbeat", _HEARTBEAT), ("ref", c_void_p), ("boundaries", POINTER(c_double)),
-                      ("calibration_residual", c_double), ("internal", c_void_p)]
+                      ("calibration_residual", c_double), ("internal", c_void_p), ("boundaries_count", c_int)]
 
 
 _create = clibrebound.reb_mep_create
@@ -71,7 +72,7 @@ class MEP:
     """
 
     def __init__(self, sim, cores=None, tol=2e-6, k_min=3, k_max=6, slice_steps=60000, helpers=None, pin=True,
-                 checkpoint=None, checkpoint_every=100, calibration=0, coarse_giants_steps=0, second_order=0):
+                 checkpoint=None, checkpoint_every=100, calibration=0, coarse_giants_steps=0, second_order=0, partial=0):
         """
         Arguments
         ---------
@@ -115,6 +116,10 @@ class MEP:
         second_order : int
             1: add the second-order Earth-Mars-Jupiter near-resonance term to the coarse step (fewer iterations,
             mostly on many cores). 0 (default): off.
+        partial : int
+            Partial windows: a window whose first slices have converged (every boundary update <= `tol`) while at
+            most `partial` boundaries at its end have not is accepted up to its last converged boundary; the next
+            window starts there. Saves the iterations that only the last slices would need. 0 (default): off.
 
         Accuracy classes for the Solar System (16 cores, 7950X): tol 2e-6 (default, 3.2x); tol 1e-5 (3.5x);
         k_min = 2, tol 3e-4, calibration = 40, coarse_giants_steps = 30 (4.0x, secular frequencies within a few
@@ -129,6 +134,7 @@ class MEP:
         o.pin = 1 if pin else 0
         o.k_min, o.k_max, o.tol, o.slice_steps, o.checkpoint_every = int(k_min), int(k_max), float(tol), int(slice_steps), int(checkpoint_every)
         o.calibration, o.coarse_giants_steps, o.second_order = int(calibration), int(coarse_giants_steps), int(second_order)
+        o.partial = int(partial)
         ptr = _create(byref(sim), byref(o), c_char_p(checkpoint.encode("utf-8")) if checkpoint else None)
         sim.process_messages()
         if not ptr:
@@ -140,7 +146,7 @@ class MEP:
     def from_checkpoint(cls, filename, helpers=None, pin=True, checkpoint_every=None):
         """
         Resume a run from a checkpoint file. The options that change the result (cores, tol, k_min, k_max,
-        slice_steps, calibration and its fit state, coarse_giants_steps, second_order, time step, masses, WHFast512 settings) are
+        slice_steps, calibration and its fit state, coarse_giants_steps, second_order, partial, time step, masses, WHFast512 settings) are
         taken from the file; `helpers`, `pin` and
         `checkpoint_every` may be changed. Returns a new MEP object; its `sim` holds the checkpointed state.
         """
@@ -165,6 +171,8 @@ class MEP:
     def integrate(self, tmax, walltime=None):
         """
         Integrate whole windows up to the last window boundary <= tmax (see `window_length`), then update `sim`.
+        With partial windows, windows are started as long as a whole window ends <= tmax, so the run ends at a
+        slice boundary less than one window length before tmax (`t` gives the time reached).
 
         walltime : float, optional
             Stop after the first window that ends after this many seconds of wall clock (the checkpoint is
@@ -206,13 +214,13 @@ class MEP:
     @property
     def boundaries(self):
         """
-        Inside the heartbeat: the end states of the `cores` slices of the completed window, as a list of 8 x 6
-        lists of Jacobi elements (see `state`); None outside the heartbeat.
+        Inside the heartbeat: the end states of the slices of the completed window (`cores` of them, fewer for a
+        partial window), as a list of 8 x 6 lists of Jacobi elements (see `state`); None outside the heartbeat.
         """
         b = self._p.contents.boundaries
         if not b:
             return None
-        n = self._p.contents.opt.cores
+        n = self._p.contents.boundaries_count
         return [[[b[(s * 8 + i) * 6 + e] for e in range(6)] for i in range(8)] for s in range(n)]
 
     @property

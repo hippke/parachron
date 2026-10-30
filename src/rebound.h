@@ -558,6 +558,10 @@ struct reb_mep_options {
     int second_order;                   // 1: second-order Earth-Mars-Jupiter term in the coarse step (from the first
                                         // correction on; its coefficients are computed per slice from the predicted
                                         // states). Fewer iterations, mostly on many cores. 0: off.
+    int partial;                        // Partial windows: a window whose first slices have converged (every boundary
+                                        // update <= tol, k >= k_min) while at most `partial` boundaries at its end
+                                        // have not, is accepted up to its last converged boundary, and the next
+                                        // window starts there. Fewer iterations per slice. 0: off (whole windows).
 };
 struct reb_mep {
     struct reb_mep_options opt;         // Options (cores is set to the actual value by the first integration).
@@ -578,12 +582,14 @@ struct reb_mep {
                                         // a worker thread inside the parallel schedule: keep it short (e.g. write a
                                         // record). Not saved in checkpoints.
     void* ref;                          // Free for the user (e.g. data for the heartbeat).
-    const double* boundaries;           // Inside the heartbeat: the end states of the cores slices of the completed
-                                        // window, cores x 8 x 6 Jacobi elements as in E (the last one equals E). NULL
-                                        // otherwise.
+    const double* boundaries;           // Inside the heartbeat: the end states of the boundaries_count slices of the
+                                        // completed window, boundaries_count x 8 x 6 Jacobi elements as in E (the last
+                                        // one equals E). NULL otherwise.
     double calibration_residual;        // Calibration: fraction of the variance of the eccentricity defects that the
                                         // last fit leaves unexplained (1: no effect; 0 when the calibration is off).
     void* internal;                     // Library-internal state (calibration). Do not modify.
+    int boundaries_count;               // Inside the heartbeat: number of slices of the completed window in boundaries
+                                        // (cores, or fewer with partial windows).
 };
 REB_API void reb_mep_options_default(struct reb_mep_options* o);
 // Starts a run from the current state of r (which is not modified). o may be NULL (defaults); checkpoint may be NULL.
@@ -591,7 +597,9 @@ REB_API struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct re
 // Resumes a run from a checkpoint file. Only the options helpers, pin, checkpoint_every and walltime are taken from o
 // (if not NULL); all others come from the file. Returns NULL if the file cannot be read.
 REB_API struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o);
-// Integrates whole windows up to the last window boundary <= tmax. Returns REB_STATUS_SUCCESS, REB_STATUS_USER
+// Integrates whole windows up to the last window boundary <= tmax (with partial windows: windows are started as long
+// as a whole window ends <= tmax, so the run ends at a slice boundary within one window length before tmax).
+// Returns REB_STATUS_SUCCESS, REB_STATUS_USER
 // (walltime reached), REB_STATUS_SIGINT (interrupted; the unfinished window is discarded) or REB_STATUS_GENERIC_ERROR
 // (see m->message). The checkpoint (if any) is written at the end in every case.
 REB_API enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax);
