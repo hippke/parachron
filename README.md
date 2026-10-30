@@ -108,10 +108,26 @@ Parachron is on [PyPI](https://pypi.org/project/parachron/):
 pip install parachron
 ```
 
-pip compiles the C library during the installation, so a C compiler is needed (`gcc` or `clang`; on Debian/Ubuntu
-`sudo apt install build-essential`, on macOS `xcode-select --install`). With GCC the WHFast512 kernels are faster (clang 18:
-9–13 % slower on a Ryzen 9 7950X; select GCC with `CC=gcc`). MEP runs on Linux. To install the latest
-development version from GitHub instead:
+Parachron is distributed as source only: pip compiles the C library on your machine during the installation, so a C
+compiler is needed (on Debian/Ubuntu `sudo apt install build-essential`, on macOS `xcode-select --install`). MEP runs
+on Linux.
+
+**The compiler sets the speed.** The WHFast512 kernels are tuned for GCC:
+
+- Use **GCC 13 or newer**. GCC 14 is about 1 % faster than GCC 13; clang 18 is 9–13 % slower (Ryzen 9 7950X). Older
+  GCC versions have not been measured.
+- pip uses the compiler in `CC`, or else the default `cc` (usually GCC on Linux, clang on macOS); conda environments
+  may set `CC` to their own compiler. Check with `echo $CC` and `cc --version`, and select GCC explicitly if needed:
+  ```bash
+  CC=gcc-14 pip install parachron
+  ```
+- pip caches the library it built. After changing the compiler, rebuild it with
+  `CC=gcc-14 pip install --force-reinstall --no-cache-dir parachron`.
+- The build does not depend on the CPU it is compiled on: kernels for AVX-512, AVX2 and plain x86-64 are all compiled
+  in, and the fastest one for the CPU is chosen at run time. Their results are bitwise identical to each other, and
+  between GCC 13 and GCC 14 builds.
+
+To install the latest development version from GitHub instead:
 
 ```bash
 pip install git+https://github.com/hippke/parachron

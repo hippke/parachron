@@ -1,8 +1,9 @@
 # Releasing Parachron on PyPI
 
-Parachron is published manually, without CI. The source distribution (sdist) works everywhere: pip compiles it on
-install, which needs a C compiler. Linux binary wheels for PyPI must be *manylinux* wheels, built in Docker with
-cibuildwheel (optional, see below).
+Parachron is published manually, without CI, and **only as a source distribution (sdist)**: pip compiles it on
+install, which needs a C compiler. No binary wheels are published (decision of Oct 30, 2026): the speed of the
+WHFast512 kernels depends on the compiler (GCC 13+ recommended, clang 9–13 % slower), and the README tells users how
+to select it; a source build also cannot carry a compiler regression of a wheel build into every installation.
 
 ## One-time setup
 
@@ -44,14 +45,3 @@ pip install -e . && python3 -m pytest -q parachron/tests -k "not horizons and no
 
 The source distribution must contain `LICENSE`, `CHANGES_FROM_REBOUND.md` (GPL-3.0 section 5(a)) and
 `src/integrator_whfast512.s`. Check with `tar tzf dist/*.tar.gz`.
-
-## Optional: binary wheels (needs Docker)
-
-```bash
-python3 -m pip install cibuildwheel
-python3 -m cibuildwheel --platform linux --output-dir dist .
-```
-
-This builds manylinux wheels for the supported Python versions. Upload them together with the sdist. The
-`[tool.cibuildwheel.*]` sections in `pyproject.toml` are inherited from REBOUND. Wheels for macOS and Windows have to
-be built on those systems.
