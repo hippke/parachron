@@ -553,6 +553,9 @@ struct reb_mep_options {
                                         // iterations (k_min = 2). 0 (default): off.
     int coarse_giants_steps;            // Fine time steps per step of the outer planets' coarse integration. 0
                                         // (default): 360 days. 30 (180 days at dt = 6 d) for k_min = 2.
+    int second_order;                   // 1: second-order Earth-Mars-Jupiter term in the coarse step (from the first
+                                        // correction on; its coefficients are computed per slice from the predicted
+                                        // states). Fewer iterations, mostly on many cores. 0: off.
 };
 struct reb_mep {
     struct reb_mep_options opt;         // Options (cores is set to the actual value by the first integration).

@@ -26,6 +26,7 @@
 #ifndef _MEP_H
 #define _MEP_H
 #include "rebound.h"
+#include <complex.h>
 #define MEP_NP 8    // planets
 #define MEP_NI 4    // inner planets treated by the mean-element theory
 struct mep_cfg {
@@ -62,5 +63,13 @@ struct reb_simulation* reb_mep_el_to_sim(const double* masses, const double E[ME
 void reb_mep_el_to_xv(const double* masses, const double E[MEP_NP][6], struct reb_particle p[MEP_NP+1]);
 void reb_mep_xv_to_el(const struct reb_particle p[MEP_NP+1], double E[MEP_NP][6]);
 void reb_mep_set_threads(int nhelpers, int pin);
+// second-order Earth-Mars-Jupiter term (mep_coarse.c): coefficients U of Earth and Mars at state E, and the term added to
+// a coarse result g = G(E), with the start-table data of the coarse call that produced g (reb_mep_coarse_hopinfo
+// right after it, in the same thread)
+struct mep_emj { double complex U[2][6]; };
+struct mep_hopinfo { double disp[MEP_NI], R1[MEP_NI]; };
+void reb_mep_emj_coef(const struct mep_cfg* c, const double E[MEP_NP][6], struct mep_emj* out);
+void reb_mep_coarse_hopinfo(struct mep_hopinfo* h);
+void reb_mep_emj_apply(const struct mep_cfg* c, const struct mep_emj* u, const struct mep_hopinfo* hi, const double E[MEP_NP][6], double g[MEP_NP][6]);
 int reb_mep_pool_guest(void);
 #endif

@@ -685,6 +685,8 @@ static void inner_correct(const struct mep_cfg* c, const double* mu, const doubl
     memcpy(E_out,M2,sizeof(double)*MEP_NP*6);
     for (int i=0;i<MEP_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
 }
+// start-table ln a displacements and secular lambda rates of this thread's last coarse call (for the second-order term)
+static __thread struct mep_hopinfo hop_last;
 // parallel schedule (bitwise identical to the serial one): the caller integrates the giants (the longest single
 // task) while the helpers build the start tables, form the predictor and build the parts of the end tables that need
 // only the inner planets (their grids, the inner-inner pairs, GR); then (gated by the end of the giants' run, in the
@@ -754,6 +756,7 @@ static int coarse_staged(const struct mep_cfg* c, const double* mu, const double
     double disp1[MEP_NI], R1[MEP_NI][6];
     table_reduce(x1,disp1,R1);
     inner_correct(c,mu,E_in,CEL(p.R),CEL(R1),disp1,M2,E_out);
+    for (int i=0;i<MEP_NI;i++){ hop_last.disp[i]=p.disp[i]; hop_last.R1[i]=p.R[i][1]; }
     return 1;
 }
 void reb_mep_coarse_par(const struct mep_cfg* c, const double E_in[MEP_NP][6], double E_out[MEP_NP][6], int par);
@@ -772,6 +775,7 @@ void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], d
     table_par(c,E_in,disp,R,par,c->meann==2?2:0);
     if (c->meann==1){ double E1[MEP_NP][6]; mean_state(E_in,disp,E1); table_par(c,(const double (*)[6])E1,disp,R,par,0); }
     inner_predict(c,mu,E_in,disp,CEL(R),M2);
+    for (int i=0;i<MEP_NI;i++){ hop_last.disp[i]=disp[i]; hop_last.R1[i]=R[i][1]; }
     if (Mpre){ for (int j=MEP_NI;j<MEP_NP;j++) memcpy(M2[j],Mpre[j],sizeof(double)*6); } else outer_wh(c,E_in,M2);
     double disp1[MEP_NI];
     if (c->heun){
@@ -782,6 +786,212 @@ void reb_mep_coarse_pre(const struct mep_cfg* c, const double E_in[MEP_NP][6], d
         table_par(c,CEL(M2),disp1,NULL,par,0);
         memcpy(E_out,M2,sizeof M2);
         for (int i=0;i<MEP_NI;i++) E_out[i][0]=M2[i][0]+disp1[i];
+    }
+}
+void reb_mep_coarse_hopinfo(struct mep_hopinfo* h){ *h=hop_last; }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Second-order Earth-Mars-Jupiter term. The three-body near-resonance 4 lambda_E - 8 lambda_M + 3 lambda_J (period
+// ~1800 yr) is second order in the masses, so the first-order theory above leaves it out; it is the omitted term that
+// most limits the convergence (Mars' ln a; research log, Oct 30, 2026). Its averaged field is (non-canonical
+// averaging, X = Y + W1(Y) + ...)
+//   U = < D V1 . W1 - D W1 . V1bar + 1/2 D^2 V0 [W1, W1] >_K,   K = (-4, 8, -3) on (Earth, Mars, Jupiter),
+// with V1 the first-order Jacobi pair rates and W1 the short-period displacements of the pairs Earth-Mars, Earth-Jupiter
+// and Mars-Jupiter, each tabulated on 32 x 32 points of the two mean longitudes. A product of two pair fields that
+// share planet q contributes the harmonics ka + kb = K, so only the harmonics on the lines "q's harmonic free, the other
+// planet's fixed at its component of K" are needed: one row-weighted sum and a 1-D transform per field instead of 2-D
+// FFTs. The derivatives with respect to q's slow elements (ln a, k, h, q, p) are central differences (step 1e-4): the
+// perturbed positions and dE/dv are computed once per grid angle, only the pair accelerations per grid point.
+// The term 2 Re(U e^{i K.lambda}) is integrated over the slice at the mean motions of the slice: inner planets from
+// the start table (mean ln a and secular lambda rate), Jupiter from its coarse run.
+#define EMJ_NG 32
+#define EMJ_KM (EMJ_NG/2-1)                 // harmonics -15..15 (as numpy's FFT indices below N/2)
+#define EMJ_NL (2*EMJ_KM+1)
+#define EMJ_NV 11                           // grid variants: nominal, then (slow element v, +h / -h) for v = ln a, k, h, q, p
+static const int emj_P[3]={2,3,4};         // Earth, Mars, Jupiter (planet indices)
+static const int emj_K[3]={-4,8,-3};
+static const int emj_slow[5]={0,2,3,4,5};
+static const int emj_pair[3][2]={{0,1},{0,2},{1,2}};
+struct emj_axes { double x[3][EMJ_NV][EMJ_NG], y[3][EMJ_NV][EMJ_NG], z[3][EMJ_NV][EMJ_NG], D[3][EMJ_NV][6][3][EMJ_NG]; };
+// one row x of a pair's grid (planet i at the row's point, planet j's points of the axis in arrays): the fields of the
+// pair's inner planets fi (6 x NG) and fj (6 x NG; if wantj), as pair_row (Jacobi accelerations, j perturbed by i
+// with the indirect terms), in loops that vectorise
+static inline void emj_row(const struct emj_axes* restrict ax, int li, int vari, int x, int lj, int varj, double mj, double pf,
+        int wantj, double fi[6][EMJ_NG], double fj[6][EMJ_NG]){
+    const double rix=ax->x[li][vari][x], riy=ax->y[li][vari][x], riz=ax->z[li][vari][x];
+    const double* restrict X=ax->x[lj][varj]; const double* restrict Y=ax->y[lj][varj]; const double* restrict Z=ax->z[lj][varj];
+    double AX[EMJ_NG], AY[EMJ_NG], AZ[EMJ_NG], BX[EMJ_NG], BY[EMJ_NG], BZ[EMJ_NG], ID3[EMJ_NG], IR3[EMJ_NG], RR[EMJ_NG];
+    for (int b=0;b<EMJ_NG;b++){
+        const double dx=X[b]-rix, dy=Y[b]-riy, dz=Z[b]-riz, d2=dx*dx+dy*dy+dz*dz, rr=X[b]*X[b]+Y[b]*Y[b]+Z[b]*Z[b];
+        ID3[b]=1./(d2*sqrt(d2)); IR3[b]=1./(rr*sqrt(rr)); RR[b]=rr;
+    }
+    for (int b=0;b<EMJ_NG;b++){
+        const double dx=X[b]-rix, dy=Y[b]-riy, dz=Z[b]-riz, id3=ID3[b], ir3=IR3[b];
+        const double tx=dx*id3-X[b]*ir3, ty=dy*id3-Y[b]*ir3, tz=dz*id3-Z[b]*ir3;
+        AX[b]=mj*tx; AY[b]=mj*ty; AZ[b]=mj*tz;
+        const double w=3.*(X[b]*rix+Y[b]*riy+Z[b]*riz)/RR[b]*ir3;
+        BX[b]=pf*(tx+rix*ir3-X[b]*w); BY[b]=pf*(ty+riy*ir3-Y[b]*w); BZ[b]=pf*(tz+riz*ir3-Z[b]*w);
+    }
+    for (int e=0;e<6;e++){
+        const double d0=ax->D[li][vari][e][0][x], d1=ax->D[li][vari][e][1][x], d2=ax->D[li][vari][e][2][x];
+        for (int b=0;b<EMJ_NG;b++) fi[e][b]=d0*AX[b]+d1*AY[b]+d2*AZ[b];
+    }
+    if (wantj) for (int e=0;e<6;e++){
+        const double* restrict q0=ax->D[lj][varj][e][0]; const double* restrict q1=ax->D[lj][varj][e][1]; const double* restrict q2=ax->D[lj][varj][e][2];
+        for (int b=0;b<EMJ_NG;b++) fj[e][b]=q0[b]*BX[b]+q1[b]*BY[b]+q2[b]*BZ[b];
+    }
+}
+// line sums of a row's field f (weight c): side 0 (i's harmonic free) L0[x] += c sum_b f[b] w_j[b]; side 1 (j's free)
+// L1[b] += c w_i[x] f[b]. Real and imaginary parts in separate arrays.
+static inline void emj_acc0(const double f[6][EMJ_NG], const double* restrict wr, const double* restrict wim, double c, double L0r[6], double L0i[6]){
+    for (int e=0;e<6;e++){ double sr=0, si=0; for (int b=0;b<EMJ_NG;b++){ sr+=f[e][b]*wr[b]; si+=f[e][b]*wim[b]; } L0r[e]+=c*sr; L0i[e]+=c*si; }
+}
+static inline void emj_acc1(const double f[6][EMJ_NG], double cr, double ci, double L1r[6][EMJ_NG], double L1i[6][EMJ_NG]){
+    for (int e=0;e<6;e++){ double* restrict lr=L1r[e]; double* restrict lim=L1i[e]; for (int b=0;b<EMJ_NG;b++){ lr[b]+=cr*f[e][b]; lim[b]+=ci*f[e][b]; } }
+}
+// e^{-2 pi i j/N}, j < N
+static double emj_tc[EMJ_NG], emj_ts[EMJ_NG];
+static pthread_once_t emj_once = PTHREAD_ONCE_INIT;
+static void emj_tw_init(void){ for (int j=0;j<EMJ_NG;j++){ emj_tc[j]=cos(-2.*M_PI*j/EMJ_NG); emj_ts[j]=sin(-2.*M_PI*j/EMJ_NG); } }
+// coefficients (1/N^2) sum f e^{-i k.theta} on a line from its partial sums L[x] (re, im): FFT over x
+MEP_CLONES static void emj_line(const double Lr[6][EMJ_NG], const double Li[6][EMJ_NG], double complex out[EMJ_NL][6]){
+    const double nrm=1./((double)EMJ_NG*EMJ_NG);
+    for (int e=0;e<6;e++){
+        double complex z[EMJ_NG];
+        for (int x=0;x<EMJ_NG;x++) z[x]=Lr[e][x]+I*Li[e][x];
+        fft1(z,EMJ_NG,1);
+        for (int k=-EMJ_KM;k<=EMJ_KM;k++) out[k+EMJ_KM][e]=z[(k+EMJ_NG)%EMJ_NG]*nrm;
+    }
+}
+struct emj_lines { double r[2][6][EMJ_NG], i[2][6][EMJ_NG]; };    // [planet of the pair][element][point of the free axis]
+MEP_CLONES void reb_mep_emj_coef(const struct mep_cfg* c, const double E[MEP_NP][6], struct mep_emj* out){
+    const double* m=c->masses; const double h=1e-4;
+    pthread_once(&emj_once,emj_tw_init);
+    double Mint[MEP_NP], mu[MEP_NP]; double acc=0;
+    for (int i=0;i<MEP_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
+    static __thread struct emj_axes* ax=NULL; if (!ax) ax=malloc(sizeof *ax);
+    double n[3];
+    for (int l=0;l<3;l++){
+        const int P=emj_P[l]; n[l]=sqrt(mu[P]/exp(3.*E[P][0]));
+        for (int var=0;var<EMJ_NV;var++){
+            double Eg[6]; memcpy(Eg,E[P],sizeof Eg);
+            if (var>0){ const int v=emj_slow[(var-1)/2]; Eg[v]+= (var-1)%2==0 ? h : -h; }
+            for (int g=0;g<EMJ_NG;g++){
+                double r[3], vv[3], D[6][3]; Eg[1]=2.*M_PI*g/EMJ_NG;
+                el_to_rv(mu[P],Eg,r,vv);
+                ax->x[l][var][g]=r[0]; ax->y[l][var][g]=r[1]; ax->z[l][var][g]=r[2];
+                if (l==2 && var>0) continue;     // Jupiter's field is needed only at the nominal state (for its W)
+                mep_dedv_dual(mu[P],r,vv,D);
+                for (int e=0;e<6;e++) for (int q=0;q<3;q++) ax->D[l][var][e][q][g]=D[e][q];
+            }
+        }
+    }
+    // per pair: F on both lines (both planets), W of the free planet, dF/d(slow elements of the free planet) of the
+    // inner planets of the pair; lines: side 0 = planet i's harmonic free (j's fixed at K_j), side 1 = j's free
+    static __thread double complex (*Fl)[2][2][EMJ_NL][6]=NULL, (*dFl)[2][2][5][EMJ_NL][6], (*Wl)[2][EMJ_NL][6];
+    static __thread struct emj_lines* LL=NULL;
+    if (!Fl){ Fl=malloc(3*sizeof *Fl); dFl=malloc(3*sizeof *dFl); Wl=malloc(3*sizeof *Wl); LL=malloc(2*sizeof *LL); }
+    double fi[6][EMJ_NG], fj[6][EMJ_NG];
+    for (int pr=0;pr<3;pr++){
+        const int li=emj_pair[pr][0], lj=emj_pair[pr][1], Pi=emj_P[li], Pj=emj_P[lj];
+        const double mj=m[Pj+1], pf=-(Mint[Pj]+m[Pj+1])/Mint[Pj]*m[Pi+1];
+        double wir[EMJ_NG], wii[EMJ_NG], wjr[EMJ_NG], wji[EMJ_NG];        // e^{-i K_i x 2pi/N}, e^{-i K_j y 2pi/N}
+        for (int g=0;g<EMJ_NG;g++){
+            const int ji=((emj_K[li]*g)%EMJ_NG+EMJ_NG)%EMJ_NG, jj=((emj_K[lj]*g)%EMJ_NG+EMJ_NG)%EMJ_NG;
+            wir[g]=emj_tc[ji]; wii[g]=emj_ts[ji]; wjr[g]=emj_tc[jj]; wji[g]=emj_ts[jj];
+        }
+        // nominal: both planets' fields on both lines (LL[0]: side 0, LL[1]: side 1)
+        memset(LL,0,2*sizeof *LL);
+        for (int x=0;x<EMJ_NG;x++){
+            emj_row(ax,li,0,x,lj,0,mj,pf,1,fi,fj);
+            double s0r[6]={0}, s0i[6]={0};
+            emj_acc0((const double (*)[EMJ_NG])fi,wjr,wji,1.,s0r,s0i); for (int e=0;e<6;e++){ LL[0].r[0][e][x]=s0r[e]; LL[0].i[0][e][x]=s0i[e]; }
+            double s1r[6]={0}, s1i[6]={0};
+            emj_acc0((const double (*)[EMJ_NG])fj,wjr,wji,1.,s1r,s1i); for (int e=0;e<6;e++){ LL[0].r[1][e][x]=s1r[e]; LL[0].i[1][e][x]=s1i[e]; }
+            emj_acc1((const double (*)[EMJ_NG])fi,wir[x],wii[x],LL[1].r[0],LL[1].i[0]);
+            emj_acc1((const double (*)[EMJ_NG])fj,wir[x],wii[x],LL[1].r[1],LL[1].i[1]);
+        }
+        for (int sd=0;sd<2;sd++) for (int q=0;q<2;q++) emj_line((const double (*)[EMJ_NG])LL[sd].r[q],(const double (*)[EMJ_NG])LL[sd].i[q],Fl[pr][sd][q]);
+        // W of the free planet on each line (osc = mean + W; lambda with the Keplerian shear of the ln a term)
+        for (int sd=0;sd<2;sd++){
+            const int lq = sd==0 ? li : lj;
+            for (int k=-EMJ_KM;k<=EMJ_KM;k++){
+                const int ki = sd==0 ? k : emj_K[li], kj = sd==0 ? emj_K[lj] : k;
+                const double kk=ki*n[li]+kj*n[lj];
+                const double complex inv = fabs(kk)<1e-300 ? 0. : 1./(I*kk);
+                const double complex* F=Fl[pr][sd][sd][k+EMJ_KM];
+                for (int e=0;e<6;e++) Wl[pr][sd][k+EMJ_KM][e]=F[e]*inv;
+                Wl[pr][sd][k+EMJ_KM][1]+=-1.5*n[lq]*F[0]*inv*inv;
+            }
+        }
+        // derivatives with respect to the free planet's slow elements (central differences), for the pair's inner planets
+        const int wantj = lj<2;
+        for (int sd=0;sd<2;sd++){
+            const int lq = sd==0 ? li : lj;
+            for (int vi=0;vi<5;vi++){
+                memset(LL,0,sizeof *LL);
+                for (int sg=0;sg<2;sg++){
+                    const int var=1+2*vi+sg; const double w = sg==0 ? 1./(2.*h) : -1./(2.*h);
+                    const int vari = lq==li ? var : 0, varj = lq==lj ? var : 0;
+                    for (int x=0;x<EMJ_NG;x++){
+                        emj_row(ax,li,vari,x,lj,varj,mj,pf,wantj,fi,fj);
+                        if (sd==0){
+                            double sr[6]={0}, si[6]={0};
+                            emj_acc0((const double (*)[EMJ_NG])fi,wjr,wji,w,sr,si); for (int e=0;e<6;e++){ LL->r[0][e][x]+=sr[e]; LL->i[0][e][x]+=si[e]; }
+                            if (wantj){ double tr[6]={0}, ti[6]={0}; emj_acc0((const double (*)[EMJ_NG])fj,wjr,wji,w,tr,ti); for (int e=0;e<6;e++){ LL->r[1][e][x]+=tr[e]; LL->i[1][e][x]+=ti[e]; } }
+                        } else {
+                            emj_acc1((const double (*)[EMJ_NG])fi,w*wir[x],w*wii[x],LL->r[0],LL->i[0]);
+                            if (wantj) emj_acc1((const double (*)[EMJ_NG])fj,w*wir[x],w*wii[x],LL->r[1],LL->i[1]);
+                        }
+                    }
+                }
+                emj_line((const double (*)[EMJ_NG])LL->r[0],(const double (*)[EMJ_NG])LL->i[0],dFl[pr][sd][0][vi]);
+                if (wantj) emj_line((const double (*)[EMJ_NG])LL->r[1],(const double (*)[EMJ_NG])LL->i[1],dFl[pr][sd][1][vi]);
+            }
+        }
+    }
+    // products of the pairs a, b that share planet q: ka = (q: s, a's other planet: K), kb = (q: K_q - s, b's other: K)
+    double complex U[2][6]={{0}};
+    for (int a=0;a<3;a++) for (int b=0;b<3;b++){
+        if (a==b) continue;
+        const int lq = (emj_pair[a][0]==emj_pair[b][0] || emj_pair[a][0]==emj_pair[b][1]) ? emj_pair[a][0] : emj_pair[a][1];
+        const int sa = emj_pair[a][0]==lq ? 0 : 1, sb = emj_pair[b][0]==lq ? 0 : 1;
+        for (int s=-EMJ_KM;s<=EMJ_KM;s++){
+            const int kb=emj_K[lq]-s; if (kb<-EMJ_KM || kb>EMJ_KM) continue;
+            const double complex* Wq=Wl[b][sb][kb+EMJ_KM];
+            if (lq<2) U[lq][1]+=0.5*2.25*n[lq]*Wl[a][sa][s+EMJ_KM][0]*Wq[0];   // 1/2 D^2 V0 [W1, W1]
+            for (int pp=0;pp<2;pp++){
+                const int lp=emj_pair[a][pp]; if (lp>=2) continue;
+                const double complex* Fc=Fl[a][sa][pp][s+EMJ_KM];
+                for (int e=0;e<6;e++){
+                    double complex t=I*(double)s*Fc[e]*Wq[1];
+                    for (int vi=0;vi<5;vi++) t+=dFl[a][sa][pp][vi][s+EMJ_KM][e]*Wq[emj_slow[vi]];
+                    U[lp][e]+=t;
+                }
+            }
+        }
+    }
+    memcpy(out->U,U,sizeof U);
+}
+void reb_mep_emj_apply(const struct mep_cfg* c, const struct mep_emj* u, const struct mep_hopinfo* hi, const double E[MEP_NP][6], double g[MEP_NP][6]){
+    const double* m=c->masses; const double T=c->slice_days*DAY;
+    double Mint[MEP_NP], mu[MEP_NP]; double acc=0;
+    for (int i=0;i<MEP_NP;i++){ acc+=m[i]; Mint[i]=acc; mu[i]=Mint[i]+m[i+1]; }
+    double n[3];
+    for (int l=0;l<2;l++){ const int P=emj_P[l]; n[l]=sqrt(mu[P]/exp(3.*(E[P][0]-hi->disp[P])))+hi->R1[P]; }
+    {   // Jupiter: mean motion over the slice from its coarse run
+        const int P=emj_P[2]; const double dl=wrap(g[P][1]-E[P][1]), nk=sqrt(mu[P]/exp(3.*E[P][0]));
+        const double w=round((nk*T-dl)/(2.*M_PI)); n[2]=(dl+2.*M_PI*w)/T;
+    }
+    double nu=0, p0=0; for (int l=0;l<3;l++){ nu+=emj_K[l]*n[l]; p0+=emj_K[l]*E[emj_P[l]][1]; }
+    const double complex e0=cexp(I*p0), e1=cexp(I*(p0+nu*T)), de=e1-e0;
+    for (int l=0;l<2;l++){
+        const int P=emj_P[l]; const double complex* U=u->U[l];
+        const double complex A=2.*U[0]/(I*nu);
+        g[P][0]+=creal(A*de);
+        const double dl=-1.5*n[l]*T*creal(A*(de/(I*nu*T)-e0))+creal(2.*U[1]/(I*nu)*de);
+        g[P][1]=wrap(g[P][1]+dl);
+        for (int e=2;e<6;e++) g[P][e]+=creal(2.*U[e]/(I*nu)*de);
     }
 }
 void reb_mep_sim_to_el(struct reb_simulation* r, double E[MEP_NP][6]){

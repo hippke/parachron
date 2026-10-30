@@ -318,7 +318,8 @@ static void cal_reset(int p){ if (calW) for (int n=0;n<N;n++) memset(cal_rec[p][
 
 // ------------------------------------------------------------------------------------------------ checkpoints
 #define MEP_MAGIC "REBOUND-MEP-CHECKPOINT"
-#define MEP_VERSION 2            // 2: options calibration, coarse_giants_steps and the calibration sums (1 is still read)
+#define MEP_VERSION 3            // 2: options calibration, coarse_giants_steps and the calibration sums; 3: option second_order
+                                 // (1 and 2 are still read; their runs continue without the second-order term)
 static int ckpt_write(const struct reb_mep* m){
     if (m->checkpoint[0]==0) return 0;
     char tmp[sizeof(m->checkpoint)+8]; snprintf(tmp,sizeof tmp,"%s.tmp",m->checkpoint);
@@ -340,9 +341,11 @@ static int ckpt_write(const struct reb_mep* m){
 static int ckpt_read(struct reb_mep* m, const char* fn){
     FILE* f=fopen(fn,"rb"); if (!f) return 1;
     char magic[32]; int32_t version=0;
-    int ok = fread(magic,1,32,f)==32 && strncmp(magic,MEP_MAGIC,32)==0 && fread(&version,4,1,f)==1 && (version==1 || version==MEP_VERSION);
+    int ok = fread(magic,1,32,f)==32 && strncmp(magic,MEP_MAGIC,32)==0 && fread(&version,4,1,f)==1 && (version>=1 && version<=MEP_VERSION);
     // version 1 has the options up to walltime; the later ones keep their defaults (0: off)
-    const size_t optsize = version==1 ? offsetof(struct reb_mep_options, calibration) : sizeof m->opt;
+    const size_t optsize = version==1 ? offsetof(struct reb_mep_options, calibration)
+                         : version==2 ? offsetof(struct reb_mep_options, second_order) : sizeof m->opt;
+    if (version<3) m->opt.second_order=0;
     ok = ok && fread(&m->opt,optsize,1,f)==1
     && fread(&m->t,8,1,f)==1 && fread(&m->t_start,8,1,f)==1 && fread(&m->dt,8,1,f)==1
     && fread(&m->windows,8,1,f)==1 && fread(m->khist,8,KMAX,f)==KMAX
@@ -370,6 +373,9 @@ static void* slice_thread(void* arg){
         if (n==0 && w>0) sem_wait_guest(&win_start[p]);
         double EFprev=0, EUprev=0, LFprev[3]={0}, LUprev[3]={0}; int have_F=0;
         double Xprev[MEP_NP+1][3]; int Xprev_k=-1;     // positions of Up[Xprev_k][n+1] (update norm of the next iteration)
+        // second-order term: coefficients from this slice's k = 0 state (computed after its k = 0 hop, off the chain),
+        // added to the stored k = 0 coarse result and to the hops from k = 1 on
+        struct mep_emj emj; struct mep_hopinfo emj_hi0; int emj_have=0; const int so=M_->opt.second_order;
         for (int k=0;k<=kend;k++){
             double EU=0, LU[3]={0}; int have_U=0;      // energy and angular momentum of Up[k][n], if computed
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
@@ -379,7 +385,14 @@ static void* slice_thread(void* arg){
             { const int st=atomic_load(stp); if (st>=0 && k>st) break; }
             el g;
             // G is not needed for boundaries that are already exact (n <= k-1)
-            if (k==0 || n>k-1){ reb_mep_coarse_par(&cfg,(const double (*)[6])Up[k][n],g,M_->opt.helpers>0); if (calW) cal_term(p,CEL(Up[k][n]),g,1.); }
+            if (k==0 || n>k-1){
+                reb_mep_coarse_par(&cfg,(const double (*)[6])Up[k][n],g,M_->opt.helpers>0);
+                if (so){
+                    if (k==0) reb_mep_coarse_hopinfo(&emj_hi0);
+                    else if (emj_have){ struct mep_hopinfo hi; reb_mep_coarse_hopinfo(&hi); reb_mep_emj_apply(&cfg,&emj,&hi,CEL(Up[k][n]),g); }
+                }
+                if (calW) cal_term(p,CEL(Up[k][n]),g,1.);
+            }
             if (k==0 || n<k-1){
                 if (k==0) memcpy(Up[0][n+1],g,sizeof(el)); else memcpy(Up[k][n+1],Up[k-1][n+1],sizeof(el));
             } else if (n==k-1){
@@ -452,6 +465,13 @@ static void* slice_thread(void* arg){
                     for (int kk=k+1; kk<=KMAX; kk++) for (int q=1;q<=N;q++) sem_post(&rdy[kk][q]);   // release waiting threads
                     if (w+1<Wnext) sem_post(&win_start[p^1]);
                 }
+            }
+            if (so && k==0 && n>=1 && kend>0){
+                reb_mep_emj_coef(&cfg,CEL(Up[0][n]),&emj);
+                if (calW) cal_term(p,CEL(Up[0][n]),Gold,-1.);
+                reb_mep_emj_apply(&cfg,&emj,&emj_hi0,CEL(Up[0][n]),Gold);     // the k = 0 coarse result as from k = 1 on
+                if (calW) cal_term(p,CEL(Up[0][n]),Gold,1.);
+                emj_have=1;
             }
             // fine slice for the next iteration (speculative: abandoned if the window stops)
             have_F=0;
