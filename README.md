@@ -85,8 +85,9 @@ to-do list.
 
 * **WHFast512 in C, on any CPU.** Portable C kernels (AVX-512, AVX2+FMA, generic, ARM NEON) are the default; the
   fastest one for the CPU is picked automatically. They give bitwise identical results on every machine, and two
-  simulations can be stepped together. Speed against upstream's hand-written assembly: 1.21x on AMD Zen 4 (Ryzen 9 7950X), 1.22x on
-  Zen 5 (EPYC 9575F); on CPUs without AVX-512, where upstream has no WHFast512, 5.8x faster than WHFast (Intel Raptor Lake P-core).
+  simulations can be stepped together. Speed against upstream's hand-written assembly: 1.25x on AMD Zen 4 (Ryzen 9 7950X, GCC 13;
+  1.27x with GCC 14), 1.22x on Zen 5 (EPYC 9575F, measured before the changes of Oct 30, 2026); on CPUs without AVX-512, where
+  upstream has no WHFast512, 5.8x faster than WHFast (Intel Raptor Lake P-core, before the changes of Oct 30, 2026).
   The assembly remains available as `kernel = 1` (bitwise identical to upstream).
 * **`jacobi_recursive`** (opt-in): removes a systematic energy offset of +7.5×10⁻¹⁷ per WHFast512 synchronization.
 * **Faster on one core.** The use-case benchmarks run 2.4× faster than upstream (geometric mean). Results are
@@ -103,7 +104,8 @@ pip install parachron
 ```
 
 pip compiles the C library during the installation, so a C compiler is needed (`gcc` or `clang`; on Debian/Ubuntu
-`sudo apt install build-essential`, on macOS `xcode-select --install`). MEP runs on Linux. To install the latest
+`sudo apt install build-essential`, on macOS `xcode-select --install`). With GCC the WHFast512 kernels are faster (clang 18:
+9–13 % slower on a Ryzen 9 7950X; select GCC with `CC=gcc`). MEP runs on Linux. To install the latest
 development version from GitHub instead:
 
 ```bash
