@@ -111,8 +111,9 @@ static double tr_ev[TRW][NMAX][KMAX+1][4], tr_dec[TRW];
 #ifndef REB_MEP_GUEST_SPIN
 #define REB_MEP_GUEST_SPIN 200000
 #endif
+static atomic_int guests_on;       // from the second window of a call on (in the first, guests slowed one-window calls by ~2 %)
 static void sem_wait_guest(sem_t* sm){
-    if (REB_MEP_GUESTS && M_ && M_->opt.helpers>0){
+    if (REB_MEP_GUESTS && atomic_load_explicit(&guests_on,memory_order_relaxed) && M_ && M_->opt.helpers>0){
         long idle=0;
         while (idle<REB_MEP_GUEST_SPIN){
             if (sem_trywait(sm)==0) return;
@@ -424,6 +425,7 @@ static void* slice_thread(void* arg){
                         struct reb_mep* m=M_;
                         memcpy(Ecur,Up[k][N],sizeof(el));
                         m->khist[k]++; m->windows++; W_done++;
+                        atomic_store(&guests_on,1);
                         m->t = m->t_start + (double)m->windows*N*nst*m->dt;
                         memcpy(m->E,Ecur,sizeof(el));
                         if (calW){ cal_push(m,p,k); cal_fit(m,p^1); }
@@ -548,6 +550,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     for (int n=0;n<N;n++) cpu_of_slice[n] = pin ? cores[n] : -1;
     if (helpers>0) reb_mep_set_threads(helpers, pin);
     memcpy(Ecur,m->E,sizeof(el));
+    atomic_store(&guests_on,0);
     atomic_store(&W_eff,W); W_done=0; stop_status=REB_STATUS_SUCCESS; atomic_store(&fine_interrupted,0);
     walltime_limit=m->opt.walltime; t_start_wall=now();
     reb_integration_begin();
