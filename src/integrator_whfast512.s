@@ -949,7 +949,7 @@ reb_whfast512_movu_pd:
     kepler_step
 .LSkipFirstKeplerStep\@:
     interaction_step \grflag \nsys \encounterflag \escapeflag
-    cmpq    $0, (%rcx)
+    cmpl    $0, (%rcx)      # sig_atomic_t is 4 bytes
     jnz     .LInterruptOccured\@
     .if ExceptionsCanOccur == 1
     testq   %rax, %rax
