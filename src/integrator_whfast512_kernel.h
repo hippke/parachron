@@ -164,6 +164,16 @@ struct REB_W512_NAME(w512_consts_) {
 };
 #define W512_CONSTS struct REB_W512_NAME(w512_consts_)
 
+// Starting value of the Kepler step from the velocities before the kick (default; REB_W512_NO_PRESTART: from the
+// kicked velocities, as before Oct 30, 2026). The series for the starting value then runs off the dependency chain,
+// next to the interaction step; it is ~1e-6 off the post-kick value, which the fifth-order correction absorbs (the
+// converged result changes at round-off level only). Ryzen 9 7950X: AVX-512 kernel 3 % faster (GCC 13 and 14), AVX2
+// kernel -1.8 % (GCC 13) / +0.9 % (GCC 14); the paired kernel no longer gains over single steps there. Paired energy
+// ensemble (16 x 1e10 steps) against the previous start: no difference (t = +0.7, -1.2, -0.2 at 1e8, 1e9, 1e10).
+#if !defined(REB_W512_NO_PRESTART) && !defined(REB_W512_PREKICK) && !defined(REB_W512_KEPLER_NEWTON)
+#define REB_W512_PRESTART
+#endif
+
 // State (registers .LX ... .LVZ in the assembly). CX ... CVZ: the low-order parts of the coordinates in the
 // compensated mode (see w512_add_comp_), zero otherwise.
 struct REB_W512_NAME(w512_state_) {
@@ -552,7 +562,11 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     // the interaction step, its waiting instructions held up the dispatch of the critical chain: 27 % slower).
     W512_PK pkv;
     const W512_PK* pk = NULL;
+#ifdef REB_W512_PRESTART
+    if (0){
+#else
     if (vpre){
+#endif
         W512_STATE sp = *s;
         sp.VX = vpre->VX;
         sp.VY = vpre->VY;
@@ -598,6 +612,14 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
     if (pk){
         XX = pk->XX;
         good3 = pk->good3;
+#ifdef REB_W512_PRESTART
+    }else if (vpre){
+        // starting value from the velocities before the kick (off the dependency chain); it is ~1e-6 off the
+        // post-kick one, which the fifth-order correction absorbs
+        const V v2p = w_fmadd(vpre->VZ, vpre->VZ, w_fmadd(vpre->VY, vpre->VY, w_mul(vpre->VX, vpre->VX)));
+        const V etap = w_fmadd(s->Z, vpre->VZ, w_fmadd(s->Y, vpre->VY, w_mul(s->X, vpre->VX)));
+        XX = REB_W512_NAME(w512_kepler_start_)(c, IR, v2p, etap, &good3);
+#endif
     }else{
         XX = REB_W512_NAME(w512_kepler_start_)(c, IR, v2, eta, &good3);
     }
@@ -1034,12 +1056,12 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
     int status = 0;
     int ret;
     int skip = skip_first_kepler_step;
-#ifdef REB_W512_PREKICK
+#if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
     W512_VPRE vp = { s.VX, s.VY, s.VZ };
 #endif
     while (1){
         if (!skip){
-#ifdef REB_W512_PREKICK
+#if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
             REB_W512_NAME(w512_kepler_core_)(&c, &s, 0, &vp, &vp);
 #else
             REB_W512_NAME(w512_kepler_step_)(&c, &s);
@@ -1079,12 +1101,12 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_comp_)(struct simd_data* data,
     int status = 0;
     int ret;
     int skip = skip_first_kepler_step;
-#ifdef REB_W512_PREKICK
+#if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
     W512_VPRE vp = { s.VX, s.VY, s.VZ };
 #endif
     while (1){
         if (!skip){
-#ifdef REB_W512_PREKICK
+#if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
             REB_W512_NAME(w512_kepler_core_)(&c, &s, 1, &vp, &vp);
 #else
             REB_W512_NAME(w512_kepler_step_comp_)(&c, &s);
@@ -1128,6 +1150,11 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_comp_)(struct simd_data* data,
 REB_W512_NOINLINE void REB_W512_NAME(w512_kepler_step_ool_)(const W512_CONSTS* c, W512_STATE* s){
     REB_W512_NAME(w512_kepler_step_)(c, s);
 }
+#ifdef REB_W512_PRESTART
+REB_W512_NOINLINE void REB_W512_NAME(w512_kepler_step_pre_ool_)(const W512_CONSTS* c, W512_STATE* s, W512_VPRE* vp){
+    REB_W512_NAME(w512_kepler_core_)(c, s, 0, vp, vp);
+}
+#endif
 #define W512_INTERACTION_OOL(GR, NSYS) \
 REB_W512_NOINLINE void REB_W512_CAT(REB_W512_NAME(w512_interaction_ool_), GR##_##NSYS)(const W512_CONSTS* c, W512_STATE* s, const int encounter, const int escape, int* status){ \
     REB_W512_NAME(w512_interaction_step_)(c, s, GR, NSYS, encounter, escape, status); \
@@ -1158,17 +1185,30 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_pair_)(struct simd_data* da, s
     uint64_t n = 0;
     int stopped = 0;
     int ska = skip_a, skb = skip_b;
+#ifdef REB_W512_PRESTART
+    W512_VPRE vpa = { sa.VX, sa.VY, sa.VZ }, vpb = { sb.VX, sb.VY, sb.VZ };   // as the single-system loop
+#endif
     while (n < N_steps){
 #ifdef W_PAIR_INLINE
         // Small (four-lane) instantiations: steps inlined, the compiler interleaves both chains.
+#ifdef REB_W512_PRESTART
+        if (!ska) REB_W512_NAME(w512_kepler_core_)(&ca, &sa, 0, &vpa, &vpa);
+        if (!skb) REB_W512_NAME(w512_kepler_core_)(&cb, &sb, 0, &vpb, &vpb);
+#else
         if (!ska) REB_W512_NAME(w512_kepler_step_)(&ca, &sa);
         if (!skb) REB_W512_NAME(w512_kepler_step_)(&cb, &sb);
+#endif
         ska = 0; skb = 0;
         REB_W512_NAME(w512_interaction_step_)(&ca, &sa, gr, nsys, encounter, escape, &sta);
         REB_W512_NAME(w512_interaction_step_)(&cb, &sb, gr, nsys, encounter, escape, &stb);
 #else
+#ifdef REB_W512_PRESTART
+        if (!ska) REB_W512_NAME(w512_kepler_step_pre_ool_)(&ca, &sa, &vpa);
+        if (!skb) REB_W512_NAME(w512_kepler_step_pre_ool_)(&cb, &sb, &vpb);
+#else
         if (!ska) REB_W512_NAME(w512_kepler_step_ool_)(&ca, &sa);
         if (!skb) REB_W512_NAME(w512_kepler_step_ool_)(&cb, &sb);
+#endif
         ska = 0; skb = 0;
         W512_INTERACTION_OOL_CALL(&ca, &sa, &sta);
         W512_INTERACTION_OOL_CALL(&cb, &sb, &stb);
