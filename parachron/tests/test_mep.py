@@ -114,6 +114,43 @@ class TestMEP(unittest.TestCase):
         c.integrate(6 * c.window_length)
         self.assertEqual(a.state, c.state)
 
+    def test_checkpoint_version2(self):
+        # a checkpoint of format version 2 (no option second_order) is read and continues without the term
+        import struct, ctypes
+        f3 = os.path.join(self.dir.name, "v3.mep")
+        f2 = os.path.join(self.dir.name, "v2.mep")
+        a = parachron.MEP(solar_system(), checkpoint=f3, **self.kw)
+        a.integrate(4 * a.window_length)
+        raw = open(f3, "rb").read()
+        nopt_v3 = ctypes.sizeof(parachron.MEPOptions)
+        nopt_v2 = parachron.MEPOptions.second_order.offset
+        head, opt, rest = raw[:36], raw[36:36 + nopt_v3], raw[36 + nopt_v3:]
+        open(f2, "wb").write(head[:32] + struct.pack("<i", 2) + opt[:nopt_v2] + rest)
+        c = parachron.MEP.from_checkpoint(f2)
+        self.assertEqual(c.windows, 4)
+        self.assertEqual(c._p.contents.opt.second_order, 0)
+        a.integrate(6 * a.window_length)
+        c.integrate(6 * c.window_length)
+        self.assertEqual(a.state, c.state)
+
+    def test_second_order_resume_bitwise(self):
+        # the second-order coarse term (option, off by default) changes the result and survives checkpoint and resume
+        kw = dict(self.kw, cores=4, second_order=1)
+        fa = os.path.join(self.dir.name, "sa.mep")
+        fb = os.path.join(self.dir.name, "sb.mep")
+        a = parachron.MEP(solar_system(), checkpoint=fa, **kw)
+        a.integrate(8 * a.window_length)
+        b = parachron.MEP(solar_system(), checkpoint=fb, **kw)
+        b.integrate(3 * b.window_length)
+        del b
+        c = parachron.MEP.from_checkpoint(fb)
+        self.assertEqual(c._p.contents.opt.second_order, 1)
+        c.integrate(8 * c.window_length)
+        self.assertEqual(a.state, c.state)
+        off = parachron.MEP(solar_system(), **dict(kw, second_order=0))
+        off.integrate(8 * off.window_length)
+        self.assertNotEqual(a.state, off.state)
+
     def test_heartbeat(self):
         # one call with a heartbeat after every window gives the same states as one call per window
         a = parachron.MEP(solar_system(), **self.kw)
