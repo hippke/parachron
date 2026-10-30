@@ -84,9 +84,16 @@ class MEP:
             Tolerance [AU] of the stopping rule: a window is accepted when no planet position changes by more than
             `tol` between two iterations. Default 2e-6 (reference accuracy: secular frequencies within a few 1e-8
             arcsec/yr of serial WHFast512 over 10 Myr); 3e-6 and 1e-5 are 4% and 10% faster and were validated by
-            ensembles.
+            ensembles. The tolerance is the same for any number of cores, but the accuracy it gives is not: a window
+            of more slices iterates more, and a run has fewer window ends where residual enters. At 64 cores the
+            default is about three times more accurate than at 16 (10 Myr secular frequencies: rms 6e-9 instead of
+            1.9e-8 arcsec/yr), and tol = 5e-6 still matches the 16-core default (1.4e-8) with about 5% fewer
+            iterations (~4% faster; tol = 1e-5: ~8% faster, rms 3.4e-8). On many cores a looser tolerance therefore
+            buys speed at the accuracy of the 16-core default.
         k_min, k_max : int
-            Minimum and maximum number of parareal iterations per window (defaults 3 and 6).
+            Minimum and maximum number of parareal iterations per window (defaults 3 and 6). A window that reaches
+            k_max is accepted even if it has not met `tol`; on 32 or more cores use k_max = 8 (at 64 cores about 3% of
+            the windows need 7 iterations at the default tolerance).
         slice_steps : int
             Time steps per slice (even). Default 60000, i.e. 986 yr for dt = 6 days.
         helpers : int, optional

@@ -54,6 +54,11 @@ Parallel-in-Time Symplectic Integration of the Solar System*.
 | MEP, τ = 3×10⁻⁶ AU (default, serial accuracy) | 3.1× | 3.0 h |
 | MEP, relaxed tolerances (ensemble-validated) | 3.4–5.0× | 1.8–2.7 h |
 
+The tolerance τ is the same for any number of cores, but its accuracy is not: windows of more slices iterate more, and
+a run has fewer window ends where residual enters. On 64 cores the default is about three times more accurate than on
+16, and τ = 5×10⁻⁶ AU is still as accurate as the 16-core default while running about 4% faster. With 32 or more
+cores, also set `k_max = 8`, so that windows needing 7 iterations are not accepted early.
+
 ## Example
 
 ```python
