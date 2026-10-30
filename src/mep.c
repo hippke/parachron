@@ -424,6 +424,13 @@ static void* slice_thread(void* arg){
                     } else {
                         struct reb_mep* m=M_;
                         memcpy(Ecur,Up[k][N],sizeof(el));
+#ifdef REB_MEP_STOPLOG
+                        // research: positions of the 8 planets at every boundary and iteration of the accepted window
+                        { static FILE* fsl=NULL; if (!fsl) fsl=fopen("mep_stoplog.bin","wb");
+                          if (fsl){ const int32_t hd[3]={(int32_t)w,(int32_t)k,(int32_t)N}; fwrite(hd,4,3,fsl);
+                            for (int kk=0;kk<=k;kk++) for (int q=1;q<=N;q++){ double X[MEP_NP+1][3]; pos_el(CEL(Up[kk][q]),X); fwrite(&X[1][0],8,MEP_NP*3,fsl); }
+                            fflush(fsl); } }
+#endif
                         m->khist[k]++; m->windows++; W_done++;
                         atomic_store(&guests_on,1);
                         m->t = m->t_start + (double)m->windows*N*nst*m->dt;
