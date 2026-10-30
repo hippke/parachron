@@ -757,9 +757,19 @@ REB_W512_INLINE void REB_W512_NAME(w512_kepler_core_)(const W512_CONSTS* c, W512
 REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_)(const W512_CONSTS* c, W512_STATE* s){
     REB_W512_NAME(w512_kepler_core_)(c, s, 0, NULL, NULL);
 }
+#if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
+// main loops: starting value from the saved pre-kick velocities vp, which are then updated
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_pre_)(const W512_CONSTS* c, W512_STATE* s, W512_VPRE* vp){
+    REB_W512_NAME(w512_kepler_core_)(c, s, 0, vp, vp);
+}
+REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_pre_comp_)(const W512_CONSTS* c, W512_STATE* s, W512_VPRE* vp){
+    REB_W512_NAME(w512_kepler_core_)(c, s, 1, vp, vp);
+}
+#else
 REB_W512_STEP_FUNC void REB_W512_NAME(w512_kepler_step_comp_)(const W512_CONSTS* c, W512_STATE* s){
     REB_W512_NAME(w512_kepler_core_)(c, s, 1, NULL, NULL);
 }
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // Interaction step
@@ -1062,7 +1072,7 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_)(struct simd_data* data, uint
     while (1){
         if (!skip){
 #if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
-            REB_W512_NAME(w512_kepler_core_)(&c, &s, 0, &vp, &vp);
+            REB_W512_NAME(w512_kepler_step_pre_)(&c, &s, &vp);
 #else
             REB_W512_NAME(w512_kepler_step_)(&c, &s);
 #endif
@@ -1107,7 +1117,7 @@ REB_W512_INLINE int REB_W512_NAME(w512_full_steps_comp_)(struct simd_data* data,
     while (1){
         if (!skip){
 #if defined(REB_W512_PREKICK) || defined(REB_W512_PRESTART)
-            REB_W512_NAME(w512_kepler_core_)(&c, &s, 1, &vp, &vp);
+            REB_W512_NAME(w512_kepler_step_pre_comp_)(&c, &s, &vp);
 #else
             REB_W512_NAME(w512_kepler_step_comp_)(&c, &s);
 #endif
