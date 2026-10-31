@@ -8,7 +8,7 @@ WHFast512 (one thread per slice), while a cheap coarse propagator in mean orbita
 After a few iterations every window has converged to the serial WHFast512 trajectory within the tolerance `tol`.
 For the Solar System this is about 3x faster than serial WHFast512 on 16 cores at reference accuracy.
 
-Requirements: Linux, a central object and exactly 8 planets ordered by distance (the four inner planets are treated
+Requirements: Linux or macOS, a central object and exactly 8 planets ordered by distance (the four inner planets are treated
 by perturbation theory in the coarse step, the four outer ones are integrated directly), WHFast512, G = 1 (units AU,
 Msun, yr/2pi), N_systems = 1. The method was designed and validated for the Solar System.
 
@@ -125,8 +125,8 @@ class MEP:
         k_min = 2, tol 3e-4, calibration = 40, coarse_giants_steps = 30 (4.0x, secular frequencies within a few
         1e-6 arcsec/yr of serial WHFast512, unbiased).
         """
-        if not sys.platform.startswith("linux"):
-            raise RuntimeError("MEP (mean-element parareal) is only available on Linux.")
+        if not sys.platform.startswith(("linux", "darwin")):
+            raise RuntimeError("MEP (mean-element parareal) is only available on Linux and macOS.")
         o = MEPOptions()
         clibrebound.reb_mep_options_default(byref(o))
         o.cores = 0 if cores is None else int(cores)
@@ -150,8 +150,8 @@ class MEP:
         taken from the file; `helpers`, `pin` and
         `checkpoint_every` may be changed. Returns a new MEP object; its `sim` holds the checkpointed state.
         """
-        if not sys.platform.startswith("linux"):
-            raise RuntimeError("MEP (mean-element parareal) is only available on Linux.")
+        if not sys.platform.startswith(("linux", "darwin")):
+            raise RuntimeError("MEP (mean-element parareal) is only available on Linux and macOS.")
         o = MEPOptions()
         clibrebound.reb_mep_options_default(byref(o))
         o.helpers = -1 if helpers is None else int(helpers)

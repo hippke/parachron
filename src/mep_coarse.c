@@ -7,7 +7,7 @@
  *          the mean semi-major axes), Kepler + first-order secular drift with the trapezoidal rule. Outer four
  *          planets: WHFast512 at a large step in a reduced system.
  *          Derived from the research code of the MEP paper (results bitwise identical).
- *          Linux only (pthreads, CPU affinity); on other platforms the file compiles to nothing.
+ *          Linux and macOS (pthreads; CPU affinity on Linux only); on other platforms the file compiles to nothing.
  *
  * @section LICENSE
  * Copyright (c) 2026 Michael Hippke
@@ -28,7 +28,7 @@
  * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -496,7 +496,11 @@ void reb_mep_set_threads(int nhelpers, int pin){
     pthread_mutex_lock(&pool_busy);
     for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen));
         const int cpu = pin ? smt_sibling(q) : -1;
+#if defined(__linux__)
         if (cpu>=0){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(cpu,&cs); pthread_setaffinity_np(th,sizeof cs,&cs); }
+#else
+        (void)cpu;
+#endif
         pthread_detach(th); }
     if (nhelpers>pool_n) pool_n=nhelpers;
     pthread_mutex_unlock(&pool_busy);
@@ -1034,4 +1038,4 @@ void reb_mep_xv_to_el(const struct reb_particle p[MEP_NP+1], double E[MEP_NP][6]
 }
 #else
 typedef int mep_coarse_unavailable;    // avoids an empty translation unit on other platforms
-#endif // __linux__
+#endif // __linux__ || __APPLE__

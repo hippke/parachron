@@ -82,7 +82,7 @@ mep = parachron.MEP.from_checkpoint("run.mep")
 mep.integrate(2e8 * 2. * math.pi)
 ```
 
-A C version is in [`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP runs on Linux and needs a
+A C version is in [`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP runs on Linux and macOS and needs a
 central star with exactly 8 planets. It was designed and validated for the Solar System; other systems are on the
 to-do list.
 
@@ -110,7 +110,7 @@ pip install parachron
 
 Parachron is distributed as source only: pip compiles the C library on your machine during the installation, so a C
 compiler is needed (on Debian/Ubuntu `sudo apt install build-essential`, on macOS `xcode-select --install`). MEP runs
-on Linux.
+on Linux and macOS (threads are pinned to cores on Linux only).
 
 **The compiler sets the speed.** The WHFast512 kernels are tuned for GCC:
 

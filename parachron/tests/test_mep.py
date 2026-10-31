@@ -19,7 +19,7 @@ def solar_system():
     return sim
 
 
-@unittest.skipUnless(sys.platform.startswith("linux"), "MEP is only available on Linux")
+@unittest.skipUnless(sys.platform.startswith(("linux", "darwin")), "MEP is only available on Linux and macOS")
 class TestMEP(unittest.TestCase):
     # short slices keep the tests fast; production runs use the default slice_steps = 60000
     kw = dict(cores=2, slice_steps=600, helpers=1, pin=False)

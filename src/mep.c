@@ -8,7 +8,7 @@
  *          System (four inner planets treated by perturbation theory, four giants integrated directly).
  *          The run state (current Jacobi elements, time, statistics, calibration fit) can be saved to a small
  *          checkpoint file and resumed later; a resumed run is bitwise identical to an uninterrupted one.
- *          Derived from the research code of the MEP paper. Linux only.
+ *          Derived from the research code of the MEP paper. Linux and macOS.
  *
  * @section LICENSE
  * Copyright (c) 2026 Michael Hippke
@@ -29,7 +29,7 @@
  * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -49,6 +49,23 @@
 #include "rebound_internal.h"
 #include "integrator_whfast512.h"
 #include "mep.h"
+#if defined(__APPLE__)
+// macOS has no unnamed POSIX semaphores (sem_init fails with ENOSYS): a counting semaphore from a mutex and a condition
+// variable with the same calls. macOS cannot pin threads to cores either; MEP runs unpinned there.
+#include <sys/sysctl.h>
+typedef struct { pthread_mutex_t m; pthread_cond_t c; int v; } mep_sem_t;
+static int mep_sem_init(mep_sem_t* s, int pshared, unsigned v){ (void)pshared; pthread_mutex_init(&s->m,NULL); pthread_cond_init(&s->c,NULL); s->v=(int)v; return 0; }
+static int mep_sem_destroy(mep_sem_t* s){ pthread_cond_destroy(&s->c); pthread_mutex_destroy(&s->m); return 0; }
+static int mep_sem_post(mep_sem_t* s){ pthread_mutex_lock(&s->m); s->v++; pthread_cond_signal(&s->c); pthread_mutex_unlock(&s->m); return 0; }
+static int mep_sem_wait(mep_sem_t* s){ pthread_mutex_lock(&s->m); while (s->v==0) pthread_cond_wait(&s->c,&s->m); s->v--; pthread_mutex_unlock(&s->m); return 0; }
+static int mep_sem_trywait(mep_sem_t* s){ int r=-1; pthread_mutex_lock(&s->m); if (s->v>0){ s->v--; r=0; } pthread_mutex_unlock(&s->m); return r; }
+#define sem_t mep_sem_t
+#define sem_init mep_sem_init
+#define sem_destroy mep_sem_destroy
+#define sem_post mep_sem_post
+#define sem_wait mep_sem_wait
+#define sem_trywait mep_sem_trywait
+#endif
 
 #define NMAX 128                // maximum number of slices (threads) per window
 #define KMAX REB_MEP_KHIST      // iterations are counted in khist[0..KMAX-1]
@@ -371,7 +388,9 @@ static int ckpt_read(struct reb_mep* m, const char* fn){
 // ------------------------------------------------------------------------------------------------ slice threads
 static void* slice_thread(void* arg){
     const int n=(int)(long)arg;
+#if defined(__linux__)
     if (cpu_of_slice[n]>=0){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(cpu_of_slice[n], &cs); pthread_setaffinity_np(pthread_self(), sizeof cs, &cs); }
+#endif
     el Fprev, Gold;
     const int kend = Kmax;
     for (long w=0; w<atomic_load(&W_eff); w++){
@@ -506,6 +525,15 @@ static void* slice_thread(void* arg){
 
 // ------------------------------------------------------------------------------------------------ CPU topology
 // logical CPUs that are the first hardware thread of a physical core, within this process' affinity mask
+#if defined(__APPLE__)
+static int physical_cores(int* list, int max){      // macOS: the number of physical cores (threads are not pinned)
+    int nc=0; size_t len=sizeof nc;
+    if (sysctlbyname("hw.physicalcpu",&nc,&len,NULL,0)!=0 || nc<1) return 0;
+    if (nc>max) nc=max;
+    for (int q=0;q<nc;q++) list[q]=q;
+    return nc;
+}
+#else
 static int physical_cores(int* list, int max){
     cpu_set_t cs; CPU_ZERO(&cs);
     if (sched_getaffinity(0,sizeof cs,&cs)!=0) return 0;
@@ -519,6 +547,7 @@ static int physical_cores(int* list, int max){
     }
     return n;
 }
+#endif
 
 // ------------------------------------------------------------------------------------------------ public API
 void reb_mep_options_default(struct reb_mep_options* o){
@@ -590,7 +619,11 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     } else m->calibration_residual=0.;
     const int helpers = m->opt.helpers>=0 ? m->opt.helpers : (N/2<8 ? N/2 : 8);
     m->opt.helpers=helpers;
+#if defined(__linux__)
     const int pin = m->opt.pin && N<=ncore;
+#else
+    const int pin = 0; (void)ncore;
+#endif
     for (int n=0;n<N;n++) cpu_of_slice[n] = pin ? cores[n] : -1;
     if (helpers>0) reb_mep_set_threads(helpers, pin);
     memcpy(Ecur,m->E,sizeof(el));
@@ -629,13 +662,13 @@ void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r
     w->gr_potential=m->gr_potential; w->corrector=m->corrector; w->kernel=m->kernel;
 }
 
-#else // not Linux (or WebAssembly): MEP is not available
+#else // not Linux or macOS (or WebAssembly): MEP is not available
 #include <stdlib.h>
 #include <string.h>
 #include "rebound.h"
 void reb_mep_options_default(struct reb_mep_options* o){ memset(o,0,sizeof *o); }
 struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_options* o, const char* checkpoint){
-    (void)o; (void)checkpoint; reb_simulation_error(r,"MEP (mean-element parareal) is only available on Linux."); return NULL; }
+    (void)o; (void)checkpoint; reb_simulation_error(r,"MEP (mean-element parareal) is only available on Linux and macOS."); return NULL; }
     struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o){ (void)checkpoint; (void)o; return NULL; }
     void reb_mep_free(struct reb_mep* m){ free(m); }
     enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){ (void)m; (void)tmax; return REB_STATUS_GENERIC_ERROR; }

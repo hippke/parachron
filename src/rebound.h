@@ -528,7 +528,7 @@ REB_API void reb_integrator_whfast512_steps_pair(struct reb_simulation* const r1
 // exactly 8 planets, G = 1, units AU / Msun / yr/2pi) on many cores. The time axis is cut into windows of `cores`
 // slices of `slice_steps` time steps; the slices run in parallel and a cheap coarse propagator in mean orbital
 // elements links them (parareal). The result is the serial WHFast512 trajectory to within the tolerance `tol`.
-// Designed and validated for the Solar System. Linux only (on other platforms reb_mep_create returns NULL).
+// Designed and validated for the Solar System. Linux and macOS (on other platforms reb_mep_create returns NULL).
 // A run can be checkpointed to a small file and resumed; the resumed run is bitwise identical.
 #define REB_MEP_KHIST 12                // length of the iteration histogram
 #define REB_MEP_PATH 1024
