@@ -18,87 +18,35 @@ Parachron is a fork of [**REBOUND**](https://github.com/hannorein/rebound) by Ha
 REBOUND does, Parachron does too, with the same API and results. On top of it, it adds mean-element parareal and a
 set of single- and multi-core speed-ups. If you do not need these, please use upstream REBOUND.
 
-## The idea: mean-element parareal (MEP)
+## Mean-element Parareal: Parallel-in-Time Integration of the Solar System
 
-A step of a Wisdom–Holman integrator takes about 100 ns, too short to split across cores. Every step needs the
-exact end state of the previous one, so extra cores have so far only been used to run more simulations, not to
-finish one faster.
+*The accompanying paper has been submitted.*
 
-*Parareal* breaks this chain. It cuts the time axis into slices and integrates all slices at once, each from a guessed
-start state. A cheap *coarse* propagator links the slices, and a few correction sweeps make the result converge to
-the serial trajectory. For planetary orbits, standard parareal fails. An error δa in a semi-major axis grows into a
-phase error δλ = −(3/2) n T δa/a through **Kepler shear**. A cheap coarse integrator gets the short-period terms of
-*a* wrong by far more than the corrections can absorb.
-
-MEP gives the coarse propagator what Kepler shear needs:
-
-* **Mean elements.** The coarse step evaluates a numerical first-order perturbation theory on the fly: pair
-  accelerations on grids of mean longitudes, a 2-D FFT and the small divisors. With it, the coarse step removes the
-  short-period terms from the inner planets' semi-major axes and advances their secular evolution. The giants are
-  integrated directly with a long step. The result is accurate where shear amplifies errors, and costs about 3 % of a
-  fine slice.
-* **Corrections in orbital elements.** The parareal correction is formed in Jacobi elements, with longitudes
-  modulo 2π. An energy projection then gives each corrected state the energy of the symplectic fine solution.
-* **Pipelined windows.** Slices are processed in windows of N slices, one core each. Each window iterates until no
-  planet moves by more than τ (3×10⁻⁶ AU by default) between iterations, which takes typically 3 iterations.
-  Iterations overlap like a pipeline, and the next window starts as soon as the current one has converged.
-
-The results are statistically indistinguishable from serial integrations. The secular frequencies agree to within
-10⁻⁷ ″/yr, far below the serial integrator's own time-step error. An ensemble of 16 runs of 200 Myr shows the same
-dynamics as 16 serial runs, and the energy errors match. Details: Hippke et al. (in prep.), *Mean-Element Parareal:
-Parallel-in-Time Symplectic Integration of the Solar System*.
-
-| setting (16 cores, AMD Ryzen 9 7950X) | speed-up | 5 Gyr |
-|---|---|---|
-| serial WHFast512 (reference) | 1× | 9.2 h |
-| MEP, τ = 3×10⁻⁶ AU (default, serial accuracy) | 3.1× | 3.0 h |
-| MEP, relaxed tolerances (ensemble-validated) | 3.4–5.0× | 1.8–2.7 h |
-
-The tolerance τ is the same for any number of cores, but its accuracy is not: windows of more slices iterate more, and
-a run has fewer window ends where residual enters. On 64 cores the default is about three times more accurate than on
-16, and τ = 5×10⁻⁶ AU is still as accurate as the 16-core default while running about 4% faster. With 32 or more
-cores, also set `k_max = 8`, so that windows needing 7 iterations are not accepted early.
+Long-term integrations of planetary systems have long been considered inherently sequential: each time step must
+start from the *exact* state at the end of the previous one, because any error in that state, however small, is
+amplified by orbital shear and chaos and alters the trajectory. Because a single step of a modern Wisdom–Holman
+integrator takes only ~100 ns—too short to split across cores—additional cores have previously only been used to run
+multiple simulations in parallel. We introduce mean-element parareal (MEP), a parallel-in-time scheme that
+accelerates a single Solar System integration (eight planets, general relativity) at the same accuracy as the serial
+integrator. Combined with a latency-optimized C kernel that integrates 5 Gyr on one core in 5.8 h, MEP completes a
+5 Gyr integration in 52 min on 64 cores (a parallel speed-up of 6.7×, and 10.4× faster than the previous 9.0 h
+single-core record) or in 1.8 h on 16 cores (3.3× parallel speed-up, 5.0× faster than the previous record). MEP
+succeeds because its coarse propagator uses a numerical first-order mean-element theory to remove the short-period
+oscillations from the semi-major axes, preventing Keplerian shear from amplifying them into growing phase errors.
+Standard parareal with a coarse Wisdom–Holman integrator fails for planetary orbits because no inexpensive coarse
+integrator can resolve these oscillations. To our knowledge, this is the first measured multicore speed-up of a single
+long-term planetary integration and opens a pathway towards larger-scale parallelization. MEP is freely available in
+Parachron, a modified version of REBOUND, at https://github.com/hippke/parachron.
 
 ## Example
 
-```python
-import math
-import parachron
-
-sim = parachron.Simulation()
-sim.add("solar system")                 # Sun + 8 planets
-sim.integrator = "whfast512"
-sim.dt = 6. / 365.25 * 2. * math.pi     # 6 days (units: AU, Msun, yr/2pi)
-sim.exact_finish_time = False
-sim.integrator.gr_potential = 1
-sim.integrator.corrector = 17
-
-mep = parachron.MEP(sim, checkpoint="run.mep")  # one thread per physical core
-mep.integrate(1e8 * 2. * math.pi)               # 100 Myr; sim is updated to the end state
-print(mep.mean_iterations, mep.walltime_last)
-
-# later, possibly in another process: continues bitwise identically
-mep = parachron.MEP.from_checkpoint("run.mep")
-mep.integrate(2e8 * 2. * math.pi)
-```
-
-A C version is in [`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP runs on Linux and macOS and needs a
-central star with exactly 8 planets. It was designed and validated for the Solar System; other systems are on the
-to-do list.
-
-## What else is different from REBOUND
-
-* **WHFast512 in C, on any CPU.** Portable C kernels (AVX-512, AVX2+FMA, generic, ARM NEON) are the default; the
-  fastest one for the CPU is picked automatically. They give bitwise identical results on every machine, and two
-  simulations can be stepped together. Speed against upstream's hand-written assembly: 1.25x on AMD Zen 4 (Ryzen 9 7950X, GCC 13;
-  1.27x with GCC 14), 1.22x on Zen 5 (EPYC 9575F, measured before the changes of Oct 30, 2026); on CPUs without AVX-512, where
-  upstream has no WHFast512, 5.8x faster than WHFast (Intel Raptor Lake P-core, before the changes of Oct 30, 2026).
-  The assembly remains available as `kernel = 1` (bitwise identical to upstream).
-* **`jacobi_recursive`** (opt-in): removes a systematic energy offset of +7.5×10⁻¹⁷ per WHFast512 synchronization.
-* **Faster on one core.** The use-case benchmarks run 2.4× faster than upstream (geometric mean). Results are
-  bitwise identical, except for round-off-level changes in IAS15.
-* **Deterministic OpenMP.** Results do not depend on the thread count and equal those of the serial build. There is
-  also an opt-in stage-parallel IAS15 (`parallel_stages`) for N ≳ 100.
+The notebook [`MEP_SolarSystem.ipynb`](https://github.com/hippke/parachron/blob/main/ipython_examples/MEP_SolarSystem.ipynb)
+shows how to integrate the Solar System with MEP, in the setup of the paper, and compares the result with serial
+WHFast512. Stopping and resuming long runs from a checkpoint is shown in
+[`MEP.ipynb`](https://github.com/hippke/parachron/blob/main/ipython_examples/MEP.ipynb), and a C version is in
+[`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP
+runs on Linux and macOS and needs a central star with exactly 8 planets. It was designed and validated for the Solar
+System; other systems are on the to-do list.
 
 ## Installation
 
