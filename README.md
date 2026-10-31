@@ -8,12 +8,6 @@
 
 # Parachron
 
-**One planetary system, one trajectory, many cores.**
-Parachron integrates a single long orbit of the Solar System in parallel in time. A 5 Gyr integration of the Sun and
-the eight planets (WHFast512, general relativity, 6 d step) takes **3.0 h on 16 cores instead of 9.2 h** on one core, at
-the accuracy of the serial integrator. With relaxed tolerances, which are still validated by ensembles, it takes
-1.8 h (up to 5×).
-
 Parachron is a fork of [**REBOUND**](https://github.com/hannorein/rebound) by Hanno Rein and contributors. Everything
 REBOUND does, Parachron does too, with the same API and results. On top of it, it adds mean-element parareal and a
 set of single- and multi-core speed-ups. If you do not need these, please use upstream REBOUND.
