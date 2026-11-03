@@ -14,7 +14,7 @@ set of single- and multi-core speed-ups. If you do not need these, please use up
 
 ## Mean-element Parareal: Parallel-in-Time Integration of the Solar System
 
-*The accompanying paper has been submitted.*
+*[The accompanying paper](http://arxiv.org/abs/2611.01237) has been submitted.*
 
 Long-term integrations of planetary systems have long been considered inherently sequential: each time step must
 start from the *exact* state at the end of the previous one, because any error in that state, however small, is
