@@ -26,7 +26,11 @@
 #ifndef _MEP_H
 #define _MEP_H
 #include "rebound.h"
+#if defined(_WIN32)
+#include "mep_win32.h"      // C99 complex numbers with clang-cl
+#else
 #include <complex.h>
+#endif
 #define MEP_NP 8    // planets
 #define MEP_NI 4    // inner planets treated by the mean-element theory
 struct mep_cfg {

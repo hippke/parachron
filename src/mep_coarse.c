@@ -28,9 +28,12 @@
  * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+#if ((defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)) || (defined(_WIN32) && defined(__clang__))
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES       // M_PI in the Microsoft <math.h>
 #endif
 #include "mep.h"
 #include <stdio.h>
@@ -45,11 +48,26 @@
 #endif
 #include "mep_dual.h"
 #include <math.h>
-#include <complex.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#if defined(_WIN32)
+#define MEP_WIN32_THREADS
+#include "mep_win32.h"          // pthread calls on Win32 threads (clang-cl builds only)
+#include "rebound_internal.h"   // reb_avx2_fma_available
+// complex multiplication and division (compiler-rt; not linked by the Microsoft linker). Same results as compiler-rt
+// for finite operands; the recovery of infinities from NaN results (C99 Annex G) is left out.
+double _Complex __muldc3(double a, double b, double c, double d){ return __builtin_complex(a*c-b*d, a*d+b*c); }
+double _Complex __divdc3(double a, double b, double c, double d){
+    int ilogbw=0; const double logbw=logb(fmax(fabs(c),fabs(d)));
+    if (isfinite(logbw)){ ilogbw=(int)logbw; c=scalbn(c,-ilogbw); d=scalbn(d,-ilogbw); }
+    const double denom=c*c+d*d;
+    return __builtin_complex(scalbn((a*c+b*d)/denom,-ilogbw), scalbn((b*c-a*d)/denom,-ilogbw));
+}
+#else
+#include <complex.h>
 #include <pthread.h>
+#endif
 #define DAY (2.*M_PI/365.25)
 #define NGMAX 128
 #define CEL(x) ((const double (*)[6])(x))     // non-const -> const 2-D array (ISO C before C2X needs the cast)
@@ -76,7 +94,9 @@ void reb_mep_default_cfg(struct mep_cfg* c, const double* masses, double slice_d
     // with half of its lanes empty (Ryzen 9 7950X: giants' run 111 -> 88 us, coarse hop 0.126 -> 0.103 ms, MEP on 16
     // cores 3.4 % faster at the default tolerance, 5.5 % at k_min = 2; results bitwise unchanged).
     c->kernel = 4;
-#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+#if defined(_WIN32)
+    if (reb_avx2_fma_available()) c->kernel = 3;      // __builtin_cpu_supports needs compiler-rt, not linked on Windows
+#elif (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
     if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) c->kernel = 3;
 #endif
 }
@@ -220,7 +240,7 @@ MEP_CLONES static void sp_terms(const double complex* Z, int n1, int n2, double 
         for (int b=0;b<n2;b++){
             const double er=ar*ejr[b]-ai*eji[b], eim=ar*eji[b]+ai*ejr[b];
             const double zr=z[2*b], zi=z[2*b+1];
-            if (want&1){ const double far=0.5*(zr+cr[b]), fai=0.5*(zi+ci[b]); pa[b]=far*eim+fai*er; }
+            if (want&1){ const double fa_r=0.5*(zr+cr[b]), fa_i=0.5*(zi+ci[b]); pa[b]=fa_r*eim+fa_i*er; }
             if (want&2){ const double fbr=-(-0.5*(zi-ci[b])), fbi=-0.5*(zr-cr[b]); pb[b]=fbr*eim+fbi*er; }
         }
     }
@@ -465,7 +485,7 @@ static void pool_run_tasks(void){
     }
 }
 static void* pool_worker(void* a){
-    int gen=(int)(long)a;          // generation at creation (no job can be in flight then)
+    int gen=(int)(intptr_t)a;          // generation at creation (no job can be in flight then)
     for (;;){
         if (atomic_load(&pool_gen)==gen){
             pthread_mutex_lock(&pool_mx);
@@ -500,7 +520,7 @@ void reb_mep_set_threads(int nhelpers, const int* cpus, int ncpus){
     if (nhelpers>POOL_MAX) nhelpers=POOL_MAX;
     pthread_mutex_lock(&pool_busy);
     for (int q=pool_n;q<nhelpers;q++){
-        pthread_create(&pool_th[q],NULL,pool_worker,(void*)(long)atomic_load(&pool_gen)); pthread_detach(pool_th[q]); }
+        pthread_create(&pool_th[q],NULL,pool_worker,(void*)(intptr_t)atomic_load(&pool_gen)); pthread_detach(pool_th[q]); }
     if (nhelpers>pool_n) pool_n=nhelpers;
 #if defined(__linux__)
     cpu_set_t all; CPU_ZERO(&all); sched_getaffinity(0,sizeof all,&all);

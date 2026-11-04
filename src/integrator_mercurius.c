@@ -665,7 +665,7 @@ static void reb_mercurius_encounter_forces_serial(struct reb_simulation* r, stru
             for (size_t j0=1; j0<i; j0+=REB_MERCURIUS_BLOCK){
                 const size_t nb = (i-j0) < REB_MERCURIUS_BLOCK ? (i-j0) : REB_MERCURIUS_BLOCK;
                 double bdx[REB_MERCURIUS_BLOCK], bdy[REB_MERCURIUS_BLOCK], bdz[REB_MERCURIUS_BLOCK], br2[REB_MERCURIUS_BLOCK];
-                int near[REB_MERCURIUS_BLOCK];
+                int isnear[REB_MERCURIUS_BLOCK];
                 int any = 0;
                 for (size_t k=0; k<nb; k++){
                     const double dx = xi - gx[j0+k];
@@ -674,12 +674,12 @@ static void reb_mercurius_encounter_forces_serial(struct reb_simulation* r, stru
                     const double dcritmax = MAX(dci,gdc[j0+k]);
                     const double r2 = dx*dx + dy*dy + dz*dz + softening2;
                     bdx[k] = dx; bdy[k] = dy; bdz[k] = dz; br2[k] = r2;
-                    near[k] = !(r2 > 1.0002000100*dcritmax*dcritmax);
-                    any |= near[k];
+                    isnear[k] = !(r2 > 1.0002000100*dcritmax*dcritmax);
+                    any |= isnear[k];
                 }
                 if (!any) continue;
                 for (size_t k=0; k<nb; k++){
-                    if (!near[k]) continue;
+                    if (!isnear[k]) continue;
                     const size_t mj = map[j0+k];
                     const double dx = bdx[k], dy = bdy[k], dz = bdz[k];
                     const double dcritmax = MAX(dci,gdc[j0+k]);

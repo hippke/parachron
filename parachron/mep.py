@@ -125,8 +125,8 @@ class MEP:
         k_min = 2, tol 3e-4, calibration = 40, coarse_giants_steps = 30 (4.0x, secular frequencies within a few
         1e-6 arcsec/yr of serial WHFast512, unbiased).
         """
-        if not sys.platform.startswith(("linux", "darwin")):
-            raise RuntimeError("MEP (mean-element parareal) is only available on Linux and macOS.")
+        if not sys.platform.startswith(("linux", "darwin", "win32")):
+            raise RuntimeError("MEP (mean-element parareal) is only available on Linux, macOS and Windows.")
         o = MEPOptions()
         clibrebound.reb_mep_options_default(byref(o))
         o.cores = 0 if cores is None else int(cores)
@@ -150,8 +150,8 @@ class MEP:
         taken from the file; `helpers`, `pin` and
         `checkpoint_every` may be changed. Returns a new MEP object; its `sim` holds the checkpointed state.
         """
-        if not sys.platform.startswith(("linux", "darwin")):
-            raise RuntimeError("MEP (mean-element parareal) is only available on Linux and macOS.")
+        if not sys.platform.startswith(("linux", "darwin", "win32")):
+            raise RuntimeError("MEP (mean-element parareal) is only available on Linux, macOS and Windows.")
         o = MEPOptions()
         clibrebound.reb_mep_options_default(byref(o))
         o.helpers = -1 if helpers is None else int(helpers)

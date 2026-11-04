@@ -37,6 +37,14 @@ def sysctl(name):
     return sh("sysctl -n " + name)
 
 
+def ps(cmd):
+    return sh('powershell -NoProfile -Command "%s"' % cmd)
+
+
+def loadavg():
+    return " ".join("%.2f" % x for x in os.getloadavg()) if hasattr(os, "getloadavg") else "n/a"
+
+
 class Log:
     def __init__(self, fn):
         self.f = open(fn, "w")
@@ -54,6 +62,9 @@ def physical_cores():
         n = int(sysctl("hw.physicalcpu") or os.cpu_count())
         p = sysctl("hw.perflevel0.physicalcpu")
         return n, (int(p) if p and int(sysctl("hw.nperflevels") or 1) > 1 else None)
+    if sys.platform == "win32":
+        n = ps("(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum")
+        return (int(n) if n.isdigit() else os.cpu_count()), None
     cores = set()
     for line in sh("lscpu -p=core,socket").splitlines():
         if line and not line.startswith("#"):
@@ -96,11 +107,20 @@ def machine(log):
             log("WARNING: Python runs under Rosetta (x86 emulation). Use an arm64 Python; see the instructions.")
         log("power", sh("pmset -g batt | head -1"))
         log("low power mode", sh("pmset -g | grep -i lowpowermode") or "n/a")
+    elif sys.platform == "win32":
+        log("cpu", ps("(Get-CimInstance Win32_Processor).Name"))
+        log("cores physical/logical", ps("(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"),
+            ps("(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum"))
+        log("model", ps("(Get-CimInstance Win32_ComputerSystem).Model"))
+        log("memory GB", round(int(ps("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory") or 0) / 2**30, 1))
+        log("power plan", sh("powercfg /getactivescheme"))
+        log("on battery", ps("(Get-CimInstance Win32_Battery).BatteryStatus") or "no battery")
     else:
         log("cpu", sh("grep -m1 'model name' /proc/cpuinfo | cut -d: -f2"))
         log(sh("lscpu | grep -E '^(Core|Thread|Socket|CPU\\(s\\)|CPU max MHz)'"))
-    log("compiler", sh("${CC:-cc} --version | head -1"))
-    log("load average", " ".join("%.2f" % x for x in os.getloadavg()))
+    if sys.platform != "win32":
+        log("compiler", sh("${CC:-cc} --version | head -1"))
+    log("load average", loadavg())
 
 
 def solar_system():
@@ -224,7 +244,7 @@ def main():
     for c in mep_counts:
         if c in res:
             log("MEP %3d cores: speed-up %.2fx (mean of %d passes)" % (c, statistics.mean(res[c]), len(res[c])))
-    log("load average at the end", " ".join("%.2f" % x for x in os.getloadavg()))
+    log("load average at the end", loadavg())
     log("\nDone. Please send the file %s" % os.path.abspath(fn))
 
 

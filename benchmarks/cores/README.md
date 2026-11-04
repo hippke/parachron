@@ -1,5 +1,7 @@
 # Core-scaling benchmark (for testers, macOS)
 
+(Windows: see [`WINDOWS.md`](WINDOWS.md).)
+
 This test measures how fast Parachron runs on your Mac with 1 core, then 2, 4, 8, ... up to all its cores. It takes
 about 15 minutes of your time in total: about 5 minutes to install, and 5–10 minutes during which the test runs on
 its own. At the end you send us one small text file. Nothing is sent anywhere automatically.
@@ -136,5 +138,5 @@ reports:
    throttling shows as a difference between the two passes.
 
 The header records the CPU, the number of performance and efficiency cores, macOS version, compiler, power source,
-Low Power Mode, and whether Python runs natively. It runs on Linux too (same output), for comparisons with Intel and
-AMD machines.
+Low Power Mode, and whether Python runs natively. It runs on Linux and Windows too (same output), for comparisons with
+Intel and AMD machines.

@@ -13,13 +13,44 @@ import sysconfig
 import shutil
 
 
+##### Windows: Parachron is compiled with clang-cl (MEP needs C11 atomics and C99 complex numbers, which the Microsoft
+##### compiler lacks). It comes with Visual Studio ("C++ Clang tools for Windows") or with LLVM.
+def find_clang_cl():
+    if sys.platform != "win32":
+        return None
+    p = shutil.which("clang-cl")
+    if p:
+        return p
+    candidates = []
+    vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                           "Microsoft Visual Studio", "Installer", "vswhere.exe")
+    if os.path.exists(vswhere):
+        try:
+            out = subprocess.check_output([vswhere, "-all", "-prerelease", "-products", "*", "-property", "installationPath"])
+            for inst in out.decode(errors="replace").splitlines():
+                if inst.strip():
+                    candidates.append(os.path.join(inst.strip(), "VC", "Tools", "Llvm", "x64", "bin", "clang-cl.exe"))
+        except Exception:
+            pass
+    candidates.append(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "LLVM", "bin", "clang-cl.exe"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+CLANG_CL_MISSING = """
+Parachron needs the clang-cl compiler on Windows, and it was not found.
+Install it with the Visual Studio Installer: Visual Studio Build Tools (or Visual Studio) -> Modify ->
+workload "Desktop development with C++" -> also tick "C++ Clang tools for Windows" -> Modify.
+Then run pip again in a new terminal.
+"""
+
 ##### Compile with AVX512 if we are on x86 with 64bit.
-##### On Windows, we also need clang.
 def is_x86_64():
     if sys.platform == "darwin":
         return False
     if sys.platform == "win32":
-        if not shutil.which("clang-cl"):
+        if not find_clang_cl():
             return False
     if sys.platform == "linux":
         import platform
@@ -49,7 +80,8 @@ if sys.platform.startswith("linux"):
 
 ##### Compile args
 if sys.platform == "win32":
-    extra_compile_args = [ghash_arg, "/wd4996", "/wd4244", "-DBUILDINGLIBREBOUND", "-D_GNU_SOURCE", "-DSERVER", "-D_CRT_NONSTDC_NO_WARNINGS=1"]
+    extra_compile_args = [ghash_arg, "/wd4996", "/wd4244", "-DBUILDINGLIBREBOUND", "-D_GNU_SOURCE", "-DSERVER", "-D_CRT_NONSTDC_NO_WARNINGS=1",
+                          "/clang:-ffp-contract=off", "-Wno-unused-function", "-Wno-unknown-pragmas"]
 else:
     extra_compile_args = [ "-fstrict-aliasing", "-std=c99", "-Wno-unreachable-code", "-Wno-unknown-pragmas", ghash_arg, "-D_GNU_SOURCE", "-DSERVER", "-fPIC"]
     if os.environ.get("COVERAGE"):
@@ -74,21 +106,24 @@ class build_ext_avx512(build_ext):
                 for i, flag in enumerate(self.compiler.linker_so):
                     if flag == '-bundle':
                         self.compiler.linker_so[i] = '-shared'
+        if sys.platform == "win32":
+            # Use clang-cl instead of cl.exe with the Microsoft linker. The compiler is set after initialisation
+            # (replacing the spawn function does not reach the compile calls of current setuptools).
+            clang_cl = find_clang_cl()
+            if clang_cl is None:
+                raise RuntimeError(CLANG_CL_MISSING)
+            if not getattr(self.compiler, "initialized", True):
+                self.compiler.initialize()
+            self.compiler.cc = clang_cl
+            for opts in ("compile_options", "compile_options_debug"):
+                if hasattr(self.compiler, opts):
+                    setattr(self.compiler, opts, [o for o in getattr(self.compiler, opts) if o.upper() != "/GL"])
+            print("parachron: compiling with " + clang_cl)
         if is_x86_64():
             if sys.platform == "win32":
-                # Force clang compiler. 
-                orig_spawn = self.compiler.spawn
-                def new_spawn(cmd, **kwargs):
-                    if cmd and "link.exe" in cmd[0].lower():
-                        cmd[0] = "lld-link"
-                    if cmd and "cl.exe" in cmd[0].lower():
-                        cmd[0] = "clang-cl"
-                        cmd = [arg for arg in cmd if arg.upper() != "/GL"]
-                        cmd.append("/clang:-ffp-contract=off")
-                    return orig_spawn(cmd, **kwargs)
-                self.compiler.spawn = new_spawn
                 asm = os.path.join(self.build_temp, "integrator_whfast512_asm.obj")
-                cmd = ["clang", "-c", "src/integrator_whfast512.s", "-o", asm]
+                clang = os.path.join(os.path.dirname(find_clang_cl()), "clang.exe")
+                cmd = [clang, "-c", "src/integrator_whfast512.s", "-o", asm]
                 try:
                     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 except subprocess.CalledProcessError as e:

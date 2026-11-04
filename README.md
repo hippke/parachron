@@ -39,7 +39,7 @@ shows how to integrate the Solar System with MEP, in the setup of the paper, and
 WHFast512. Stopping and resuming long runs from a checkpoint is shown in
 [`MEP.ipynb`](https://github.com/hippke/parachron/blob/main/ipython_examples/MEP.ipynb), and a C version is in
 [`examples/mep_solar_system`](https://github.com/hippke/parachron/blob/main/examples/mep_solar_system/problem.c). MEP
-runs on Linux and macOS and needs a central star with exactly 8 planets. It was designed and validated for the Solar
+runs on Linux, macOS and Windows and needs a central star with exactly 8 planets. It was designed and validated for the Solar
 System; other systems are on the to-do list.
 
 ## Installation
@@ -51,8 +51,15 @@ pip install parachron
 ```
 
 Parachron is distributed as source only: pip compiles the C library on your machine during the installation, so a C
-compiler is needed (on Debian/Ubuntu `sudo apt install build-essential`, on macOS `xcode-select --install`). MEP runs
-on Linux and macOS (threads are pinned to cores on Linux only).
+compiler is needed (on Debian/Ubuntu `sudo apt install build-essential`, on macOS `xcode-select --install`, on Windows
+see below). MEP runs on Linux, macOS and Windows (threads are pinned to cores on Linux only).
+
+**Windows** (x86-64): Parachron is compiled with clang-cl and the Microsoft linker. Install
+[Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/) (or
+Visual Studio) with the workload "Desktop development with C++" and its component "C++ Clang tools for Windows"; pip
+finds clang-cl in the Visual Studio installation, in `C:\Program Files\LLVM` or on the `PATH`. The Microsoft compiler
+alone (`cl.exe`) is not enough. Step-by-step instructions are in
+[`benchmarks/cores/WINDOWS.md`](https://github.com/hippke/parachron/blob/main/benchmarks/cores/WINDOWS.md).
 
 **The compiler sets the speed.** The WHFast512 kernels are tuned for GCC:
 

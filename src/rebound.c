@@ -371,7 +371,7 @@ void reb_aligned_free(void *ptr) {
 
 #ifdef _WIN32
 
-void PyInit_librebound() {};
+void PyInit_libparachron() {};  // the Python package loads the library with ctypes; setuptools exports this name
 
 // Source: https://codebrowser.dev/glibc/glibc/stdlib/rand_r.c.html 
 int rand_r(unsigned int *seed) {

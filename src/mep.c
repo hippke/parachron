@@ -29,30 +29,41 @@
  * along with Parachron.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#if (defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+#if ((defined(__linux__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)) || (defined(_WIN32) && defined(__clang__))
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES       // M_PI in the Microsoft <math.h>
 #endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <complex.h>
 #include <stddef.h>
+#if defined(_WIN32)
+#define MEP_WIN32_THREADS
+#include "mep_win32.h"          // pthread calls on Win32 threads (clang-cl builds only)
+#else
+#include <complex.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <sched.h>
-#include <time.h>
 #include <unistd.h>
+#endif
+#include <time.h>
 #include <stdatomic.h>
 #include "rebound.h"
 #include "rebound_internal.h"
 #include "integrator_whfast512.h"
 #include "mep.h"
+#if defined(__APPLE__) || defined(_WIN32)
+// macOS has no unnamed POSIX semaphores (sem_init fails with ENOSYS), Windows has no POSIX semaphores: a counting
+// semaphore from a mutex and a condition variable with the same calls. Threads are not pinned to cores on macOS and
+// Windows; MEP runs unpinned there.
 #if defined(__APPLE__)
-// macOS has no unnamed POSIX semaphores (sem_init fails with ENOSYS): a counting semaphore from a mutex and a condition
-// variable with the same calls. macOS cannot pin threads to cores either; MEP runs unpinned there.
 #include <sys/sysctl.h>
+#endif
 typedef struct { pthread_mutex_t m; pthread_cond_t c; int v; } mep_sem_t;
 static int mep_sem_init(mep_sem_t* s, int pshared, unsigned v){ (void)pshared; pthread_mutex_init(&s->m,NULL); pthread_cond_init(&s->c,NULL); s->v=(int)v; return 0; }
 static int mep_sem_destroy(mep_sem_t* s){ pthread_cond_destroy(&s->c); pthread_mutex_destroy(&s->m); return 0; }
@@ -73,7 +84,11 @@ static int mep_sem_trywait(mep_sem_t* s){ int r=-1; pthread_mutex_lock(&s->m); i
 typedef double el[MEP_NP][6];
 #define CEL(x) ((const double (*)[6])(x))     // non-const -> const 2-D array (ISO C before C2X needs the cast)
 
+#if defined(_WIN32)
+static double now(void){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (double)c.QuadPart/(double)f.QuadPart; }
+#else
 static double now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+1e-9*t.tv_nsec; }
+#endif
 static double wrapd(double x){ return x - 2.*M_PI*floor((x+M_PI)/(2.*M_PI)); }
 static void set_error(char* buf, const char* msg){ snprintf(buf, REB_MEP_MSG, "%s", msg); }
 static int el_finite(const el E){ for (int i=0;i<MEP_NP;i++) for (int e=0;e<6;e++) if (!isfinite(E[i][e])) return 0; return 1; }
@@ -356,7 +371,12 @@ static int ckpt_write(const struct reb_mep* m){
     ok = ok && fwrite(&ncal,4,1,f)==1;
     for (int j=0;j<ncal && ok;j++){ const int idx=(c->pos+j)%CAL_WMAX; ok = fwrite(&c->z[idx],sizeof(calsum),1,f)==1 && fwrite(&c->zeta[idx],sizeof(calsum),1,f)==1; }
     ok = (fclose(f)==0) && ok;
+#if defined(_WIN32)
+    // rename does not replace an existing file on Windows; MoveFileEx does, atomically on the same volume
+    if (!ok || !MoveFileExA(tmp,m->checkpoint,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) return 1;
+#else
     if (!ok || rename(tmp,m->checkpoint)!=0) return 1;     // rename is atomic: a crash leaves the previous checkpoint
+#endif
     return 0;
 }
 static int ckpt_read(struct reb_mep* m, const char* fn){
@@ -387,7 +407,7 @@ static int ckpt_read(struct reb_mep* m, const char* fn){
 
 // ------------------------------------------------------------------------------------------------ slice threads
 static void* slice_thread(void* arg){
-    const int n=(int)(long)arg;
+    const int n=(int)(intptr_t)arg;
 #if defined(__linux__)
     if (cpu_of_slice[n]>=0){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(cpu_of_slice[n], &cs); pthread_setaffinity_np(pthread_self(), sizeof cs, &cs); }
 #endif
@@ -533,6 +553,17 @@ static int physical_cores(int* list, int max){      // macOS: the number of phys
     for (int q=0;q<nc;q++) list[q]=q;
     return nc;
 }
+#elif defined(_WIN32)
+static int physical_cores(int* list, int max){      // Windows: the number of physical cores (threads are not pinned)
+    DWORD len=0; GetLogicalProcessorInformationEx(RelationProcessorCore,NULL,&len);
+    char* buf=malloc(len); if (!buf) return 0;
+    int n=0;
+    if (GetLogicalProcessorInformationEx(RelationProcessorCore,(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf,&len)){
+        for (DWORD off=0; off<len && n<max; off+=((PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf+off))->Size){ list[n]=n; n++; }
+    }
+    free(buf);
+    return n;
+}
 #else
 static int physical_cores(int* list, int max){
     cpu_set_t cs; CPU_ZERO(&cs);
@@ -635,7 +666,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     for (int p=0;p<2;p++){ sem_init(&win_start[p],0,0); sem_init(&win_done[p],0,0); for (int k=0;k<=KMAX;k++) for (int n=0;n<=N;n++) sem_init(&ready[p][k][n],0,0); }
     window_init(0);
     pthread_t th[NMAX];
-    for (int n=0;n<N;n++) pthread_create(&th[n],NULL,slice_thread,(void*)(long)n);
+    for (int n=0;n<N;n++) pthread_create(&th[n],NULL,slice_thread,(void*)(intptr_t)n);
     for (int n=0;n<N;n++) pthread_join(th[n],NULL);
     for (int p=0;p<2;p++){ sem_destroy(&win_start[p]); sem_destroy(&win_done[p]); for (int k=0;k<=KMAX;k++) for (int n=0;n<=N;n++) sem_destroy(&ready[p][k][n]); }
     reb_integration_end();
@@ -662,13 +693,13 @@ void reb_mep_update_simulation(const struct reb_mep* m, struct reb_simulation* r
     w->gr_potential=m->gr_potential; w->corrector=m->corrector; w->kernel=m->kernel;
 }
 
-#else // not Linux or macOS (or WebAssembly): MEP is not available
+#else // not Linux, macOS or Windows with clang (or WebAssembly): MEP is not available
 #include <stdlib.h>
 #include <string.h>
 #include "rebound.h"
 void reb_mep_options_default(struct reb_mep_options* o){ memset(o,0,sizeof *o); }
 struct reb_mep* reb_mep_create(struct reb_simulation* r, const struct reb_mep_options* o, const char* checkpoint){
-    (void)o; (void)checkpoint; reb_simulation_error(r,"MEP (mean-element parareal) is only available on Linux and macOS."); return NULL; }
+    (void)o; (void)checkpoint; reb_simulation_error(r,"MEP (mean-element parareal) is only available on Linux, macOS and Windows (built with clang-cl)."); return NULL; }
     struct reb_mep* reb_mep_create_from_checkpoint(const char* checkpoint, const struct reb_mep_options* o){ (void)checkpoint; (void)o; return NULL; }
     void reb_mep_free(struct reb_mep* m){ free(m); }
     enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){ (void)m; (void)tmax; return REB_STATUS_GENERIC_ERROR; }
