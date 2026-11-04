@@ -181,6 +181,12 @@ def main():
     ap.add_argument("--quick", action="store_true", help="shorter runs (about 2 minutes)")
     ap.add_argument("--max-cores", type=int, default=None, help="test up to this many cores")
     args = ap.parse_args()
+    if sys.platform == "win32":
+        try:        # keep Windows from going to sleep while this process runs (ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+        except Exception:
+            pass
     host = (platform.node() or "computer").split(".")[0].replace(" ", "_")
     fn = "parachron_bench_%s_%s.txt" % (host, time.strftime("%Y%m%d_%H%M"))
     log = Log(fn)

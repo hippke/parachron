@@ -26,7 +26,7 @@ If Python is already installed, you can skip this step.
 ## 3. Install the C compiler (Build Tools for Visual Studio)
 
 Parachron is compiled on your PC during installation, so it needs Microsoft's free compiler tools together with the
-Clang compiler:
+Clang compiler (both are required: Parachron does not build with the Microsoft compiler alone):
 
 1. Open https://visualstudio.microsoft.com/downloads/, scroll down to **Tools for Visual Studio**, and download
    **Build Tools for Visual Studio**.
@@ -47,88 +47,59 @@ You type everything below into this window. Copy each grey box, paste it into Po
 press Enter. Wait until the command has finished (the prompt, ending in `>`, appears again) before pasting the next
 one.
 
-## 5. Install Parachron
+## 5. Download and run the test
 
-These commands create a folder `parachron-test` in your user folder and install Parachron into it, separate from
-anything else on your PC:
-
-```powershell
-mkdir $HOME\parachron-test -Force; cd $HOME\parachron-test
-```
+Paste these two commands (one at a time). The first downloads the test script into your user folder:
 
 ```powershell
-py -m venv venv
+cd $HOME; curl.exe -LO https://raw.githubusercontent.com/hippke/parachron/main/benchmarks/cores/run_windows.ps1
 ```
+
+The second runs it:
 
 ```powershell
-.\venv\Scripts\python -m pip install --upgrade pip
+powershell -ExecutionPolicy Bypass -File .\run_windows.ps1
 ```
 
-```powershell
-.\venv\Scripts\python -m pip install parachron
-```
+The script does everything else on its own, in a new folder `parachron-test` in your user folder, separate from anything
+else on your PC:
 
-The last command compiles Parachron and takes 2–5 minutes. It ends with `Successfully installed parachron-...`.
-Warnings during compilation are normal.
+1. it installs Parachron there (this compiles it and takes 2–5 minutes; warnings during compilation are normal),
+2. it runs a quick test (about 2 minutes),
+3. it runs the full test (5–10 minutes).
 
-## 6. Download the test
+Please do not use the PC while the tests run, and let them finish. The fans may get loud; that is expected. The PC does
+not go to sleep during the test. At the end the script prints `Finished.` and opens the folder with the results.
 
-```powershell
-curl.exe -LO https://raw.githubusercontent.com/hippke/parachron/main/benchmarks/cores/bench_cores.py
-```
+(`-ExecutionPolicy Bypass` allows this one script to run; it does not change any setting of your PC.)
 
-## 7. Run the test
+## 6. Send us the result
 
-First a quick check (about 2 minutes), to see that everything works:
-
-```powershell
-.\venv\Scripts\python bench_cores.py --quick
-```
-
-If it ends with `Done. Please send the file ...`, run the full test:
-
-```powershell
-.\venv\Scripts\python bench_cores.py
-```
-
-Please do not use the PC while it runs, and let it finish (5–10 minutes). The fans may get loud; that is expected.
-
-## 8. Send us the result
-
-The test writes a file `parachron_bench_<name of your PC>_<date>.txt`. To find it, open the folder in Explorer:
-
-```powershell
-explorer $HOME\parachron-test
-```
-
-Please send us the files from **both** runs (the quick one and the full one). They contain your processor, the number
+The test writes files `parachron_bench_<name of your PC>_<date>.txt` into the folder `parachron-test` in your user
+folder (the script opens it at the end; or type `explorer $HOME\parachron-test`). Please send us **all** of them (from
+the quick and the full run). They contain your processor, the number
 of cores, the Windows version, the power plan and the timings; no personal data except the computer's name, which you
 can delete from the file and its name if you prefer.
 
 ## If something goes wrong
 
-- **`py` is not recognized**: Python is not installed (step 2), or PowerShell was opened before the installation.
-  Close PowerShell, open it again, and repeat from step 5.
-- **`Parachron needs the clang-cl compiler on Windows, and it was not found`**: in step 3, "C++ Clang tools for Windows"
-  was not ticked. Open the Visual Studio Installer, click **Modify**, tick it, and run the install command of step 5
-  again in a new PowerShell window.
-- **`Microsoft Visual C++ 14.0 or greater is required`** or **`link.exe` not found**: step 3 is missing or not finished.
-- **The installation fails otherwise**: save the full output and send it to us:
+The script stops with a red `ERROR:` line that says what is missing:
 
-  ```powershell
-  .\venv\Scripts\python -m pip install --no-cache-dir -v parachron *> install_log.txt
-  ```
+- **`Python 3 was not found`**: install Python (step 2), close PowerShell, open it again, and repeat step 5.
+- **`The installation of Parachron failed`**: most often "C++ Clang tools for Windows" was not ticked in step 3. Open the
+  Visual Studio Installer, click **Modify**, tick it, then run step 5 again in a new PowerShell window. If that does
+  not help, send us the file `setup_log.txt` from the `parachron-test` folder.
+- **The test stops with an error**: send us the `parachron_bench_...txt` files anyway; the error is in them.
 
-  The file `install_log.txt` is in the `parachron-test` folder.
-- **The test stops with an error**: send us the `parachron_bench_...txt` file anyway; the error is in it.
-
-To run the test again later, open PowerShell and type:
+To run only the quick test (for example, to check that everything works):
 
 ```powershell
-cd $HOME\parachron-test; .\venv\Scripts\python bench_cores.py
+cd $HOME; powershell -ExecutionPolicy Bypass -File .\run_windows.ps1 -Quick
 ```
 
-To remove everything afterwards, delete the folder `parachron-test` in your user folder. Python and the Build Tools can
-be uninstalled under Settings → Apps.
+Running the script again later is fine: it reuses the installation and adds new result files.
+
+To remove everything afterwards, delete the folder `parachron-test` and the file `run_windows.ps1` in your user folder.
+Python and the Build Tools can be uninstalled under Settings → Apps.
 
 What the test measures is described in [`README.md`](README.md#what-the-test-measures-for-us).
