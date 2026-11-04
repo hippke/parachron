@@ -625,7 +625,7 @@ enum REB_STATUS reb_mep_integrate(struct reb_mep* m, double tmax){
     const int pin = 0; (void)ncore;
 #endif
     for (int n=0;n<N;n++) cpu_of_slice[n] = pin ? cores[n] : -1;
-    if (helpers>0) reb_mep_set_threads(helpers, pin);
+    if (helpers>0) reb_mep_set_threads(helpers, pin ? cpu_of_slice : NULL, N);
     memcpy(Ecur,m->E,sizeof(el));
     atomic_store(&guests_on,0);
     tot_slices = llround((m->t-m->t_start)/((double)nst*m->dt)); tmax_run = tmax;

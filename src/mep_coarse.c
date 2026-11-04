@@ -489,20 +489,30 @@ static int smt_sibling(int q){
     if (b==q) return a;
     return -1;
 }
-// Helper threads of the coarse step (created once, kept sleeping between jobs). pin != 0: helper q is pinned to the
-// SMT sibling of logical CPU q, i.e. of the core of slice q (in iteration k the cores of slices 0..k-1 have no fine
-// work, so these hardware threads are the least contended ones; +5 % on a Ryzen 9 7950X).
-void reb_mep_set_threads(int nhelpers, int pin){
+// Helper threads of the coarse step (created once, kept sleeping between jobs). cpus != NULL: helper q < ncpus is
+// pinned to the SMT sibling of cpus[q], the logical CPU of slice q (in iteration k the cores of slices 0..k-1 have no
+// fine work, so these hardware threads are the least contended ones; +5 % on a Ryzen 9 7950X); helpers without a
+// sibling, and all helpers with cpus == NULL, may run on any CPU of the process. The affinity of helpers created by an
+// earlier call is set again, so a run never inherits the pinning of the previous one.
+#define POOL_MAX 128
+static pthread_t pool_th[POOL_MAX];
+void reb_mep_set_threads(int nhelpers, const int* cpus, int ncpus){
+    if (nhelpers>POOL_MAX) nhelpers=POOL_MAX;
     pthread_mutex_lock(&pool_busy);
-    for (int q=pool_n;q<nhelpers;q++){ pthread_t th; pthread_create(&th,NULL,pool_worker,(void*)(long)atomic_load(&pool_gen));
-        const int cpu = pin ? smt_sibling(q) : -1;
-#if defined(__linux__)
-        if (cpu>=0){ cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(cpu,&cs); pthread_setaffinity_np(th,sizeof cs,&cs); }
-#else
-        (void)cpu;
-#endif
-        pthread_detach(th); }
+    for (int q=pool_n;q<nhelpers;q++){
+        pthread_create(&pool_th[q],NULL,pool_worker,(void*)(long)atomic_load(&pool_gen)); pthread_detach(pool_th[q]); }
     if (nhelpers>pool_n) pool_n=nhelpers;
+#if defined(__linux__)
+    cpu_set_t all; CPU_ZERO(&all); sched_getaffinity(0,sizeof all,&all);
+    for (int q=0;q<pool_n;q++){
+        const int cpu = (cpus && q<ncpus && cpus[q]>=0) ? smt_sibling(cpus[q]) : -1;
+        cpu_set_t cs; CPU_ZERO(&cs);
+        if (cpu>=0) CPU_SET(cpu,&cs); else cs=all;
+        pthread_setaffinity_np(pool_th[q],sizeof cs,&cs);
+    }
+#else
+    (void)cpus; (void)ncpus;
+#endif
     pthread_mutex_unlock(&pool_busy);
 }
 // the caller must hold pool_busy; pool_launch starts the helpers on j, pool_join lets the caller help and waits
